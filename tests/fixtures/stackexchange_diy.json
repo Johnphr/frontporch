@@ -1,0 +1,18 @@
+{
+  "items": [
+    {"question_id": 301, "title": "How do I remove rust from &quot;old&quot; hand tools?",
+     "body": "<p>I inherited my dad&#39;s <b>hand tools</b> &amp; they are rusty.</p>",
+     "link": "https://diy.stackexchange.com/questions/301/how-do-i-remove-rust",
+     "score": 5, "answer_count": 0, "is_answered": false,
+     "creation_date": 1792670400, "tags": ["rust", "tools"]},
+    {"question_id": 302, "title": "Which wire is hot in an old house without color coding?",
+     "body": "<p>Closed as duplicate.</p>",
+     "link": "https://diy.stackexchange.com/questions/302/which-wire",
+     "score": 2, "answer_count": 3, "closed_date": 1792584000,
+     "creation_date": 1792497600, "tags": ["electrical"]}
+  ],
+  "has_more": true,
+  "quota_max": 300,
+  "quota_remaining": 297,
+  "backoff": 2
+}

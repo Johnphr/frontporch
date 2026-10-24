@@ -21,6 +21,39 @@ the repo:
 npx convex env set ANTHROPIC_API_KEY <value>
 ```
 
+## Apify scrapers (`apify.ts`, Integrations)
+
+Env: `APIFY_TOKEN` (required), `STACKEXCHANGE_KEY` (optional; raises the free
+Stack Exchange limit from 300 to 10,000 requests/day). **Set it for the demo:** the
+no-key limit is per IP, and Convex actions share outbound IPs with other apps.
+A failing Stack Exchange request no longer loses the rest; errors show up in
+the run's per-source report, and the run throws only if every source fails.
+
+**Post URLs:** scraped posts are stored as
+`https://www.linkedin.com/feed/update/urn:li:activity:<id>` (`lib/linkedinUrl.ts`,
+shared with `linkedapi.ts`), so `engagement:upsert` can match `posts.linkedinUrl`
+with a plain equality check.
+
+| Function | Run it | What it does |
+|---|---|---|
+| `apify.scrapeEngagement({ elderId, linkedinUrl?, maxPosts? })` | daily | his recent posts' reaction counts + reader comments → `engagement:upsert` |
+| `apify.scrapeProfile({ elderId, linkedinUrl? })` | once, before onboarding | returns `{ knownBackground }` (work history as plain text) |
+| `apify.findAudienceQuestions({ elderId, keywords?, sources? })` | weekly | real questions people in his field ask → `audienceQuestions` |
+| `apify.topAudienceQuestions({ elderId, limit? })` | from the planner | best unused questions, highest priority first |
+
+Suggested crons for `crons.ts` (Core: Data): daily `scrapeEngagement` and weekly
+`findAudienceQuestions` for each active elder. Sources and keyword → subreddit /
+Stack Exchange site maps live in `lib/questionSources.ts`.
+
+Try one by hand (dev deployment, after `npx convex env set APIFY_TOKEN ...`):
+
+```bash
+npx convex run apify:scrapeProfile '{"elderId":"<id>","linkedinUrl":"https://www.linkedin.com/in/<him>/"}'
+npx convex run apify:findAudienceQuestions '{"elderId":"<id>","keywords":["bakery","small business"]}'
+```
+
+Pure logic is unit-tested without Convex: `npm test` (Node's test runner, files in `../tests/`).
+
 ## LinkedIn posting + post guard (Integrations)
 
 `linkedapi.createPost({ postId, context? })` claims the row (so it can't be posted

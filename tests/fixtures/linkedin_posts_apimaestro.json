@@ -1,0 +1,28 @@
+[
+  {
+    "data": {
+      "posts": [
+        {
+          "urn": "7380000000000000001",
+          "url": "https://www.linkedin.com/posts/walter-baker_bakery-story-activity-7380000000000000001-AbCd",
+          "text": "In 1968 I opened a bakery on 5th Street...",
+          "posted_at": { "date": "2026-10-19 14:40:00", "relative": "5 days ago", "timestamp": 1792500000000 },
+          "stats": { "total_reactions": 48, "like": 40, "support": 0, "love": 2, "insight": 6, "celebrate": 0, "comments": 3, "reposts": 2 }
+        },
+        {
+          "urn": "7380000000000000002",
+          "url": "https://www.linkedin.com/posts/walter-baker_mentors-activity-7380000000000000002-EfGh",
+          "text": "The best boss I ever had never raised his voice.",
+          "stats": { "like": 10, "love": 2, "comments": 1 }
+        }
+      ],
+      "pagination_token": "abc"
+    }
+  },
+  {
+    "url": "https://www.linkedin.com/posts/walter-baker_flat-activity-7380000000000000003-IjKl",
+    "text": "A flat item without the data wrapper",
+    "stats": { "total_reactions": 5 }
+  },
+  { "text": "no url, skipped" }
+]

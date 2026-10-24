@@ -18,6 +18,8 @@
     "forceConsistentCasingInFileNames": true,
     "module": "ESNext",
     "isolatedModules": true,
+    /* lib/*.ts import each other with .ts extensions so `npm test` can run them in Node */
+    "allowImportingTsExtensions": true,
     "noEmit": true
   },
   "include": ["./**/*"],

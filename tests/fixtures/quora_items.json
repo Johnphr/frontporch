@@ -1,0 +1,12 @@
+[
+  {"type": "question", "questionId": "2628",
+   "url": "https://www.quora.com/What-is-the-best-advice-your-grandparents-gave-you",
+   "title": "What is the best advice your grandparents gave you?",
+   "slug": "What-is-the-best-advice-your-grandparents-gave-you",
+   "followerCount": 10765, "answerCount": 522, "creationTime": "2015-12-06T05:21:33.574Z"},
+  {"type": "answer", "url": "https://www.quora.com/x/answer/y", "text": "Be kind."},
+  {"type": "question", "questionId": "9001",
+   "url": "https://www.quora.com/How-do-I-fix-a-squeaky-door-hinge-without-WD-40",
+   "title": "How do I fix a squeaky door hinge without WD-40?",
+   "followerCount": 12, "answerCount": 0, "creationTime": "2026-10-20T08:00:00.000Z"}
+]

@@ -82,6 +82,30 @@ export default defineSchema({
     .index("by_elder_unread", ["elderId", "readToElder"])
     .index("by_answer", ["answerId"]),
 
+  // ---- Integrations: audience questions (Data: review) ----
+  // Real questions people in his field ask online (Reddit, Stack Exchange,
+  // Quora, Discourse), found by apify.findAudienceQuestions and offered to
+  // conversation.planNextCall via apify.topAudienceQuestions.
+  audienceQuestions: defineTable({
+    elderId: v.id("elders"),
+    source: v.string(), // reddit | quora | stackexchange | discourse
+    title: v.string(),
+    body: v.optional(v.string()),
+    url: v.string(),
+    community: v.optional(v.string()), // subreddit, Stack Exchange site, forum host
+    score: v.optional(v.number()), // upvotes / followers / likes
+    answerCount: v.optional(v.number()),
+    postedAt: v.optional(v.number()), // epoch ms
+    fingerprint: v.string(), // normalized-title hash, dedupes across sites
+    priority: v.number(), // higher = better prompt for his next call
+    keywords: v.array(v.string()), // the keywords it was found with
+    usedAt: v.optional(v.number()),
+    usedInCallId: v.optional(v.id("calls")),
+  })
+    .index("by_elder_priority", ["elderId", "priority"])
+    .index("by_elder_fingerprint", ["elderId", "fingerprint"]),
+  // ---- end Integrations block ----
+
   // ---- Integrations: posts (Data: review/replace) ----
   // ARCHITECTURE.md draft, plus optional fields used by linkedapi.ts / postGuard.ts.
   // status: pending (written, or sent to LinkedAPI when workflowId is set)
