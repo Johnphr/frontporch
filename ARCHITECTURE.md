@@ -35,7 +35,7 @@ No family, no SMS. One small onboarding UI (`web/`); everything else is phone ca
 | Decision | Choice |
 |---|---|
 | Backend | Everything in Convex: tables, crons, actions, HTTP actions. No separate server |
-| UI | One onboarding UI (`web/`): name + phone, who calls, LinkedIn URL, "Call me now". Sign-in and the SMS code are fake for now. Call time is still set by hand in the Convex dashboard |
+| UI | One onboarding UI (`web/`): name + phone, who calls, LinkedIn URL, "Call me now". Sign-in and the SMS code are fake for now. Call time is still set by hand in the Convex dashboard. Temporary: a key-protected `/posts` review page (`convex/postsPage.ts`) to iterate on post content |
 | Phone calls | **Cartesia Managed Agents** run the whole call: phone number, speech-to-text, in-call LLM, voice. No Vapi; no Twilio in our code |
 | Agent config | Lives in code (`convex/lib/prompts/`), pushed to Cartesia with `npx convex run cartesiaAgents:syncAgent` |
 | Characters | One Cartesia agent per character (`convex/lib/characters.ts`: voice, language, personality): **Pip** in English, **Juanito** (Latin American Spanish, "usted"). He picks one (`elders.characterId`), else the default for `elders.language`. All call from one number; the call's goal + context are per-call variables |
@@ -330,7 +330,8 @@ tests/                          node --test + fixtures/
 | `LINKEDAPI_TOKEN`, `LINKEDAPI_ID_TOKEN`, `APIFY_TOKEN`, `STACKEXCHANGE_KEY` (optional), `POST_GUARD_MODE` (optional, default `enforce`), `AUTO_POST` (optional, default `on`; `off` = preview-only for tests) | Integrations |
 | `OPENAI_API_KEY` | Data (embeddings), Brain (LLM), Integrations (post guard) |
 | `OPENAI_MODEL` | optional, default `gpt-6-luna` |
-| `PUBLIC_CALLS` | optional, default off; `on` lets the sign-up page start calls |
+| `PUBLIC_CALLS` | optional, default off. Lets the sign-up page start his first call (`signup:requestCall`; max 3 a day, 10 min apart). `on` = only `CALL_ALLOWLIST` numbers; `all` = anyone (only once SMS is real) |
+| `CALL_ALLOWLIST` | comma-separated E.164 test numbers the sign-up page may call when `PUBLIC_CALLS=on` |
 
 Share keys through a password manager, never the repo or chat.
 

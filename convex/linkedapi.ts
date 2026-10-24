@@ -239,7 +239,7 @@ async function runPosting(
     let checked: GuardResult;
     try {
       checked = await ctx.runAction(internal.postGuard.checkPost, {
-        postText: prepared.text,
+        postText: prepared.body, // our own disclosure line isn't a claim from the call
         turns: data.turns,
         context: [data.context, opts.context ?? ""].filter((s) => s.trim()).join("\n\n") || undefined,
       });
@@ -428,7 +428,7 @@ export const previewPost = internalAction({
     const prepared = prepareLinkedInText(data.post.text);
     const fullContext = [data.context, context ?? ""].filter((s) => s.trim()).join("\n\n");
     const guard: GuardResult = await ctx.runAction(internal.postGuard.checkPost, {
-      postText: prepared.text,
+      postText: prepared.body, // our own disclosure line isn't a claim from the call
       turns: data.turns,
       context: fullContext || undefined,
     });
@@ -448,7 +448,7 @@ export const previewText = internalAction({
   handler: async (ctx, { text, turns, context }): Promise<PreviewResult> => {
     const prepared = prepareLinkedInText(text);
     const guard: GuardResult = await ctx.runAction(internal.postGuard.checkPost, {
-      postText: prepared.text,
+      postText: prepared.body, // our own disclosure line isn't a claim from the call
       turns,
       context,
     });

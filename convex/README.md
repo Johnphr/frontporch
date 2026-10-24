@@ -52,13 +52,28 @@ Local backend + `"use node"` files need Node 20–24: `npx -p node@24 -c 'npx co
 | `OPENAI_API_KEY` | LLM jobs (profile, memories, post, planner) + memory embeddings; `OPENAI_MODEL` optional (default `gpt-6-luna`) |
 | `APIFY_TOKEN` | optional: prefill his LinkedIn background (needs `linkedinUrl` on the elder) |
 | `AUTO_POST` | optional, default `on`. `off` = story posts are saved but not sent to LinkedIn (preview only, for tests) |
-| `PUBLIC_CALLS` | optional, default off. `on` = the sign-up page can start his first call (`signup:requestCall`; max 3 a day, 10 min apart) |
+| `PUBLIC_CALLS` | optional, default off. Lets the sign-up page start his first call (`signup:requestCall`; max 3 a day, 10 min apart). `on` = only `CALL_ALLOWLIST` numbers; `all` = anyone (only once SMS is real) |
+| `CALL_ALLOWLIST` | comma-separated E.164 test numbers the sign-up page may call when `PUBLIC_CALLS=on` |
 
 Agent ids are not env vars: `syncAgent` saves one row per character in the `characterAgents`
 table (`characterId`, `agentId`, `syncedAt`), and `startCall` reads it. If his character has no
 row yet, `startCall` throws before any row is written. From the hourly cron that costs that
 week's call (`schedule.tick` records the slot first), so sync every character first. Add a
 character: `../voice/README.md`.
+
+## Review generated posts (temporary page)
+
+Read every post as it would be published, before LinkedIn is connected:
+
+```bash
+npx convex env set POSTS_PAGE_KEY <long random string>   # off without it
+npx convex env get POSTS_PAGE_KEY                        # then open:
+# https://<deployment>.convex.site/posts?key=<that key>
+```
+
+Newest first, with the call's question and why the fact-check held a post. "Fact-check now"
+reruns the check (nothing is posted). Temporary: remove `postsPage.ts`, `lib/postsPage.ts` and the
+route in `http.ts` once posts are reviewed on LinkedIn.
 
 ## Try the after-call flow without a phone
 

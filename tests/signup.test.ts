@@ -12,6 +12,7 @@ import {
   languageTag,
   normalizeName,
   normalizePhone,
+  publicCallAllowed,
 } from "../convex/lib/signupRules.ts";
 import { NOW } from "./helpers.ts";
 
@@ -84,4 +85,14 @@ test("LinkedIn profile URL: canonical form, or undefined", () => {
   ]) {
     assert.equal(canonicalLinkedInProfileUrl(bad), undefined, bad);
   }
+});
+
+test("publicCallAllowed: off by default, 'on' = allowlist only, 'all' = anyone", () => {
+  const me = "+14155550123";
+  assert.equal(publicCallAllowed(undefined, me, me), false);
+  assert.equal(publicCallAllowed("yes", me, me), false);
+  assert.equal(publicCallAllowed("on", undefined, me), false, "on with no list rings nobody");
+  assert.equal(publicCallAllowed("on", " +1 (415) 555-0123 , +5215512345678", me), true);
+  assert.equal(publicCallAllowed("on", "+5215512345678", me), false);
+  assert.equal(publicCallAllowed("all", undefined, me), true);
 });
