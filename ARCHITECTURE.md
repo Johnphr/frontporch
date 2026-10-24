@@ -274,9 +274,10 @@ reactions/comments changed in the window, most recently changed first.
 daily `apify.scrapeEngagement` and weekly `apify.findAudienceQuestions` for active elders.
 
 **v1 leftovers in `convex/`** (done): `questions.ts`, `answers.ts`, `replies.ts`, `calls.ts` and
-`lib/auth.ts` are deleted; `elders.ts` keeps only the internal `seed`. There are **no public
-Convex functions**: anyone with the deployment URL can call public ones, and the v1 dashboard
-queries exposed call transcripts. Keep new functions `internal*`. The v1 `questions`, `answers`
+`lib/auth.ts` are deleted; `elders.ts` keeps only the internal `seed`. The **only public Convex
+functions are `signup.*`** (the sign-up page): anyone with the deployment URL can call public
+ones, and the v1 dashboard queries exposed call transcripts. `signup.*` return only ids and
+ok/reason results. Keep every other function `internal*`. The v1 `questions`, `answers`
 and `replies` tables stay in `schema.ts` until they're empty, so a deploy can't fail on old rows.
 
 ## Repo layout
