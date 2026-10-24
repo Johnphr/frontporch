@@ -5,7 +5,11 @@ import { readFileSync } from "node:fs";
 
 import {
   DEFAULT_DISCLOSURE,
+  DISCLOSURE_MAX_LINE,
   FOLD_CHARS,
+  SPANISH_DISCLOSURE,
+  disclosureFor,
+  isDisclosureLine,
   LINKEDIN_MAX_CHARS,
   MAX_POLL_ATTEMPTS,
   capHashtags,
@@ -167,4 +171,57 @@ test("truncate never leaves half an emoji", () => {
   const last = body.charCodeAt(body.length - 1);
   assert.ok(!(last >= 0xd800 && last <= 0xdbff), "ends on a lone high surrogate");
   assert.ok(out.length <= 26);
+});
+
+// ---------- Spanish disclosure (R7) ----------
+
+test("disclosureFor: es -> Spanish, anything else -> English", () => {
+  assert.equal(disclosureFor("es"), SPANISH_DISCLOSURE);
+  assert.equal(disclosureFor("en"), DEFAULT_DISCLOSURE);
+  assert.equal(disclosureFor(undefined), DEFAULT_DISCLOSURE);
+});
+
+test("both disclosure lines are recognised as disclosures and fit the line limit", () => {
+  for (const line of [DEFAULT_DISCLOSURE, SPANISH_DISCLOSURE]) {
+    assert.ok(isDisclosureLine(line), line);
+    assert.ok(line.length <= DISCLOSURE_MAX_LINE);
+  }
+});
+
+test("Spanish elder: Spanish footer exactly once at the end, no English footer", () => {
+  const { text } = prepareLinkedInText("Una historia de la panadería.", { disclosure: SPANISH_DISCLOSURE });
+  assert.ok(text.endsWith(SPANISH_DISCLOSURE));
+  assert.equal(count(text, SPANISH_DISCLOSURE), 1);
+  assert.equal(count(text, DEFAULT_DISCLOSURE), 0);
+});
+
+test("Spanish footer is not duplicated when preparing twice, and isn't reported as replaced", () => {
+  const opts = { disclosure: SPANISH_DISCLOSURE };
+  const once = prepareLinkedInText("Una historia.", opts).text;
+  const again = prepareLinkedInText(once, opts);
+  assert.equal(count(again.text, SPANISH_DISCLOSURE), 1);
+  assert.ok(!again.warnings.some((w) => w.includes("disclosure")));
+});
+
+test("writer-added Spanish (or English) disclosure is replaced by the Spanish footer", () => {
+  for (const line of ["Escrito con ayuda de IA.", "Hecho con IA a partir de sus palabras.", DEFAULT_DISCLOSURE]) {
+    const { text, warnings } = prepareLinkedInText(`Una historia.\n\n${line}`, { disclosure: SPANISH_DISCLOSURE });
+    assert.ok(!text.includes(line), `should replace: ${line}`);
+    assert.equal(count(text, SPANISH_DISCLOSURE), 1);
+    assert.ok(text.endsWith(SPANISH_DISCLOSURE));
+    assert.ok(warnings.some((w) => w.includes("disclosure")), `should warn for: ${line}`);
+  }
+});
+
+test("3,000-character limit keeps the Spanish footer", () => {
+  const long = Array.from({ length: 700 }, (_, i) => `palabra${i}`).join(" ");
+  const { text } = prepareLinkedInText(long, { disclosure: SPANISH_DISCLOSURE });
+  assert.ok(text.length <= LINKEDIN_MAX_CHARS);
+  assert.ok(text.endsWith(SPANISH_DISCLOSURE));
+});
+
+test("English elder output is unchanged (default and explicit English disclosure match)", () => {
+  const raw = "A story about the plant.\n\nWritten with the help of AI.";
+  assert.equal(prepareLinkedInText(raw).text, prepareLinkedInText(raw, { disclosure: disclosureFor("en") }).text);
+  assert.ok(prepareLinkedInText(raw).text.endsWith(DEFAULT_DISCLOSURE));
 });

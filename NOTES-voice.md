@@ -57,8 +57,9 @@ Build:
   their id is set, created only when asked (`{"language":"es"}`); otherwise a setup hint is returned.
 - R6 PROFILE_SYSTEM: every field in English whatever language the call was in (planner avoid
   filter + audience keywords are English); one existing line edited, llm.ts doesn't grow.
-- R7 Spanish posts keep the English disclosure footer for now (Integrations: linkedinPost.ts
-  DEFAULT_DISCLOSURE / linkedapi.ts opts.disclosure). Deferred + flagged.
+- R7 Done (fix/spanish-disclosure): Spanish elders' posts get `SPANISH_DISCLOSURE`
+  (lib/linkedinPost.ts `disclosureFor(callLanguage(elder.language))`), passed by linkedapi.ts in
+  createPost, previewPost and previewText (`language` arg). English footer unchanged.
 - R8 One fence helper `neutralizeTags(text, names)` in lib/text.ts (case-insensitive, attributes,
   ‹›), used by planner (all story fence names), onboarding background, and llm.ts's two copies.
   `firstName(name, lang)` → "friend" / "amigo", used by onboarding + story variables.
@@ -122,6 +123,4 @@ Build:
 - First Spanish test call: check the language of Cartesia's inactivity check-in / goodbye.
 
 ## Deferred
-- R7: Spanish posts get the English AI-disclosure footer (`lib/linkedinPost.ts` DEFAULT_DISCLOSURE).
-  Integrations: pass a Spanish `opts.disclosure` from linkedapi.ts when callLanguage(elder.language) is es.
 - File-size split of llm.ts / lib/planner.ts / conversation.ts (follow-up PR).

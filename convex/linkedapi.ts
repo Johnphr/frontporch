@@ -43,10 +43,12 @@ import {
 import type { Id } from "./_generated/dataModel";
 import {
   MAX_POLL_ATTEMPTS,
+  disclosureFor,
   pollDelayMs,
   prepareLinkedInText,
   type Turn,
 } from "./lib/linkedinPost";
+import { callLanguage } from "./lib/onboarding";
 import {
   MAYBE_POSTED_MESSAGE,
   buildGuardContext,
@@ -105,7 +107,9 @@ export const getPostForPosting = internalQuery({
       profile: (elder as Record<string, unknown> | null)?.profile,
       summary: (call as Record<string, unknown> | null)?.summary,
     });
-    return { post, turns, context };
+    // Disclosure footer in his call language (Spanish for es-* elders).
+    const disclosure = disclosureFor(callLanguage(elder?.language));
+    return { post, turns, context, disclosure };
   },
 });
 
@@ -227,7 +231,7 @@ async function runPosting(
 
   let prepared;
   try {
-    prepared = prepareLinkedInText(data.post.text);
+    prepared = prepareLinkedInText(data.post.text, { disclosure: data.disclosure });
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     await ctx.runMutation(internal.linkedapi.updatePost, { postId, status: "failed", error });
@@ -425,7 +429,7 @@ export const previewPost = internalAction({
   handler: async (ctx, { postId, context }): Promise<PreviewResult> => {
     const data = await ctx.runQuery(internal.linkedapi.getPostForPosting, { postId });
     if (!data) throw new Error("Post not found");
-    const prepared = prepareLinkedInText(data.post.text);
+    const prepared = prepareLinkedInText(data.post.text, { disclosure: data.disclosure });
     const fullContext = [data.context, context ?? ""].filter((s) => s.trim()).join("\n\n");
     const guard: GuardResult = await ctx.runAction(internal.postGuard.checkPost, {
       postText: prepared.body, // our own disclosure line isn't a claim from the call
@@ -444,9 +448,14 @@ export const previewPost = internalAction({
 
 /** Same as previewPost, but for raw text + turns (no posts row needed). */
 export const previewText = internalAction({
-  args: { text: v.string(), turns: v.array(turnValidator), context: v.optional(v.string()) },
-  handler: async (ctx, { text, turns, context }): Promise<PreviewResult> => {
-    const prepared = prepareLinkedInText(text);
+  args: {
+    text: v.string(),
+    turns: v.array(turnValidator),
+    context: v.optional(v.string()),
+    language: v.optional(v.string()), // BCP-47, e.g. "es-MX" -> Spanish disclosure
+  },
+  handler: async (ctx, { text, turns, context, language }): Promise<PreviewResult> => {
+    const prepared = prepareLinkedInText(text, { disclosure: disclosureFor(callLanguage(language)) });
     const guard: GuardResult = await ctx.runAction(internal.postGuard.checkPost, {
       postText: prepared.body, // our own disclosure line isn't a claim from the call
       turns,
