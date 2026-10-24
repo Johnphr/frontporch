@@ -138,48 +138,57 @@ type CallResult = {                // vapi.webhook -> pipeline.processCall
 
 Post guard: `postGuard.checkPost` · `linkedapi.approvePost` · `linkedapi.previewPost` · `linkedapi.previewText` · `linkedapi.checkPostStatus`
 
-## Data model (draft, not in `schema.ts` yet)
+## Data model (in `schema.ts`)
+
+All v2 fields are **optional** (and `calls.callSid` became optional), so v1 rows
+still validate. Bookkeeping fields are written by code, never by hand.
 
 ```ts
-elders: defineTable({
-  name: v.string(), phone: v.string(),          // E.164
-  language: v.string(),                         // BCP-47, e.g. en-US
-  timezone: v.string(), callDay: v.string(), callHour: v.number(),
-  linkedinUrl: v.optional(v.string()),
-  stage: v.union(v.literal("onboarding"), v.literal("active")),
-  profile: v.optional(v.object({
-    industry: v.string(), specialty: v.string(), careerSummary: v.string(),
-    topicsToAvoid: v.array(v.string()),
-  })),
-}).index("by_phone", ["phone"]),
+elders:   + timezone (IANA), callDay ("sunday"), callHour (0-23 local), linkedinUrl,
+            stage: onboarding | active,
+            profile { industry, specialty, careerSummary, topicsToAvoid[] },
+            knownBackground,
+            // bookkeeping: lastPreparedSlot, lastCallSlot ("YYYY-MM-DDTHH" local),
+            //              lastBankRefreshAt (debounces question-bank refreshes)
 
-calls: defineTable({
-  elderId: v.id("elders"), kind: v.string(),    // onboarding | story
-  vapiCallId: v.optional(v.string()), status: v.string(),
-  plan: v.optional(v.any()),                    // CallPlan, for debugging
-  transcript: v.array(v.object({ role: v.string(), text: v.string() })),
-  summary: v.optional(v.string()), endedReason: v.optional(v.string()),
-}).index("by_vapi", ["vapiCallId"]).index("by_elder", ["elderId"]),
+calls:    callSid now optional; + kind (onboarding | story), vapiCallId, plan (CallPlan),
+            summary, endedReason; indexes by_vapi, by_elder
 
-memories: defineTable({
-  elderId: v.id("elders"), callId: v.optional(v.id("calls")),
-  text: v.string(), embedding: v.array(v.float64()),
-}).vectorIndex("by_embedding", { vectorField: "embedding", dimensions: 1536,
-                                 filterFields: ["elderId"] }),
+memories: elderId, callId?, kind, text, name?, status (active | resolved),
+          mentionCount, lastMentionedAt, elderKind (`${elderId}|${kind}`),
+          embedding (1536, OpenAI text-embedding-3-small)
+          kind: fact | story_seed | open_thread | person | place | topic_covered | avoid
+          vectorIndex by_embedding, filterFields [elderId, kind, elderKind]
+          (vector filters only do eq/or, so elderKind lets one search mean
+           "this elder AND these kinds"); indexes by_elder_kind, by_elder_status, by_elder_last
 
-posts: defineTable({
-  elderId: v.id("elders"), callId: v.id("calls"),
-  text: v.string(), status: v.string(),         // pending | published | failed
-  linkedinUrl: v.optional(v.string()), error: v.optional(v.string()),
-}).index("by_elder", ["elderId"]).index("by_url", ["linkedinUrl"]),
+engagement: elderId, postId?, linkedinUrl (canonical, lib/linkedinUrl.ts), reactions,
+            comments [{ author, text }], scrapedAt, changedAt?
+            indexes by_elder, by_url, by_elder_scraped
 
-engagement: defineTable({
-  elderId: v.id("elders"), postId: v.optional(v.id("posts")),
-  linkedinUrl: v.string(), reactions: v.number(),
-  comments: v.array(v.object({ author: v.string(), text: v.string() })),
-  scrapedAt: v.number(),
-}).index("by_elder", ["elderId"]).index("by_url", ["linkedinUrl"]),
+posts, audienceQuestions: see the Integrations blocks in schema.ts.
+questionBank: Core: Brain (conversation.ts).
 ```
+
+**Memory functions** (`memories.ts`, all internal):
+`addMany({ elderId, callId?, items: [{ kind, text, name? }], resolveThreadIds? })`
+→ `{ inserted, merged, resolved }`: embeds, merges near-duplicates (same kind,
+similarity ≥ 0.9, or same-named person/place: bumps `mentionCount`, keeps the more
+specific text), marks finished open threads resolved.
+`search({ elderId, text, k, kinds?, includeResolved? })` → `{ _id, kind, text, name?, status, score }[]`.
+`listForElder({ elderId, kinds?, status?, limit? })` (newest first, no embeddings).
+`resolveThreads({ ids })`. Prompt text: `formatMemoriesForPrompt` in `lib/memoryText.ts`.
+
+**Engagement** (`engagement.ts`): `upsert` (from `apify.scrapeEngagement`) keeps the
+latest snapshot, links `postId` by canonical URL, and when reactions/comments changed
+schedules `conversation.refreshQuestionBank` (2 min later, at most once per elder per
+10 min). `recentFeedback({ elderId, sinceDays? })` →
+`{ linkedinUrl, postText?, reactions, comments, scrapedAt }[]`, newest first.
+
+**Scheduling** (`schedule.ts` + `crons.ts`): hourly `schedule.tick` →
+`conversation.prepareCall` about 1 hour before his local call time and `vapi.startCall`
+at the call hour (each local slot once, DST-safe, `lib/schedule.ts`); daily
+`apify.scrapeEngagement` and weekly `apify.findAudienceQuestions` for active elders.
 
 **v1 leftovers in `convex/`**: `questions.ts`, `answers.ts`, `replies.ts` (and their
 tables) belong to the old "answer internet questions" product. Delete them.
