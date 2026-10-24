@@ -52,7 +52,8 @@ Local backend + `"use node"` files need Node 20–24: `npx -p node@24 -c 'npx co
 | `OPENAI_API_KEY` | LLM jobs (profile, memories, post, planner) + memory embeddings; `OPENAI_MODEL` optional (default `gpt-6-luna`) |
 | `APIFY_TOKEN` | optional: prefill his LinkedIn background (needs `linkedinUrl` on the elder) |
 | `AUTO_POST` | optional, default `on`. `off` = story posts are saved but not sent to LinkedIn (preview only, for tests) |
-| `PUBLIC_CALLS` | optional, default off. `on` = the sign-up page can start his first call (`signup:requestCall`; max 3 a day, 10 min apart) |
+| `PUBLIC_CALLS` | optional, default off. Lets the sign-up page start his first call (`signup:requestCall`; max 3 a day, 10 min apart). `on` = only `CALL_ALLOWLIST` numbers; `all` = anyone (only once SMS is real) |
+| `CALL_ALLOWLIST` | comma-separated E.164 test numbers the sign-up page may call when `PUBLIC_CALLS=on` |
 
 Agent ids are not env vars: `syncAgent` saves one row per character in the `characterAgents`
 table (`characterId`, `agentId`, `syncedAt`), and `startCall` reads it. If his character has no

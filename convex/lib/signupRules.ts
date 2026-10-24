@@ -66,3 +66,15 @@ export function callRateLimit(
   }
   return { ok: true };
 }
+
+/**
+ * PUBLIC_CALLS gate. "on" = only numbers in CALL_ALLOWLIST (comma-separated E.164) may be
+ * called from the sign-up page; "all" = anyone (still rate limited); anything else = off.
+ * Exists because the SMS check is fake: without it, anyone could make Pip ring any number.
+ */
+export function publicCallAllowed(mode: string | undefined, allowlist: string | undefined, phone: string): boolean {
+  if (mode === "all") return true;
+  if (mode !== "on") return false;
+  const allowed = (allowlist ?? "").split(",").map((p) => normalizePhone(p)).filter(Boolean);
+  return allowed.includes(phone);
+}

@@ -6,7 +6,8 @@
 // Remaining risk: the SMS check is fake for now, so whoever knows a phone number can get its
 // elderId from `register`, change its character, and make it ring (onboarding only, at most
 // CALLS_PER_DAY a day, 10 min apart). Each new number gets its own limit: there is no global cap.
-// That's why `requestCall` is off unless PUBLIC_CALLS=on. LinkedIn is locked once he's active,
+// That's why `requestCall` is off by default: PUBLIC_CALLS=on rings only CALL_ALLOWLIST numbers,
+// PUBLIC_CALLS=all rings anyone (lib/signupRules.publicCallAllowed). LinkedIn is locked once he's active,
 // since his posts' engagement is scraped from it.
 
 import { ConvexError, v } from "convex/values";
@@ -22,6 +23,7 @@ import {
   languageTag,
   normalizeName,
   normalizePhone,
+  publicCallAllowed,
 } from "./lib/signupRules";
 import { asElderV2 } from "./lib/v2Fields";
 
@@ -32,6 +34,7 @@ type CallRequest =
   | { ok: true }
   | { ok: false; reason: "disabled" | "rate_limited" | "failed"; message: string };
 
+const DISABLED = "Calls from the sign-up page are turned off for now.";
 const FAILED = "We couldn't start the call. Please try again later.";
 
 export const listCharacters = query({
@@ -90,30 +93,40 @@ export const setLinkedin = mutation({
 /** For requestCall: is his next call onboarding, and when were his latest calls created. */
 export const callCheck = internalQuery({
   args: { elderId: v.id("elders") },
-  handler: async (ctx, { elderId }): Promise<{ onboarding: boolean; callTimes: number[] } | null> => {
-    const elder = asElderV2(await ctx.db.get(elderId));
-    if (!elder) return null;
+  handler: async (
+    ctx,
+    { elderId },
+  ): Promise<{ phone: string; onboarding: boolean; callTimes: number[] } | null> => {
+    const row = await ctx.db.get(elderId);
+    const elder = asElderV2(row);
+    if (!row || !elder) return null;
     const recent = await ctx.db
       .query("calls")
       .withIndex("by_elder", (q) => q.eq("elderId", elderId))
       .order("desc")
       .take(CALLS_PER_DAY); // the newest few decide both limits
-    return { onboarding: planNextCall(elder).kind === "onboarding", callTimes: recent.map((c) => c._creationTime) };
+    return {
+      phone: row.phone,
+      onboarding: planNextCall(elder).kind === "onboarding",
+      callTimes: recent.map((c) => c._creationTime),
+    };
   },
 });
 
 /**
- * Ring him for his onboarding call. Gated by PUBLIC_CALLS=on, then the rate limit; startCall's
+ * Ring him for his onboarding call. Gated by PUBLIC_CALLS (+ CALL_ALLOWLIST), then the rate limit; startCall's
  * reserveCall still refuses a second open call, so two requests at once can't both ring.
  */
 export const requestCall = action({
   args: { elderId: v.id("elders") },
   handler: async (ctx, { elderId }): Promise<CallRequest> => {
-    if (process.env.PUBLIC_CALLS !== "on") {
-      return { ok: false, reason: "disabled", message: "Calls from the sign-up page are turned off for now." };
-    }
+    const mode = process.env.PUBLIC_CALLS;
+    if (mode !== "on" && mode !== "all") return { ok: false, reason: "disabled", message: DISABLED };
     const check = await ctx.runQuery(internal.signup.callCheck, { elderId });
     if (!check) return { ok: false, reason: "failed", message: "Sign-up not found." };
+    if (!publicCallAllowed(mode, process.env.CALL_ALLOWLIST, check.phone)) {
+      return { ok: false, reason: "disabled", message: DISABLED };
+    }
     if (!check.onboarding) {
       return { ok: false, reason: "failed", message: "Your first call is done; your weekly calls are scheduled." };
     }
