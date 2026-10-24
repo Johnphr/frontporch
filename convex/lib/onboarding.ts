@@ -4,8 +4,9 @@
 // then story calls (slice 2) that build on everything learned so far.
 
 import { templateVariables } from "./cartesia.ts";
+import { characterFor, type CharacterConfig } from "./characters.ts";
+import { callContext, callGoal } from "./prompts/agent.ts";
 import type { CallLanguage } from "./prompts/principles.ts";
-import { neutralizeFences } from "./text.ts";
 
 export type Profile = {
   industry?: string;
@@ -52,6 +53,14 @@ export function callLanguage(code: string | undefined): CallLanguage {
   return /^es(?:$|[-_])/i.test((code ?? "").trim()) ? "es" : "en";
 }
 
+/**
+ * Who calls him: his chosen character, else the default for his language. The call runs in
+ * the character's language (Cartesia sets it per agent), so use `.language` for the variables.
+ */
+export function callCharacter(elder: { characterId?: string; language?: string }): CharacterConfig {
+  return characterFor(elder.characterId, callLanguage(elder.language));
+}
+
 export function firstName(name: string, lang: CallLanguage = "en"): string {
   return name.trim().split(/\s+/)[0] || (lang === "es" ? "amigo" : "friend");
 }
@@ -63,8 +72,9 @@ export function buildOnboardingVariables(
 ) {
   return templateVariables({
     first_name: firstName(elder.name, lang),
-    // scraped text sits inside a <background> fence in the prompt; it must not open or close it
-    known_background: neutralizeFences(knownBackground ?? "", ["background"]),
+    goal: callGoal("onboarding", lang),
+    // scraped text goes in a <background> tag; callContext keeps it from opening or closing one
+    context: callContext({ background: knownBackground }),
   });
 }
 
@@ -144,16 +154,10 @@ export function hasOpenCall(calls: { status: string; _creationTime: number }[], 
 
 export type CallKind = CallPlan["kind"];
 
-/** Convex env var holding the Cartesia agent id for each kind of call and language. */
-export function agentEnvName(kind: CallKind, lang: CallLanguage = "en"): string {
-  const base = kind === "story" ? "CARTESIA_STORY_AGENT_ID" : "CARTESIA_ONBOARDING_AGENT_ID";
-  return lang === "en" ? base : `${base}_${lang.toUpperCase()}`;
-}
-
 /**
  * reserveCall's decision, in one transaction with the insert. `expectedKind` is what startCall
- * checked its env for; if the elder's next call kind changed in between (e.g. onboarding just
- * finished), refuse instead of calling him with the wrong agent.
+ * planned for; if the elder's next call kind changed in between (e.g. onboarding just
+ * finished), refuse instead of calling him with the wrong goal.
  */
 export function reserveDecision(
   elder: { stage?: string; profile?: Profile },

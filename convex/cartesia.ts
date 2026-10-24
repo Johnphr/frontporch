@@ -1,16 +1,18 @@
 // Phone calls through Cartesia Managed Agents: onboarding (slice 1) and weekly story calls
-// (slice 2), in his language (elders.language: Pip in English, Juanito in Spanish). The agents
-// are defined in code and pushed by cartesiaAgents:syncAgent.
+// (slice 2), by his character (elders.characterId, else the default for elders.language: Pip
+// in English, Juanito in Spanish). One agent per character, defined in code and pushed by
+// cartesiaAgents:syncAgent; the call's goal and context go in as dynamic variables.
 //
 //   npx convex run cartesia:startCall '{"elderId":"<id>"}' call him (add "force":true to skip
 //                                                          the "already calling" guard)
 //
-// startCall: next call kind + language (onboarding until his profile is usable, then story) ->
-//   env check for that agent -> reserveCall (one transaction: no second open call, kind unchanged,
-//   inserts the `queued` row) -> variables: onboarding = known background (cached, else
-//   apify.scrapeProfile once); story = conversation.planNextCall (one goal: a story from today's
-//   question) -> POST /agents/calls with that agent -> markStarted (`in_progress` + first poll,
-//   one transaction; story calls also save their plan) -> story: conversation.markPlanUsed. Or
+// startCall: next call kind + character (onboarding until his profile is usable, then story) ->
+//   that character's agent id (characterAgents) -> reserveCall (one transaction: no second open
+//   call, kind unchanged, inserts the `queued` row) -> variables {first_name, goal, context}:
+//   onboarding = known background (cached, else apify.scrapeProfile once); story =
+//   conversation.planNextCall (one goal: a story from today's question) -> POST /agents/calls
+//   with that agent -> markStarted (`in_progress` + first poll, one transaction; story calls
+//   also save their plan) -> story: conversation.markPlanUsed. Or
 //   `failed` (clear refusal, or story planning failed) / `start_unknown` (timeout or 5xx: the
 //   phone may be ringing; check Cartesia's call log, it blocks a new call for 90 min).
 // pollCall: GET /agents/calls/{id} every minute until it's over (Cartesia has no call
@@ -19,8 +21,8 @@
 //   instead of undoing `ended`/`done`. Finished -> `ended` -> pipeline.processCall.
 //
 // Never log names, numbers, transcripts or raw Cartesia bodies; ids and statuses only.
-// Env: CARTESIA_API_KEY, CARTESIA_FROM_NUMBER_ID, CARTESIA_ONBOARDING_AGENT_ID,
-//      CARTESIA_STORY_AGENT_ID (+ the _ES pair for Spanish elders). Owner: Voice + Brain.
+// Env: CARTESIA_API_KEY, CARTESIA_FROM_NUMBER_ID (every character calls from it). Agent ids:
+//      the characterAgents table. Owner: Voice + Brain.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -42,9 +44,8 @@ import {
 } from "./lib/cartesia";
 import { cartesiaFetch, httpError, requireEnv } from "./lib/cartesiaHttp";
 import {
-  agentEnvName,
   buildOnboardingVariables,
-  callLanguage,
+  callCharacter,
   planNextCall,
   reserveDecision,
   type CallKind,
@@ -61,18 +62,29 @@ const MAX_SUMMARY_CHARS = 4000;
 
 const callKind = v.union(v.literal("onboarding"), v.literal("story"));
 
-/** Which call he gets next (onboarding until his profile is usable, then story), and in which language. */
+type NextCall = { kind: CallKind; characterId: string; lang: CallLanguage; agentId?: string };
+
+/**
+ * Which call he gets next (onboarding until his profile is usable, then story), who makes it
+ * (his character, in its language) and that character's agent id (missing until synced).
+ */
 export const nextCallKind = internalQuery({
   args: { elderId: v.id("elders") },
-  handler: async (ctx, { elderId }): Promise<{ kind: CallKind; lang: CallLanguage } | null> => {
+  handler: async (ctx, { elderId }): Promise<NextCall | null> => {
     const elder = asElderV2(await ctx.db.get(elderId));
-    return elder ? { kind: planNextCall(elder).kind, lang: callLanguage(elder.language) } : null;
+    if (!elder) return null;
+    const character = callCharacter(elder);
+    const row = await ctx.db
+      .query("characterAgents")
+      .withIndex("by_character", (q) => q.eq("characterId", character.id))
+      .first();
+    return { kind: planNextCall(elder).kind, characterId: character.id, lang: character.language, agentId: row?.agentId };
   },
 });
 
 /**
- * One transaction: refuse a second open call (or a kind that changed since startCall checked
- * its env), else insert the `queued` row (lib: reserveDecision).
+ * One transaction: refuse a second open call (or a kind that changed since startCall planned
+ * it), else insert the `queued` row (lib: reserveDecision).
  */
 export const reserveCall = internalMutation({
   args: { elderId: v.id("elders"), force: v.boolean(), expectedKind: v.optional(callKind) },
@@ -174,20 +186,22 @@ type StartResult =
 /**
  * Onboarding: variables from his (cached) LinkedIn background. Story (slice 2):
  * conversation.planNextCall builds the plan (question bank, memories, avoid topics, reader
- * feedback) and the dynamic variables for the story agent's prompt (lib/prompts/story.ts).
+ * feedback). Both send {first_name, goal, context} to his character's agent (lib/prompts/agent.ts).
  */
 export const startCall = internalAction({
   args: { elderId: v.id("elders"), force: v.optional(v.boolean()) },
   handler: async (ctx, { elderId, force }): Promise<StartResult> => {
-    // Check the env for the agent he'll get BEFORE reserving, so a missing story agent id
-    // never leaves a queued row behind.
+    // Check env + his character's agent BEFORE reserving, so a missing one never leaves a
+    // queued row behind.
     const next = await ctx.runQuery(internal.cartesia.nextCallKind, { elderId });
     if (!next) return { status: "refused", reason: "Elder not found" };
-    const { kind: expectedKind, lang } = next;
-    // A missing agent id throws here, before any row: the cron's slot for this week is then lost
-    // (schedule.tick records it first), so keep all four agent ids set once elders use them.
-    const agentVar = agentEnvName(expectedKind, lang);
-    const env = requireEnv(["CARTESIA_API_KEY", agentVar, "CARTESIA_FROM_NUMBER_ID"]);
+    const { kind: expectedKind, lang, characterId, agentId } = next;
+    const env = requireEnv(["CARTESIA_API_KEY", "CARTESIA_FROM_NUMBER_ID"]);
+    // Throws before any row: the cron's slot for this week is then lost (schedule.tick records
+    // it first), so sync every character's agent before elders can pick it.
+    if (!agentId) {
+      throw new Error(`No Cartesia agent for character "${characterId}" yet: run npx convex run cartesiaAgents:syncAgent`);
+    }
     const reserved = await ctx.runMutation(internal.cartesia.reserveCall, {
       elderId,
       force: force ?? false,
@@ -233,7 +247,7 @@ export const startCall = internalAction({
     const res = await cartesiaFetch("/agents/calls", {
       method: "POST",
       body: buildOutboundCallBody({
-        agentId: env[agentVar],
+        agentId,
         fromNumberId: env.CARTESIA_FROM_NUMBER_ID,
         toNumber: elder.phone,
         variables,
@@ -266,7 +280,7 @@ export const startCall = internalAction({
         console.warn(`cartesia.startCall: call ${callId} started, but marking its bank question used failed`);
       }
     }
-    console.log(`cartesia.startCall: ${kind} (${lang}) call ${callId} started (cartesia ${parsed.callId})`);
+    console.log(`cartesia.startCall: ${kind} call ${callId} by ${characterId} (${lang}) started (cartesia ${parsed.callId})`);
     return { status: "started", kind, callId, cartesiaCallId: parsed.callId };
   },
 });

@@ -7,8 +7,8 @@
 
 import { formatMemoriesForPrompt } from "./memoryText.ts";
 import { firstName, type Profile } from "./onboarding.ts";
+import { callContext, callGoal, type CallVariables } from "./prompts/agent.ts";
 import type { CallLanguage } from "./prompts/principles.ts";
-import { neutralizeFences } from "./text.ts";
 
 export type CandidateSource = "open_thread" | "reader" | "recent_topic" | "audience" | "memory" | "profile";
 
@@ -305,7 +305,7 @@ export type CallKind = "onboarding" | "story";
 /**
  * ARCHITECTURE.md "Contracts": conversation.planNextCall -> cartesia.startCall.
  * Kept simple on purpose: a story call has ONE goal, a story that starts from `question`
- * (the goal's wording is fixed in lib/prompts/story.ts); Pip/Juanito follows him from there.
+ * (the goal's wording is fixed in lib/prompts/agent.callGoal); the character follows him from there.
  */
 export type CallPlan = {
   kind: CallKind;
@@ -353,30 +353,24 @@ export function firstBankQuestion<T extends { question: string }>(bank: T[] | un
 }
 
 /**
- * The {{variables}} in lib/prompts/story.ts (Cartesia dynamic_variables). The call language
- * is set per agent (Pip in English, Juanito in Spanish), so it isn't a variable.
- * Onboarding variables are PR #7's: lib/onboarding.buildOnboardingVariables.
+ * A story call's {{variables}} (lib/prompts/agent.CALL_VARIABLES, Cartesia dynamic_variables).
+ * The call language is set per character agent, so it isn't a variable. Every variable is
+ * always present (cartesia's templateVariables turns "" into "none"); callContext fences the data.
  */
-export const PROMPT_VARIABLES = ["first_name", "profile", "memories", "feedback", "question"] as const;
-
-export type PromptVariables = Record<(typeof PROMPT_VARIABLES)[number], string>;
-
-// The story prompt fences each data value in these tags; no value may open or close one.
-const STORY_FENCES = ["profile", "memories", "feedback", "question", "reader_feedback", "background"];
-const fence = (text: string) => neutralizeFences(text, STORY_FENCES);
-
-/** Every story variable is always present (empty string when unused; cartesia's templateVariables turns "" into "none"). */
 export function toPromptVariables(
   plan: CallPlan,
   elder: { name: string; profile?: Profile | null },
   opts: { avoid?: string[]; lang?: CallLanguage } = {},
-): PromptVariables {
+): CallVariables {
   return {
     first_name: firstName(elder.name ?? "", opts.lang),
-    profile: fence(formatProfile(elder.profile, opts.avoid ?? [])),
-    memories: fence(plan.memories.map((m) => `- ${m}`).join("\n")),
-    feedback: fence(plan.feedback ?? ""),
-    question: fence(plan.question ?? ""),
+    goal: callGoal("story", opts.lang ?? "en"),
+    context: callContext({
+      profile: formatProfile(elder.profile, opts.avoid ?? []),
+      memories: plan.memories.map((m) => `- ${m}`).join("\n"),
+      feedback: plan.feedback,
+      question: plan.question,
+    }),
   };
 }
 
