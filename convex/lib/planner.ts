@@ -1,5 +1,5 @@
 // The question planner's pure logic: ranking the question bank, building the
-// CallPlan, turning it into the Vapi prompt variables, and small call checks.
+// CallPlan, turning it into the Cartesia dynamic variables, and small call checks.
 // Only imports other pure lib files, so `npm test` runs it directly in Node.
 //
 // Claude writes the questions and the "why"; this file decides the order, so the
@@ -271,16 +271,27 @@ export type ElderProfile = {
   industry: string;
   specialty: string;
   careerSummary: string;
+  /** what he can talk about */
+  topics: string[];
+  /** stories he mentioned, for later calls */
+  storySeeds: string[];
   topicsToAvoid: string[];
 };
+
+/** Enough to run story calls: we know his field and his career arc. Otherwise onboard again. */
+export function isUsableProfile(profile: Partial<ElderProfile> | null | undefined): boolean {
+  return Boolean(profile?.industry?.trim() && profile?.careerSummary?.trim());
+}
 
 /** Profile text for prompts. `extraAvoid` (avoid memories from later calls) is always included. */
 export function formatProfile(profile: ElderProfile | undefined | null, extraAvoid: string[] = []): string {
   const avoid = mergeAvoid(profile?.topicsToAvoid ?? [], extraAvoid);
+  const topics = (profile?.topics ?? []).filter((t) => t?.trim());
   const parts = [
     profile?.industry && `Industry: ${profile.industry}.`,
     profile?.specialty && `Specialty: ${profile.specialty}.`,
     profile?.careerSummary && `Career: ${profile.careerSummary}`,
+    topics.length ? `Topics he knows well: ${topics.join("; ")}.` : "",
     avoid.length ? `Topics to avoid: ${avoid.join("; ")}.` : "",
   ];
   return parts.filter(Boolean).join("\n");
@@ -302,11 +313,11 @@ export function mergeAvoid(...lists: string[][]): string[] {
   return out;
 }
 
-// ---------- call plan + Vapi variables ----------
+// ---------- call plan + Cartesia dynamic variables ----------
 
 export type CallKind = "onboarding" | "story";
 
-/** ARCHITECTURE.md "Contracts": conversation.planNextCall -> vapi.startCall. */
+/** ARCHITECTURE.md "Contracts": conversation.planNextCall -> cartesia.startCall. */
 export type CallPlan = {
   kind: CallKind;
   mainQuestion?: string;
@@ -359,7 +370,7 @@ export function buildCallPlan(input: {
   };
 }
 
-/** The {{variables}} used by vapi/prompts/onboarding.md and story-call.md. */
+/** The {{variables}} used by voice/prompts/onboarding.md and story-call.md (Cartesia dynamic_variables). */
 export const PROMPT_VARIABLES = [
   "firstName",
   "language",
@@ -393,7 +404,7 @@ export function languageName(code: string | undefined): string {
   return LANGUAGE_NAMES[base] ?? (code || "English");
 }
 
-/** Every variable is always present (empty string when unused) so both assistants get a full set. */
+/** Every variable is always present (empty string when unused) so both agents get a full set. */
 export function toPromptVariables(
   plan: CallPlan,
   elder: { name: string; language?: string; profile?: ElderProfile | null },
@@ -426,12 +437,33 @@ export function isNearSilentCall(turns: Turn[], minWords = 25): boolean {
 }
 
 /**
- * Voicemail / nobody picked up. End-reason strings vary by provider, so match loosely.
- * A call that ended on silence is NOT here: he may have talked for 20 minutes first;
- * isNearSilentCall decides whether there was enough of him to use.
+ * The call never became a conversation: voicemail, nobody picked up, busy, or the dial
+ * failed. Cartesia `end_reason` values covered: voicemail_detected, dial_no_answer,
+ * dial_busy, dial_failed, dial_timeout, concurrency_limit, config_error.
+ * Hang-ups, silence/inactivity, max_duration and mid-call errors are NOT here: he may
+ * have talked for 20 minutes first; isNearSilentCall decides whether there's enough.
  */
-export function isNoConversation(endedReason: string | undefined): boolean {
-  return /voicemail|no[-_ ]?answer|did[-_ ]not[-_ ]answer|busy|failed[-_ ]to[-_ ]connect/i.test(endedReason ?? "");
+export function isNoConversation(endReason: string | undefined): boolean {
+  return /voicemail|no[-_ ]?answer|did[-_ ]not[-_ ]answer|busy|failed[-_ ]to[-_ ]connect|dial[-_ ](failed|timeout)|concurrency[-_ ]limit|config[-_ ]error/i.test(
+    endReason ?? "",
+  );
+}
+
+export type ProcessDecision =
+  | { action: "process" }
+  | { action: "skip"; reason: "already processed" | "call not finished" | "not found" };
+
+/**
+ * Should pipeline.processCall run for this calls row? Runs once per call: processedAt
+ * is the claim (set in the same mutation), so a retry or a second trigger is a no-op.
+ */
+export function processDecision(
+  call: { processedAt?: number; status?: string } | null | undefined,
+): ProcessDecision {
+  if (!call) return { action: "skip", reason: "not found" };
+  if (typeof call.processedAt === "number") return { action: "skip", reason: "already processed" };
+  if (call.status !== "completed" && call.status !== "failed") return { action: "skip", reason: "call not finished" };
+  return { action: "process" };
 }
 
 export type StepStatus = "ok" | "skipped" | "failed";

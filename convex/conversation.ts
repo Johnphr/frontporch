@@ -8,10 +8,12 @@
 //                                     audience questions (Apify) and recent topics in
 //                                     his field (Claude web search), in parallel, then
 //                                     schedules a refresh with them.
-//   planNextCall({ elderId })         at call time (vapi.startCall): CallPlan + the
-//                                     prompt variables. Fast: never waits on a refresh
-//                                     or a Claude call; reuses the saved feedback line.
-//   markPlanUsed({ elderId, bankId, callId })   vapi.startCall, once the call is placed.
+//   planNextCall({ elderId })         at call time (cartesia.startCall) ->
+//                                     { plan, dynamicVariables }: send dynamicVariables
+//                                     as Cartesia dynamic_variables, pick the agent by
+//                                     plan.kind. Fast: never waits on a refresh or a
+//                                     Claude call; reuses the saved feedback line.
+//   markPlanUsed({ elderId, bankId, callId })   cartesia.startCall, once the call is placed.
 //
 // Ranking rules live in lib/planner.ts (pure, tested). Owner: Core: Brain.
 
@@ -172,7 +174,7 @@ export const listQueued = internalQuery({
 });
 
 /**
- * vapi.startCall calls this once the call is placed, with plan.bankId from
+ * cartesia.startCall calls this once the call is placed, with plan.bankId from
  * planNextCall. Marks the question used (and the audience question behind it).
  */
 export const markPlanUsed = internalMutation({
@@ -235,11 +237,15 @@ export const refreshQuestionBank = internalAction({
       .filter((m) => m.kind === "open_thread" && m.status !== "resolved")
       .slice(0, 15)
       .map((m) => ({ id: m._id, text: m.text }));
-    const storyMemories = memories
-      .filter((m) => m.kind === "fact" || m.kind === "story_seed" || m.kind === "person" || m.kind === "place")
-      .sort((a, b) => (b.lastMentionedAt ?? b._creationTime) - (a.lastMentionedAt ?? a._creationTime))
-      .slice(0, 30)
-      .map((m) => (m.name ? `${m.name}: ${m.text}` : m.text));
+    // Story seeds from onboarding (profile) come first: they're the slice-2 call topics.
+    const storyMemories = [
+      ...(profile?.storySeeds ?? []).map((seed) => `Story seed: ${seed}`),
+      ...memories
+        .filter((m) => m.kind === "fact" || m.kind === "story_seed" || m.kind === "person" || m.kind === "place")
+        .sort((a, b) => (b.lastMentionedAt ?? b._creationTime) - (a.lastMentionedAt ?? a._creationTime))
+        .slice(0, 30)
+        .map((m) => (m.name ? `${m.name}: ${m.text}` : m.text)),
+    ];
     // covered: topics he already talked about (open threads / readers may revisit them).
     // recentlyUsed: topics of questions asked in his last calls (never repeated).
     const covered = memories.filter((m) => m.kind === "topic_covered").map((m) => m.text);
@@ -378,7 +384,8 @@ export const prepareCall = internalAction({
   },
 });
 
-type PlanResult = { plan: CallPlan; variables: PromptVariables };
+/** cartesia.startCall sends dynamicVariables as `dynamic_variables` on POST /agents/calls. */
+type PlanResult = { plan: CallPlan; dynamicVariables: PromptVariables };
 
 export const planNextCall = internalAction({
   args: { elderId: v.id("elders") },
@@ -410,7 +417,7 @@ export const planNextCall = internalAction({
         }
       }
       const plan = buildCallPlan({ kind: "onboarding", knownBackground });
-      return { plan, variables: toPromptVariables(plan, elder, { avoid: avoidMemories }) };
+      return { plan, dynamicVariables: toPromptVariables(plan, elder, { avoid: avoidMemories }) };
     }
 
     if (context.queued.length === 0) {
@@ -439,6 +446,6 @@ export const planNextCall = internalAction({
     const feedbackLine = context.feedbackLine;
 
     const plan = buildCallPlan({ kind: "story", bank, memories, feedbackLine });
-    return { plan, variables: toPromptVariables(plan, elder, { avoid: avoidMemories }) };
+    return { plan, dynamicVariables: toPromptVariables(plan, elder, { avoid: avoidMemories }) };
   },
 });

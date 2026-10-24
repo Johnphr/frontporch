@@ -13,6 +13,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
+import { elderProfile as profileValidator } from "./schema";
 import { labelledTranscript } from "./lib/linkedinPost";
 import {
   filterTopicsByUrls,
@@ -37,12 +38,6 @@ const DATA_NOTE =
 // ---------- shared ----------
 
 const turnValidator = v.object({ role: v.string(), text: v.string() });
-const profileValidator = v.object({
-  industry: v.string(),
-  specialty: v.string(),
-  careerSummary: v.string(),
-  topicsToAvoid: v.array(v.string()),
-});
 
 function anthropic(opts: { timeout?: number; maxRetries?: number } = {}): Anthropic {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is not set in Convex");
@@ -170,7 +165,10 @@ const PROFILE_SYSTEM = `From the first (onboarding) phone call with an older pro
 - industry: his main industry, a few words.
 - specialty: what he was best at / known for, a few words.
 - careerSummary: 2-4 sentences on his career arc, using only what he said or the background.
-- topicsToAvoid: things he didn't want to discuss (may be empty).`;
+- topics: 3-8 subjects he clearly knows well and could talk about in later calls, a few words each.
+- storySeeds: stories he mentioned or hinted at that could fill a whole later call, one short sentence each (may be empty).
+- topicsToAvoid: things he didn't want to discuss (may be empty).
+Leave a field empty ("" or []) rather than guessing: an empty industry or careerSummary means we call him for onboarding again.`;
 
 export const extractProfile = internalAction({
   args: { turns: v.array(turnValidator), knownBackground: v.optional(v.string()) },
@@ -180,14 +178,24 @@ export const extractProfile = internalAction({
     const raw = await structured<ElderProfile>({
       system: PROFILE_SYSTEM,
       user: parts.join("\n\n"),
-      schema: obj({ industry: str, specialty: str, careerSummary: str, topicsToAvoid: strArray }),
+      schema: obj({
+        industry: str,
+        specialty: str,
+        careerSummary: str,
+        topics: strArray,
+        storySeeds: strArray,
+        topicsToAvoid: strArray,
+      }),
       effort: "medium",
     });
+    const clean = (list: string[] | undefined) => (list ?? []).map((t) => t.trim()).filter(Boolean);
     return {
       industry: (raw.industry ?? "").trim(),
       specialty: (raw.specialty ?? "").trim(),
       careerSummary: (raw.careerSummary ?? "").trim(),
-      topicsToAvoid: (raw.topicsToAvoid ?? []).map((t) => t.trim()).filter(Boolean),
+      topics: clean(raw.topics).slice(0, 8),
+      storySeeds: clean(raw.storySeeds).slice(0, 10),
+      topicsToAvoid: clean(raw.topicsToAvoid),
     };
   },
 });

@@ -1,8 +1,8 @@
 // Normalizes an elders row for the planner: trims strings, validates the
 // profile shape and works out the call stage, so v1 rows (no v2 fields) and
-// half-filled rows behave predictably. No runtime imports (unit-testable).
+// half-filled rows behave predictably. Only imports pure lib files (unit-testable).
 
-import type { ElderProfile } from "./planner.ts";
+import { isUsableProfile, type ElderProfile } from "./planner.ts";
 
 export type ElderV2 = {
   _id: string;
@@ -21,11 +21,15 @@ function str(value: unknown): string | undefined {
 function asProfile(value: unknown): ElderProfile | undefined {
   if (!value || typeof value !== "object") return undefined;
   const p = value as Record<string, unknown>;
+  const strings = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((t): t is string => typeof t === "string" && t.trim() !== "") : [];
   const profile: ElderProfile = {
     industry: str(p.industry) ?? "",
     specialty: str(p.specialty) ?? "",
     careerSummary: str(p.careerSummary) ?? "",
-    topicsToAvoid: Array.isArray(p.topicsToAvoid) ? p.topicsToAvoid.filter((t): t is string => typeof t === "string") : [],
+    topics: strings(p.topics),
+    storySeeds: strings(p.storySeeds),
+    topicsToAvoid: strings(p.topicsToAvoid),
   };
   return profile.industry || profile.specialty || profile.careerSummary ? profile : undefined;
 }
@@ -46,8 +50,8 @@ export function asElderV2(doc: unknown): ElderV2 | null {
   };
 }
 
-/** Onboarding until the profile exists (or stage says so explicitly). */
+/** Onboarding until the profile is usable (or stage says so explicitly). */
 export function isOnboarding(elder: ElderV2): boolean {
   if (elder.stage) return elder.stage === "onboarding";
-  return !elder.profile;
+  return !isUsableProfile(elder.profile);
 }

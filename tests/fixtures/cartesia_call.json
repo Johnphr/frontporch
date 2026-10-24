@@ -1,0 +1,48 @@
+{
+  "id": "call_fixture_01",
+  "agent_id": "agent_fixture_story",
+  "agent_name": "Pip (story)",
+  "agent_version_id": null,
+  "zdr_enabled": false,
+  "start_time": "2026-10-25T17:00:03Z",
+  "end_time": "2026-10-25T17:14:41Z",
+  "redacted_at": null,
+  "status": "completed",
+  "error_message": null,
+  "end_reason": "client_hangup",
+  "summary": "Walter told the story of the winter the main oven failed before a wedding order.",
+  "dynamic_variables": { "firstName": "Walter", "mainQuestion": "Tell me about the winter the big oven broke down." },
+  "transcript": [
+    { "role": "system", "text": "Call connected.", "start_timestamp": 0, "end_timestamp": 0 },
+    {
+      "role": "assistant",
+      "text": "Hi Walter, it's Pip. Tell me about the winter the big oven broke down.",
+      "start_timestamp": 1.2,
+      "end_timestamp": 5.8,
+      "tool_calls": null,
+      "tts_ttfb": 0.31
+    },
+    { "role": "user", "text": "Oh, that winter.", "start_timestamp": 6.4, "end_timestamp": 7.5, "stt_ttfb": 0.12 },
+    {
+      "role": "user",
+      "text": "  It was 1978, two days before the Hendricks wedding order.  ",
+      "start_timestamp": 7.9,
+      "end_timestamp": 12.0
+    },
+    { "role": "assistant", "text": "Mm, go on.", "start_timestamp": 12.6, "end_timestamp": 13.2 },
+    { "role": "user", "text": "", "start_timestamp": 13.5, "end_timestamp": 13.6 },
+    {
+      "role": "assistant",
+      "text": null,
+      "start_timestamp": 13.9,
+      "end_timestamp": 14.0,
+      "tool_calls": [{ "id": "t1", "name": "end_call", "arguments": {} }]
+    },
+    {
+      "role": "user",
+      "text": "Eddie and I rebuilt the burner overnight with parts from the hardware store on 5th.",
+      "start_timestamp": 14.2,
+      "end_timestamp": 20.5
+    }
+  ]
+}
