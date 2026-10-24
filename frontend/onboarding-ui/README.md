@@ -11,7 +11,7 @@ Four steps, then a "Call me now" button:
 | 2 | Phone number | `signup:register({ name, phone, language })` → `elderId` (an existing number returns its id, nothing changes) |
 | 3 | Who calls you (characters in the chosen language) | `signup:listCharacters`, `signup:setCharacter({ elderId, characterId })` |
 | 4 | LinkedIn profile link, optional ("Skip for now") | `signup:setLinkedin({ elderId, url })` |
-| done | "Call me now" | `signup:requestCall({ elderId })`: rings only when the backend sets `PUBLIC_CALLS=on`; otherwise the page says calls are turned off |
+| done | "Call me now" | `signup:requestCall({ elderId })`: rings only when the backend allows it (`PUBLIC_CALLS=on` rings numbers in `CALL_ALLOWLIST`, `=all` rings anyone); otherwise the page says calls are turned off |
 
 There are no accounts (the backend has none) and no SMS verification yet: the 6-digit code
 screen still exists but is skipped (`VERIFY_PHONE = false` in `src/App.jsx`, mock in
