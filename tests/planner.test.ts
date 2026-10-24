@@ -1,7 +1,6 @@
 // Run: node --test "tests/**/*.test.ts"   (Node 22.18+ / 24 strips TypeScript types natively)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 
 import {
   FALLBACK_MAIN_QUESTION,
@@ -24,6 +23,7 @@ import {
   toPromptVariables,
   type Candidate,
 } from "../convex/lib/planner.ts";
+import { STORY_GREETING, STORY_INSTRUCTIONS } from "../convex/lib/prompts/story.ts";
 import { asElderV2, isOnboarding } from "../convex/lib/v2Fields.ts";
 import { fixture, NOW } from "./helpers.ts";
 
@@ -185,7 +185,7 @@ test("buildCallPlan: empty bank falls back; onboarding carries background only",
 
 test("toPromptVariables covers exactly the {{variables}} in the story prompt (Cartesia dynamic_variables)", () => {
   const used = new Set<string>();
-  const text = readFileSync(new URL("../voice/prompts/story-call.md", import.meta.url), "utf8");
+  const text = [STORY_INSTRUCTIONS, STORY_GREETING].join("\n"); // the story agent prompt (lib/prompts/story.ts)
   for (const m of text.matchAll(/\{\{(\w+)\}\}/g)) used.add(m[1]);
   assert.deepEqual([...used].sort(), [...PROMPT_VARIABLES].sort());
 

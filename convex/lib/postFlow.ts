@@ -195,3 +195,15 @@ export function parseWorkflowResult(result: any): WorkflowOutcome {
       return { kind: "waiting", pendingReason: result?.pendingReason ?? null };
   }
 }
+
+// ---------- auto-post switch ----------
+
+/**
+ * AUTO_POST env -> post right after the call or not. Default on (the locked auto-post
+ * decision); "off" / "false" / "0" / "no" keeps the post as a `pending` row for preview
+ * (linkedapi:previewPost) until someone posts it on purpose (linkedapi:createPost).
+ */
+export function parseAutoPost(value: string | undefined): boolean {
+  const v = (value ?? "").trim().toLowerCase();
+  return !["off", "false", "0", "no"].includes(v);
+}

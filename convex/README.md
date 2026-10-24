@@ -47,9 +47,66 @@ Local backend + `"use node"` files need Node 20–24: `npx -p node@24 -c 'npx co
 |---|---|
 | `CARTESIA_API_KEY`, `CARTESIA_FROM_NUMBER_ID` | Cartesia account + the phone number's id (`ap_...`) |
 | `CARTESIA_ONBOARDING_AGENT_ID` | printed by the first `syncAgent` run |
+| `CARTESIA_STORY_AGENT_ID` | story agent (slice 2), printed by the first `syncAgent` run that creates it |
 | `CARTESIA_VOICE_ID`, `CARTESIA_MODEL` | optional voice + in-call model (default `claude-haiku-4.5`) |
 | `ANTHROPIC_API_KEY` | profile extraction |
 | `APIFY_TOKEN` | optional: prefill his LinkedIn background (needs `linkedinUrl` on the elder) |
+| `AUTO_POST` | optional, default `on`. `off` = story posts are saved but not sent to LinkedIn (preview only, for tests) |
+
+## Test a follow-up (story) call (slice 2)
+
+For an elder who already did the onboarding call (his row has `stage: "active"` and a profile).
+`startCall` picks the kind by itself: onboarding until the profile is usable, then story.
+
+1. Story agent + preview-only posting (once):
+
+   ```bash
+   npx convex run cartesia:syncAgent '{"only":"story"}'   # first run prints the next line
+   npx convex env set CARTESIA_STORY_AGENT_ID <id>
+   npx convex env set AUTO_POST off                       # posts stay `pending`, nothing goes to LinkedIn
+   ```
+
+   Also needed: `ANTHROPIC_API_KEY` (planning, memories, post) and `OPENAI_API_KEY` (memory search).
+
+2. Optional, give the plan fresh material (each takes a minute or two):
+
+   ```bash
+   npx convex run conversation:prepareCall '{"elderId":"<id>"}'        # audience questions + recent news in his field (APIFY_TOKEN + ANTHROPIC_API_KEY); schedules a bank refresh
+   npx convex run conversation:refreshQuestionBank '{"elderId":"<id>"}' # or just rebuild the question bank from what he's told us
+   ```
+
+3. See what Pip will ask, without calling:
+
+   ```bash
+   npx convex run conversation:planNextCall '{"elderId":"<id>"}'
+   ```
+
+   `plan.mainQuestion`, `plan.threads`, `plan.memories` and `dynamicVariables` are exactly what
+   the story agent gets. An empty bank falls back to a default opening question (and schedules a
+   refresh), so run step 2 first for a real follow-up.
+
+4. Call him:
+
+   ```bash
+   npx convex run cartesia:startCall '{"elderId":"<id>"}'   # phone rings; returns {status: "started", kind: "story", ...}
+   npx convex logs
+   ```
+
+5. Watch in the dashboard:
+   - `calls`: new row, `kind: "story"`, `plan` saved, `queued` → `in_progress` → `ended` → `done`.
+   - `questionBank`: the planned row flips to `used` with `usedInCallId` when the call starts.
+   - `memories`: new facts, people, open threads from this call (`callId` = this call).
+   - `posts`: one row for the call, `status: "pending"` (with `AUTO_POST=off`).
+
+6. Preview the post (formatting + fact-check, nothing is posted):
+
+   ```bash
+   npx convex run linkedapi:previewPost '{"postId":"<posts id>"}'
+   ```
+
+   Post it on purpose later with `npx convex run linkedapi:createPost '{"postId":"<posts id>"}'`
+   (or `linkedapi:approvePost` if the fact-check held it). Turn auto-posting back on with
+   `npx convex env set AUTO_POST on`.
 
 ## Apify scrapers (`apify.ts`, Integrations)
 
