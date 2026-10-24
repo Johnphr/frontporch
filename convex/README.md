@@ -200,6 +200,10 @@ npx convex run linkedapi:previewText '{"text":"My first job...","turns":[{"role"
 npx convex run linkedapi:previewPost '{"postId":"<posts id>"}'
 ```
 
+The AI-disclosure footer follows the elder's language: Spanish (`es-*`) elders get
+`SPANISH_DISCLOSURE`, everyone else the English line (`lib/linkedinPost.ts`). `previewPost`
+uses the post's elder; `previewText` takes an optional `"language":"es-MX"`.
+
 Unit tests for the formatter and posting decisions (no Convex needed): `node --test "tests/**/*.test.ts"`.
 
 ## Memory, engagement, scheduling (Core: Data)

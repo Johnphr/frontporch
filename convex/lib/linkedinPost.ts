@@ -18,6 +18,15 @@ export const MAX_HASHTAGS = 3;
 export const DEFAULT_DISCLOSURE =
   "I told this story in a phone interview with Front Porch. It was written up with AI from my own words.";
 
+// Same line for Spanish-speaking elders (callLanguage(elder.language) === "es").
+export const SPANISH_DISCLOSURE =
+  "Conté esta historia en una entrevista telefónica con Front Porch. Se redactó con ayuda de IA a partir de mis propias palabras.";
+
+/** The disclosure line in the elder's call language ("es" -> Spanish, anything else -> English). */
+export function disclosureFor(lang: string | undefined): string {
+  return lang === "es" ? SPANISH_DISCLOSURE : DEFAULT_DISCLOSURE;
+}
+
 export type Turn = { role: string; text: string };
 
 export type PrepareOptions = {
