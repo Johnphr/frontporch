@@ -203,9 +203,9 @@ test("toPromptVariables covers exactly the {{variables}} in the story prompt (Ca
     profile: { industry: "Baking", specialty: "Production", careerSummary: "Ran a bakery.", topicsToAvoid: ["the strike"] },
   });
   assert.deepEqual(Object.keys(vars).sort(), [...PROMPT_VARIABLES].sort());
-  assert.equal(vars.firstName, "Walter");
+  assert.equal(vars.first_name, "Walter");
   assert.equal(vars.language, "Spanish");
-  assert.equal(vars.mainQuestion, "Q1?");
+  assert.equal(vars.main_question, "Q1?");
   assert.equal(vars.threads, "- Q2?");
   assert.equal(vars.memories, "- Ran a bakery.");
   assert.match(vars.profile, /Industry: Baking\./);

@@ -170,8 +170,8 @@ type Turn = { role: "pip" | "elder"; text: string };   // calls.transcript, afte
 // conversation.planNextCall({ elderId }) -> { plan: CallPlan, dynamicVariables }
 // onboarding: dynamicVariables = lib/onboarding.buildOnboardingVariables (first_name, known_background)
 // story: every {{name}} in lib/prompts/story.ts (story agent), via lib/cartesia.templateVariables
-// ("" -> "none"): firstName, language ("Spanish", not "es-MX"), profile (incl. "Topics to
-// avoid: ..."), memories ("- ..." lines), feedback, mainQuestion, threads ("- ..." lines).
+// ("" -> "none"): first_name, language ("Spanish", not "es-MX"), profile (incl. "Topics to
+// avoid: ..."), memories ("- ..." lines), feedback, main_question, threads ("- ..." lines).
 
 // pipeline.processCall({ callId }) -> { status: "done" | "no_conversation" | "process_failed" | "skipped", reason? }
 //   scheduled by cartesia.applyPoll once the call has ended (PR #7)

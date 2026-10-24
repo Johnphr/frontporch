@@ -37,12 +37,12 @@ empty value into `none`):
 
 | Variable | Example |
 |---|---|
-| `firstName` | `Walter` |
+| `first_name` | `Walter` |
 | `language` | `Spanish` (a language name, not `es-MX`) |
 | `profile` | `Industry: Baking.` / `Specialty: Production.` / `Career: ...` / `Topics he knows well: ...` / `Topics to avoid: ...` (one per line) |
 | `memories` | `- People in his life: Eddie Morales (His foreman).` lines (unfinished stories and people first) |
 | `feedback` | one warm sentence about reader reactions, or `none` |
-| `mainQuestion` | today's question |
+| `main_question` | today's question |
 | `threads` | `- ...` lines, 2–3 backup questions |
 
 Once a story call is placed, `startCall` saves the plan on the calls row and runs

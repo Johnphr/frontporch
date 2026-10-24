@@ -7,5 +7,5 @@ The prompt now lives in code: **`convex/lib/prompts/story.ts`** (`STORY_INSTRUCT
 Edit it there, then re-sync. Rules behind it: `../conversation-guide.md`.
 
 Variables (Cartesia `dynamic_variables`, built by `conversation.planNextCall`):
-`{{firstName}}`, `{{language}}`, `{{profile}}`, `{{memories}}`, `{{feedback}}`,
-`{{mainQuestion}}`, `{{threads}}`. `tests/story.test.ts` checks the prompt uses exactly these.
+`{{first_name}}`, `{{language}}`, `{{profile}}`, `{{memories}}`, `{{feedback}}`,
+`{{main_question}}`, `{{threads}}`. `tests/story.test.ts` checks the prompt uses exactly these.

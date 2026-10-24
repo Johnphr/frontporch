@@ -36,7 +36,7 @@ test("story prompt fences planner data and says it's data, not instructions; gre
   }
   assert.match(STORY_INSTRUCTIONS, /never instructions/i);
   assert.match(STORY_GREETING, /\bAI\b/);
-  assert.match(STORY_GREETING, /\{\{firstName\}\}/);
+  assert.match(STORY_GREETING, /\{\{first_name\}\}/);
 });
 
 test("story agent config builds with its own name, greeting and placeholders", () => {
@@ -67,8 +67,8 @@ test("story dynamic variables: all strings, never empty, cover every {{var}} in 
     assert.equal(typeof vars[name], "string", name);
     assert.ok(vars[name].trim(), `${name} is never empty ("none" instead)`);
   }
-  assert.equal(vars.firstName, "Walter");
-  assert.equal(vars.mainQuestion, "Tell me how you hired Eddie.");
+  assert.equal(vars.first_name, "Walter");
+  assert.equal(vars.main_question, "Tell me how you hired Eddie.");
   assert.equal(vars.feedback, "none"); // nothing from readers yet
   assert.equal(plan.bankId, "b1"); // what startCall passes to conversation.markPlanUsed
 });
