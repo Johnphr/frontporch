@@ -180,11 +180,66 @@ export function buildOutboundCallBody(a: {
   };
 }
 
-/** POST /agents/calls answers per call: { agent_call_id } or { error }. */
-export function parseOutboundResponse(json: unknown): { callId: string } | { error: string } {
+export type StartFailure = { error: string; placed: "no" | "unknown" };
+
+/**
+ * POST /agents/calls answers per call: { agent_call_id } or { error }. A per-call error is a
+ * clear refusal; anything else without an id is unclear (the phone may be ringing). Cartesia's
+ * error text isn't kept: it can echo the number.
+ */
+export function parseOutboundResponse(json: unknown): { callId: string } | StartFailure {
   const first = isRecord(json) && Array.isArray(json.calls) ? json.calls[0] : undefined;
-  if (!isRecord(first)) return { error: "Cartesia returned no call" };
-  const callId = str(first.agent_call_id);
+  const callId = isRecord(first) ? str(first.agent_call_id) : "";
   if (callId) return { callId };
-  return { error: clip(str(first.error) || "Cartesia returned no call id") };
+  if (isRecord(first) && first.error) return { error: "Cartesia refused the call", placed: "no" };
+  return { error: "Cartesia returned no call id", placed: "unknown" };
+}
+
+/**
+ * HTTP failure on POST /agents/calls -> row status. Only a clear 4xx means nothing rang;
+ * a timeout or server error may still have placed the call (`start_unknown` blocks a retry
+ * until someone checks Cartesia's call log).
+ */
+export function startFailureStatus(httpStatus: number): "failed" | "start_unknown" {
+  return httpStatus === 0 || httpStatus === 408 || httpStatus >= 500 ? "start_unknown" : "failed";
+}
+
+export type PollOutcome =
+  | { kind: "pending" }
+  | { kind: "fatal"; error: string }
+  | { kind: "timeout" }
+  | { kind: "finished"; transcript: Turn[]; summary?: string; endReason?: string; error?: string };
+
+export type PollPlan = { patch: Record<string, unknown>; next: "poll" | "process" | null; delayMs: number };
+
+const POLL_TIMEOUT_ERROR = "Stopped checking after about an hour; the call never finished in Cartesia";
+
+/**
+ * Compare-and-set for one poll result. Only the chain that saw the current attempt count on an
+ * `in_progress` call may write; a duplicate or late chain gets null and stops, so it can't undo
+ * `ended` / `done` or double-count attempts.
+ */
+export function planPollUpdate(
+  call: { status: string; pollAttempts?: number },
+  seenAttempts: number,
+  outcome: PollOutcome,
+  now: number,
+): PollPlan | null {
+  if (call.status !== "in_progress" || (call.pollAttempts ?? 0) !== seenAttempts) return null;
+  const base = { pollAttempts: seenAttempts + 1, lastPolledAt: now };
+  switch (outcome.kind) {
+    case "pending":
+      return { patch: base, next: "poll", delayMs: nextPollDelayMs(seenAttempts + 1) };
+    case "fatal":
+      return { patch: { ...base, status: "poll_error", error: outcome.error }, next: null, delayMs: 0 };
+    case "timeout":
+      return { patch: { ...base, status: "poll_timeout", error: POLL_TIMEOUT_ERROR }, next: null, delayMs: 0 };
+    case "finished": {
+      const patch: Record<string, unknown> = { ...base, status: "ended", transcript: outcome.transcript };
+      for (const key of ["summary", "endReason", "error"] as const) {
+        if (outcome[key] !== undefined) patch[key] = outcome[key];
+      }
+      return { patch, next: "process", delayMs: 0 };
+    }
+  }
 }

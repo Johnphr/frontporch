@@ -21,6 +21,36 @@ the repo:
 npx convex env set ANTHROPIC_API_KEY <value>
 ```
 
+## Onboarding call (`cartesia.ts`, `pipeline.ts`, `llm.ts`; slice 1)
+
+Cartesia runs the call; Convex starts it, polls for the transcript, and has Claude build
+his profile + story seeds. Setup: `../voice/README.md`.
+
+```bash
+npx convex run cartesia:syncAgent                                    # push prompt + settings
+npx convex run elders:seed '{"name":"Walter Smith","phone":"+14155550123"}'   # -> elderId
+npx convex run cartesia:startCall '{"elderId":"<id>"}'               # phone rings
+npx convex logs                                                      # watch poll -> done
+```
+
+Call statuses: `queued` → `in_progress` → `ended` → `done` (profile saved), or
+`no_conversation` (voicemail / busy / under 30 words), `failed` (Cartesia refused; nothing rang),
+`start_unknown` (timeout or 5xx while dialing: the phone may have rung, so check Cartesia's
+call log), `poll_error` / `poll_timeout`, `process_failed` (retry:
+`npx convex run pipeline:processCall '{"callId":"<id>"}'`).
+`startCall` refuses while a call to him is open (queued, in progress, unknown start, or ended
+and waiting to be processed; 90 min window); add `"force": true` to call anyway.
+
+Local backend + `"use node"` files need Node 20–24: `npx -p node@24 -c 'npx convex dev'`.
+
+| Env var | Purpose |
+|---|---|
+| `CARTESIA_API_KEY`, `CARTESIA_FROM_NUMBER_ID` | Cartesia account + the phone number's id (`ap_...`) |
+| `CARTESIA_ONBOARDING_AGENT_ID` | printed by the first `syncAgent` run |
+| `CARTESIA_VOICE_ID`, `CARTESIA_MODEL` | optional voice + in-call model (default `claude-haiku-4.5`) |
+| `ANTHROPIC_API_KEY` | profile extraction |
+| `APIFY_TOKEN` | optional: prefill his LinkedIn background (needs `linkedinUrl` on the elder) |
+
 ## Apify scrapers (`apify.ts`, Integrations)
 
 Env: `APIFY_TOKEN` (required), `STACKEXCHANGE_KEY` (optional; raises the free

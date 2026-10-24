@@ -16,8 +16,13 @@ export type Profile = {
 
 export type CallPlan = { kind: "onboarding" } | { kind: "story" };
 
-/** A queued / in_progress call younger than this blocks a new one (no double ringing). */
-export const OPEN_CALL_WINDOW_MS = 60 * 60_000;
+/**
+ * An open call younger than this blocks a new one (no double ringing). Longer than the whole
+ * poll budget (~61 min), so a call still being polled always blocks.
+ */
+export const OPEN_CALL_WINDOW_MS = 90 * 60_000;
+// queued / in_progress: in flight · start_unknown: the phone may have rung · ended: awaiting processing
+const OPEN_STATUSES = new Set(["queued", "in_progress", "start_unknown", "ended"]);
 /** A processing claim older than this is assumed crashed and can be retaken. */
 export const STALE_PROCESSING_MS = 15 * 60_000;
 
@@ -47,7 +52,8 @@ export function firstName(name: string): string {
 export function buildOnboardingVariables(elder: { name: string }, knownBackground: string | undefined) {
   return templateVariables({
     first_name: firstName(elder.name),
-    known_background: knownBackground ?? "",
+    // scraped text sits inside a <background> fence in the prompt; it must not close it
+    known_background: (knownBackground ?? "").replace(/<\/?background\b[^>]*>/gi, ""),
   });
 }
 
@@ -93,7 +99,10 @@ export function normalizeProfile(raw: unknown): Profile {
   });
 }
 
-/** Re-onboarding never loses what an earlier call learned: new scalars win, lists are unioned. */
+/**
+ * Re-onboarding never loses what an earlier call learned: new scalars win, lists are unioned
+ * newest first, so a full list still takes in new items (the oldest drop off).
+ */
 export function mergeProfile(old: Profile | undefined, next: Profile): Profile {
   const base = old ?? {};
   const merged: Profile = {
@@ -102,7 +111,7 @@ export function mergeProfile(old: Profile | undefined, next: Profile): Profile {
     careerSummary: next.careerSummary ?? base.careerSummary,
   };
   for (const key of LIST_KEYS) {
-    merged[key] = cleanList([...(base[key] ?? []), ...(next[key] ?? [])], LIMITS[key]);
+    merged[key] = cleanList([...(next[key] ?? []), ...(base[key] ?? [])], LIMITS[key]);
   }
   return compact(merged);
 }
@@ -119,7 +128,19 @@ export function canClaimProcessing(
 }
 
 export function hasOpenCall(calls: { status: string; _creationTime: number }[], now: number): boolean {
-  return calls.some(
-    (c) => (c.status === "queued" || c.status === "in_progress") && now - c._creationTime < OPEN_CALL_WINDOW_MS,
-  );
+  return calls.some((c) => OPEN_STATUSES.has(c.status) && now - c._creationTime < OPEN_CALL_WINDOW_MS);
+}
+
+/**
+ * calls patch when processing ends. Releases the claim; `processedAt` only when finished for
+ * good. An error is written only when given, so Cartesia's own reason (e.g. busy) survives a
+ * `no_conversation`; a successful `done` clears an earlier `process_failed` error.
+ */
+export function finishPatch(status: string, error: string | undefined, now: number): Record<string, unknown> {
+  return {
+    status,
+    processingAt: undefined,
+    ...(status !== "process_failed" ? { processedAt: now } : {}),
+    ...(error !== undefined ? { error } : status === "done" ? { error: undefined } : {}),
+  };
 }

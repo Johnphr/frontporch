@@ -14,7 +14,9 @@ import {
   nextPollDelayMs,
   normalizeTranscript,
   parseOutboundResponse,
+  planPollUpdate,
   shouldGiveUp,
+  startFailureStatus,
   templateVariables,
   unknownRoles,
 } from "../convex/lib/cartesia.ts";
@@ -153,11 +155,47 @@ test("buildOutboundCallBody: one call with variables", () => {
   );
 });
 
-test("parseOutboundResponse: call id, per-call error, or malformed", () => {
+test("parseOutboundResponse: call id, a clear per-call refusal, or an unclear answer", () => {
   assert.deepEqual(parseOutboundResponse({ calls: [{ number: "+1", agent_call_id: "ac_1" }] }), { callId: "ac_1" });
-  assert.deepEqual(parseOutboundResponse({ calls: [{ number: "+1", error: "Invalid number" }] }), {
-    error: "Invalid number",
+  // A per-call error means Cartesia refused it: nothing rang. Its text is not stored (may echo the number).
+  assert.deepEqual(parseOutboundResponse({ calls: [{ number: "+1", error: "Invalid number +1" }] }), {
+    error: "Cartesia refused the call",
+    placed: "no",
   });
-  assert.deepEqual(parseOutboundResponse({ calls: [] }), { error: "Cartesia returned no call" });
-  assert.deepEqual(parseOutboundResponse(null), { error: "Cartesia returned no call" });
+  // 2xx without a call id or an error: the phone may be ringing.
+  assert.deepEqual(parseOutboundResponse({ calls: [] }), { error: "Cartesia returned no call id", placed: "unknown" });
+  assert.deepEqual(parseOutboundResponse(null), { error: "Cartesia returned no call id", placed: "unknown" });
+});
+
+test("startFailureStatus: only a clear 4xx means nothing rang", () => {
+  for (const s of [400, 401, 403, 404, 422, 429]) assert.equal(startFailureStatus(s), "failed", String(s));
+  for (const s of [0, 408, 500, 502, 503]) assert.equal(startFailureStatus(s), "start_unknown", String(s));
+});
+
+test("planPollUpdate: only the chain that saw the current attempt count may write", () => {
+  const live = { status: "in_progress", pollAttempts: 3 };
+  assert.equal(planPollUpdate({ status: "ended", pollAttempts: 3 }, 3, { kind: "pending" }, 1), null);
+  assert.equal(planPollUpdate({ status: "done", pollAttempts: 3 }, 3, { kind: "timeout" }, 1), null);
+  assert.equal(planPollUpdate(live, 2, { kind: "pending" }, 1), null); // a duplicate, stale chain stops
+
+  assert.deepEqual(planPollUpdate(live, 3, { kind: "pending" }, 1000), {
+    patch: { pollAttempts: 4, lastPolledAt: 1000 },
+    next: "poll",
+    delayMs: 60_000,
+  });
+  assert.deepEqual(planPollUpdate({ status: "in_progress" }, 0, { kind: "fatal", error: "Cartesia HTTP 404" }, 5), {
+    patch: { pollAttempts: 1, lastPolledAt: 5, status: "poll_error", error: "Cartesia HTTP 404" },
+    next: null,
+    delayMs: 0,
+  });
+  const timeout = planPollUpdate(live, 3, { kind: "timeout" }, 5);
+  assert.equal(timeout?.patch.status, "poll_timeout");
+  assert.equal(timeout?.next, null);
+
+  const turns = [{ role: "elder" as const, text: "hi" }];
+  assert.deepEqual(planPollUpdate(live, 3, { kind: "finished", transcript: turns, endReason: "agent_hangup" }, 9), {
+    patch: { pollAttempts: 4, lastPolledAt: 9, status: "ended", transcript: turns, endReason: "agent_hangup" },
+    next: "process",
+    delayMs: 0,
+  });
 });

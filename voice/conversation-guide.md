@@ -48,12 +48,17 @@ LinkedIn feedback (story calls, from `engagement.ts`):
 
 ## Cartesia settings that let him talk (Voice stream)
 
-Cartesia's agents handle turn-taking and interruptions themselves. Its speech-to-text
-turn detection has `end_timeout_ms` (max wait after he stops talking before Pip
-replies; default 5600 ms, range 640–11200) and `end_threshold`. **Verify** whether
-Managed Agents expose these in the agent config; if they do, keep the timeout on the
-long side (rule 4: silence is thinking). Otherwise lean on the prompt rules above and
-tune the prompt after real calls.
+Set in code (`convex/lib/cartesia.ts` → `buildAgentConfig`), pushed with `cartesia:syncAgent`:
+
+| Setting | Value | Why |
+|---|---|---|
+| `turn.inactivity_check_in_secs` | 30 | Rule 4: silence is thinking; Pip only checks in after a long pause |
+| `turn.inactivity_end_call_secs` | 120 | Don't hang up on someone who is remembering |
+| `system_tools.end_call` | only after goodbye | Pip ends the call, not the silence |
+
+Cartesia handles turn-taking and barge-in itself. Its speech-to-text turn detection also has
+`end_timeout_ms` (default 5600 ms); it isn't in the Managed Agents config we use yet. If Pip
+still cuts him off on real calls, look there first.
 
 ## Sources
 

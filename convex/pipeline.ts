@@ -17,7 +17,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalAction, internalMutation } from "./_generated/server";
 import { clip, isNoConversation, type Turn } from "./lib/cartesia";
-import { canClaimProcessing, isProfileUsable, mergeProfile, type Profile } from "./lib/onboarding";
+import { canClaimProcessing, finishPatch, isProfileUsable, mergeProfile, type Profile } from "./lib/onboarding";
 
 const PROCESSABLE = new Set(["ended", "process_failed"]);
 
@@ -43,20 +43,16 @@ export const claimProcessing = internalMutation({
 export const finishProcessing = internalMutation({
   args: { callId: v.id("calls"), status: v.string(), error: v.optional(v.string()) },
   handler: async (ctx, { callId, status, error }) => {
-    const done = status !== "process_failed";
-    await ctx.db.patch(callId, {
-      status,
-      error,
-      processingAt: undefined, // a failed run can be retried right away
-      ...(done ? { processedAt: Date.now() } : {}),
-    });
+    // Releases the claim (a failed run can be retried right away); keeps Cartesia's reason.
+    await ctx.db.patch(callId, finishPatch(status, error, Date.now()));
   },
 });
 
+/** Merges inside the transaction, so two calls processed at once can't drop an update. */
 export const saveProfile = internalMutation({
   args: {
     elderId: v.id("elders"),
-    profile: v.object({
+    extracted: v.object({
       industry: v.optional(v.string()),
       specialty: v.optional(v.string()),
       careerSummary: v.optional(v.string()),
@@ -65,8 +61,13 @@ export const saveProfile = internalMutation({
       topicsToAvoid: v.optional(v.array(v.string())),
     }),
   },
-  handler: async (ctx, { elderId, profile }) => {
-    await ctx.db.patch(elderId, { profile, stage: isProfileUsable(profile) ? "active" : "onboarding" });
+  handler: async (ctx, { elderId, extracted }): Promise<{ usable: boolean }> => {
+    const elder = await ctx.db.get(elderId);
+    if (!elder) throw new Error("Elder not found");
+    const profile = mergeProfile(elder.profile, extracted);
+    const usable = isProfileUsable(profile);
+    await ctx.db.patch(elderId, { profile, stage: usable ? "active" : "onboarding" });
+    return { usable };
   },
 });
 
@@ -91,12 +92,9 @@ export const processCall = internalAction({
         knownBackground: elder.knownBackground,
         existingProfile: elder.profile,
       });
-      const profile = mergeProfile(elder.profile, extracted);
-      await ctx.runMutation(internal.pipeline.saveProfile, { elderId: elder._id, profile });
+      const { usable } = await ctx.runMutation(internal.pipeline.saveProfile, { elderId: elder._id, extracted });
       await ctx.runMutation(internal.pipeline.finishProcessing, { callId, status: "done" });
-      console.log(
-        `pipeline.processCall: call ${callId} done (profile ${isProfileUsable(profile) ? "usable, stage active" : "thin, onboarding again"})`,
-      );
+      console.log(`pipeline.processCall: call ${callId} done (profile ${usable ? "usable, stage active" : "thin, onboarding again"})`);
       return { status: "done" };
     } catch (err) {
       const error = clip(err instanceof Error ? err.message : String(err));

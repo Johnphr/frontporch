@@ -94,11 +94,20 @@ export const extractProfile = internalAction({
       messages: [{ role: "user", content: sections.join("\n\n") }],
     });
 
+    // Errors below end up on the calls row: fixed messages only, never the model's text
+    // (a JSON.parse error quotes the input, which would leak his words).
     if (response.stop_reason === "refusal") {
       throw new Error(`Claude declined to build the profile (category: ${response.stop_details?.category ?? "unknown"})`);
     }
+    if (response.stop_reason !== "end_turn") throw new Error(`Claude stopped early (${response.stop_reason})`);
     const textBlock = response.content.find((b) => b.type === "text");
-    const raw = textBlock && textBlock.type === "text" ? textBlock.text : "";
-    return normalizeProfile(JSON.parse(raw));
+    if (!textBlock || textBlock.type !== "text") throw new Error("Claude returned no text");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(textBlock.text);
+    } catch {
+      throw new Error("Claude returned invalid JSON");
+    }
+    return normalizeProfile(parsed);
   },
 });
