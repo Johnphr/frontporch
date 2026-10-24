@@ -76,15 +76,34 @@ Vapi, not Convex.
    saves memories, sets `stage: "active"`. No post by default (open decision 3).
 
 ### ② Weekly story call
-1. Hourly cron finds elders whose local `callDay`/`callHour` match → `vapi.startCall`.
-2. `conversation.planNextCall`: profile + top memories + summarized reader feedback →
-   `llm.planQuestions` → `mainQuestion` + 2–3 backup `threads`.
-3. Story assistant (`vapi/prompts/story-call.md`) gets the plan as variables.
+The **question bank** (`questionBank` table) holds his ranked next questions. It's rebuilt by
+`conversation.refreshQuestionBank` after every call, when new reader comments arrive, and
+before each call. Inputs: profile, open threads (stories he didn't finish), memories, topics
+covered / to avoid, reader questions (`llm.summarizeFeedback`), audience questions and recent
+topics → `llm.planQuestions` writes 8–12 candidates → `lib/planner.ts` ranks them (open thread >
+reader > recent topic ≈ audience > memory > profile; skips avoid/covered; dedupes; ages out).
+
+1. ~1h before his call: `conversation.prepareCall` → fresh `apify.findAudienceQuestions` +
+   `llm.findRecentTopics` (Claude web search: news/issues in his field from the last ~30 days
+   where his experience helps, with source links) → `refreshQuestionBank`.
+2. At call time `vapi.startCall` → `conversation.planNextCall` → `{ plan, variables }`: top
+   queued question as `mainQuestion`, the next 2–3 as `threads`, memories related to the main
+   question (vector search) + people/places, one `feedback` line. If the bank is empty it
+   refreshes first; with no bank at all it falls back to a safe opening question.
+3. Story assistant (`vapi/prompts/story-call.md`) gets `variables` as `assistantOverrides.variableValues`.
+4. Once the call is placed, `vapi.startCall` calls `conversation.markPlanUsed({ elderId, bankId: plan.bankId, callId })`.
 
 ### ③ After the call
-Vapi `end-of-call-report` → `/vapi/webhook` → `pipeline.processCall`:
-save transcript → extract memories → `llm.writePost` → `posts` row →
-`linkedapi.createPost` → post URL saved on the row.
+Vapi `end-of-call-report` → `/vapi/webhook` → `pipeline.processCall` (each step isolated,
+returns a step report):
+1. save transcript, summary, endedReason on the `calls` row (created if missing)
+2. `llm.extractKnowledge` → `memories.addMany`: facts, story seeds, open threads, people,
+   places, topics covered, topics to avoid; open threads he finished are resolved
+3. onboarding: `llm.extractProfile` → `elders.profile`, `stage: "active"` ·
+   story: `llm.writePost` → `posts` row → `linkedapi.createPost` (scheduled)
+4. `conversation.refreshQuestionBank` (scheduled)
+
+Steps 2–4 are skipped on voicemail / no answer or when he barely spoke.
 Inside `linkedapi.createPost`: claim the row (no double posting) → format for LinkedIn
 (`lib/linkedinPost.ts`) → `postGuard.checkPost` fact-checks the post against the whole call
 (his words + what Pip said that he confirmed) and his profile/memories → fail: row becomes
@@ -114,7 +133,13 @@ type CallPlan = {                  // conversation.planNextCall -> vapi.startCal
   memories: string[];
   feedback?: string;               // one short line Pip reads out
   knownBackground?: string;        // onboarding only
+  bankId?: string;                 // questionBank row behind mainQuestion -> markPlanUsed
 };
+
+// conversation.planNextCall returns { plan: CallPlan, variables } where variables has
+// every {{name}} used in vapi/prompts/*.md as a string (empty when unused):
+// firstName, language ("Spanish", not "es-MX"), profile, memories ("- ..." lines),
+// feedback, mainQuestion, threads ("- ..." lines), knownBackground.
 
 type CallResult = {                // vapi.webhook -> pipeline.processCall
   vapiCallId: string;
@@ -137,6 +162,11 @@ type CallResult = {                // vapi.webhook -> pipeline.processCall
 `apify.findAudienceQuestions` · `apify.topAudienceQuestions` · `linkedapi.createPost`
 
 Post guard: `postGuard.checkPost` · `linkedapi.approvePost` · `linkedapi.previewPost` · `linkedapi.previewText` · `linkedapi.checkPostStatus`
+
+Brain (memory + planning): `llm.extractKnowledge` (replaces `llm.extractMemories`) ·
+`llm.findRecentTopics` · `conversation.refreshQuestionBank` · `conversation.prepareCall` ·
+`conversation.markPlanUsed` · `memories.addMany` / `memories.search` / `memories.listForElder`
+(Data). Pure ranking + plan logic: `lib/planner.ts`.
 
 ## Data model (draft, not in `schema.ts` yet)
 

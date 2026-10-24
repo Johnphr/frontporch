@@ -131,4 +131,23 @@ export default defineSchema({
   })
     .index("by_elder", ["elderId"])
     .index("by_url", ["linkedinUrl"]),
+
+  // ---- Brain: question bank (conversation.ts) ----
+  // Ranked questions for his next calls, refreshed after every call, when new
+  // reader comments arrive, and ~1h before each call (conversation.prepareCall).
+  // planNextCall takes the top queued row; markPlanUsed flips it to used.
+  questionBank: defineTable({
+    elderId: v.id("elders"),
+    question: v.string(),
+    why: v.string(),
+    source: v.string(), // open_thread | reader | recent_topic | audience | memory | profile
+    sourceRef: v.optional(v.string()), // memories id, audienceQuestions id, or a URL
+    topicKey: v.string(), // normalized topic words, dedupes the bank
+    priority: v.number(), // higher = ask sooner (lib/planner.ts rankCandidates)
+    firstSeenAt: v.number(), // epoch ms; drives age decay across refreshes
+    status: v.union(v.literal("queued"), v.literal("used"), v.literal("dropped")),
+    usedInCallId: v.optional(v.id("calls")),
+    usedAt: v.optional(v.number()),
+  }).index("by_elder_status_priority", ["elderId", "status", "priority"]),
+  // ---- end Brain block ----
 });

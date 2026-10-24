@@ -1,0 +1,19 @@
+{
+  "vapiCallId": "fixture-story-call-001",
+  "elderId": "REPLACE_WITH_ELDER_ID",
+  "kind": "story",
+  "endedReason": "customer-ended-call",
+  "summary": "He talked about the winter the plant's main oven failed before a big order, and how the crew fixed it.",
+  "turns": [
+    { "role": "pip", "text": "Hi Walter, it's Pip. Last time you mentioned the winter the big oven broke down. Tell me about that." },
+    { "role": "elder", "text": "Oh, 1978. February. We had the Hendricks wedding order, three hundred loaves and a four tier cake, and the main oven just died at two in the morning." },
+    { "role": "pip", "text": "Mm. What did you do?" },
+    { "role": "elder", "text": "I called Eddie Morales, my foreman. He lived two blocks away. We split the batch across the two small ovens and baked in shifts until nine. My wife Rosa drove the cakes over in our station wagon." },
+    { "role": "pip", "text": "Wow. Did you make it?" },
+    { "role": "elder", "text": "Ten minutes before the ceremony. The bride's mother never knew. After that I always kept a backup plan written on the wall, every big order had a plan B." },
+    { "role": "pip", "text": "Looking back, what did that night teach you?" },
+    { "role": "elder", "text": "That the team you hire matters more than the equipment. Machines break. Eddie never did. Remind me to tell you how I hired Eddie, that's a story too." },
+    { "role": "pip", "text": "I will. Thank you, Walter. Talk next week." },
+    { "role": "elder", "text": "Take care now." }
+  ]
+}

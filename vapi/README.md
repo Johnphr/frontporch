@@ -27,5 +27,27 @@ dashboard). Use the shared dev deployment while building, production for the dem
 4. In Convex env: `VAPI_API_KEY`, `VAPI_PHONE_NUMBER_ID`,
    `VAPI_ONBOARDING_ASSISTANT_ID`, `VAPI_STORY_ASSISTANT_ID`, `VAPI_WEBHOOK_SECRET`.
 
+## Prompt variables (from Convex)
+
+`vapi.startCall` gets them ready-made: `const { plan, variables } = await
+ctx.runAction(internal.conversation.planNextCall, { elderId })`, then pass `variables`
+as `assistantOverrides.variableValues` and pick the assistant by `plan.kind`. Every
+`{{name}}` in `prompts/*.md` is always present (empty string when unused):
+
+| Variable | Example |
+|---|---|
+| `firstName` | `Walter` |
+| `language` | `Spanish` (a language name, not `es-MX`) |
+| `profile` | `Industry: Baking.` / `Specialty: Production.` / `Career: ...` / `Avoid: ...` (one per line) |
+| `memories` | `- Eddie Morales: His foreman` lines (people and places first) |
+| `feedback` | one warm sentence about reader reactions, or empty |
+| `mainQuestion` | today's question |
+| `threads` | `- ...` lines, 2–3 backup questions |
+| `knownBackground` | onboarding only: his LinkedIn work history |
+
+After the call is placed, call `internal.conversation.markPlanUsed({ elderId, bankId:
+plan.bankId, callId })` (skip when `plan.bankId` is missing). A test in
+`tests/planner.test.ts` fails if a prompt starts using a variable Convex doesn't send.
+
 Record the final settings here once they work (model, voice id, transcriber,
 endpointing values) so anyone can rebuild the assistants.

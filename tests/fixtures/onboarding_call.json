@@ -1,0 +1,17 @@
+{
+  "vapiCallId": "fixture-onboarding-call-001",
+  "elderId": "REPLACE_WITH_ELDER_ID",
+  "kind": "onboarding",
+  "endedReason": "customer-ended-call",
+  "summary": "First call: he ran a family bakery for almost thirty years, then managed production at a commercial bread plant.",
+  "turns": [
+    { "role": "pip", "text": "Hi Walter, I'm Pip from Front Porch. I'll call once a week to hear your stories. Tell me about your very first job." },
+    { "role": "elder", "text": "My father's bakery on 5th Street. I started at twelve, kneading dough before school. Took it over in 1962 and ran it until 1990." },
+    { "role": "pip", "text": "What happened in 1990?" },
+    { "role": "elder", "text": "The supermarkets got us. I sold the shop and went to run production at Golden Crust, the big bread plant in Fresno. Eighty people on my shifts." },
+    { "role": "pip", "text": "What were you best known for there?" },
+    { "role": "elder", "text": "Scheduling. Getting forty thousand loaves out the door with no waste. And training the young ones. I don't want to talk about the strike in '94 though, that was a bad time." },
+    { "role": "pip", "text": "Of course. What would you tell someone starting out in food production today?" },
+    { "role": "elder", "text": "Learn every machine yourself before you manage people who run them. And always have a plan B." }
+  ]
+}
