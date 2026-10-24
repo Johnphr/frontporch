@@ -103,6 +103,8 @@ export default defineSchema({
     processedAt: v.optional(v.number()), // epoch ms; set only on success
     // ---- v2 (Brain) ----
     plan: v.optional(v.any()), // CallPlan from conversation.planNextCall, for debugging
+    // ---- inbound calls (inbound.ts) ----
+    direction: v.optional(v.union(v.literal("outbound"), v.literal("inbound"))), // missing = outbound
   })
     .index("by_sid", ["callSid"])
     .index("by_cartesia", ["cartesiaCallId"])
