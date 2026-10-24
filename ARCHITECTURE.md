@@ -28,14 +28,14 @@ into LinkedIn posts, then uses how readers react to steer the next interview.
 3. **Content:** his stories become LinkedIn posts, using only what he said.
 4. **Feedback loop:** reader reactions and comments, plus real audience questions, steer the next call.
 
-No family, no SMS. One small onboarding UI (`web/`); everything else is phone calls in and LinkedIn posts out.
+No family, no SMS. One small onboarding UI (`frontend/onboarding-ui/`); everything else is phone calls in and LinkedIn posts out.
 
 ## Decisions (locked)
 
 | Decision | Choice |
 |---|---|
 | Backend | Everything in Convex: tables, crons, actions, HTTP actions. No separate server |
-| UI | One onboarding UI (`web/`): name + phone, who calls, LinkedIn URL, "Call me now". Sign-in and the SMS code are fake for now. Call time is still set by hand in the Convex dashboard. Temporary: a key-protected `/posts` review page (`convex/postsPage.ts`) to iterate on post content |
+| UI | One onboarding UI (`frontend/onboarding-ui/`, design by Mafer): name + language, phone, who calls, LinkedIn URL, "Call me now". No phone verification for now (code screen off; anyone can be called once `PUBLIC_CALLS=all`, so keep the link private). Call time is still set by hand in the Convex dashboard. Temporary: a key-protected `/posts` review page (`convex/postsPage.ts`) to iterate on post content |
 | Phone calls | **Cartesia Managed Agents** run the whole call: phone number, speech-to-text, in-call LLM, voice. No Vapi; no Twilio in our code |
 | Agent config | Lives in code (`convex/lib/prompts/`), pushed to Cartesia with `npx convex run cartesiaAgents:syncAgent` |
 | Characters | One Cartesia agent per character (`convex/lib/characters.ts`: voice, language, personality): **Pip** in English, **Juanito** (Latin American Spanish, "usted"). He picks one (`elders.characterId`), else the default for `elders.language`. All call from one number; the call's goal + context are per-call variables |
@@ -290,7 +290,7 @@ voice/                                                                  Voice
   conversation-guide.md         how Pip talks (research-backed rules)
   prompts/story-call.md         pointer: the prompt lives in convex/lib/prompts/
 Cartesia/                       Pablo's Juanito draft + dashboard pull script (read-only)  Voice
-web/                            onboarding UI (React + Vite), talks to convex/signup.ts   UI
+frontend/onboarding-ui/         onboarding UI (React + Vite), talks to convex/signup.ts   UI
 convex/
   schema.ts                     tables                                  Data
   cartesia.ts                   start call, poll transcript             Voice + Brain
