@@ -1,13 +1,16 @@
-// Online fallback questions via Apify (stub, nothing exported yet).
+// LinkedIn scraping via Apify (stub, nothing exported yet).
 //
-// Planned: findQuestions = internalAction(), run daily from crons.ts:
-//   1. for each enabled source, run the Actor (Apify REST run-sync-get-dataset-items)
-//   2. map fields to { source, title, body, sourceUrl, externalId }
-//   3. upsert into questions (dedupe on externalId)
-//   4. internal.llm.triageQuestions -> assign to an elder or skip with a reason
+// Planned:
+//   scrapeEngagement = internalAction({ elderId }), daily from crons.ts:
+//     run harvestapi/linkedin-profile-posts on elders.linkedinUrl with
+//     scrapeReactions + scrapeComments on (no cookies needed), then
+//     internal.engagement.upsert per post
+//   scrapeProfile = internalAction({ elderId }), once before the onboarding call:
+//     run harvestapi/linkedin-profile-scraper -> knownBackground (work history)
 //
-// Port source config and field mapping from v1 backend/question_sources.json
-// and backend/app/services/questions.py (see ARCHITECTURE.md "Port from v1").
+// Use Apify REST "run-sync-get-dataset-items". LinkedIn scrapers break now and
+// then, so keep a backup Actor in mind (e.g. apimaestro/linkedin-profile-posts).
+// Runner pattern reference: git show 9e67aab:backend/app/services/questions.py
 //
 // Env: APIFY_TOKEN
 // Owner: Integrations.

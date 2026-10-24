@@ -5,7 +5,7 @@
 //   type CallResult = {
 //     vapiCallId: string;
 //     elderId: Id<"elders">;
-//     questionId?: Id<"questions">;
+//     kind: "onboarding" | "story";
 //     turns: { role: "pip" | "elder"; text: string }[];
 //     summary?: string;        // Vapi analysis summary
 //     endedReason: string;     // e.g. "customer-ended-call", "voicemail"
@@ -13,13 +13,12 @@
 //
 // Steps, each in its own try/catch so one failure doesn't stop the rest:
 //   1. save transcript + summary on the calls row
-//   2. internal.llm.draftStoryPost -> answers row (use ONLY what he said)
-//   3. internal.llm.extractMemories -> internal.memories.add
-//   4. internal.linkedapi.createPost -> publication on the answer (auto-post)
-//   5. internal.sms.notifyFamily with the post link
-//   6. mark the question answered
-// Skip 2-5 on voicemail or when the elder said nothing.
+//   2. internal.llm.extractMemories -> internal.memories.add
+//   3. onboarding: internal.llm.extractProfile -> elders.profile, stage -> "active"
+//   4. story call: internal.llm.writePost -> posts row -> internal.linkedapi.createPost
+//      (auto-post, no approval)
+// Skip 2-4 on voicemail or when he said almost nothing.
 //
-// Owner: Core: Pipeline.
+// Owner: Core: Brain.
 
 export {};

@@ -1,4 +1,4 @@
-// Grandpa's long-term memory (stub, nothing exported yet).
+// His long-term memory: facts and story seeds from past calls (stub, nothing exported yet).
 //
 // Planned (table + vectorIndex draft in ARCHITECTURE.md "Data model"):
 //   add    = internalAction({ elderId, callId?, texts[] }):
