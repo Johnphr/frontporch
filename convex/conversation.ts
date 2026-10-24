@@ -25,16 +25,12 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
+import type { MemoryDoc, MemoryHit } from "./lib/dataRefs";
 import {
-  engagementRecentFeedback,
-  memoriesListForElder,
-  memoriesSearch,
-  type MemoryDoc,
-  type MemoryHit,
-} from "./lib/dataRefs";
-import {
+  FALLBACK_MAIN_QUESTION,
   buildCallPlan,
   fallbackCandidates,
+  firstBankQuestion,
   rankCandidates,
   toPromptVariables,
   type CallPlan,
@@ -42,7 +38,7 @@ import {
   type CandidateSource,
 } from "./lib/planner";
 import { templateVariables } from "./lib/cartesia";
-import { buildOnboardingVariables } from "./lib/onboarding";
+import { buildOnboardingVariables, callLanguage } from "./lib/onboarding";
 import { asElderV2, isOnboarding, type ElderV2 } from "./lib/v2Fields";
 
 const bankItemValidator = v.object({
@@ -228,7 +224,7 @@ export const refreshQuestionBank = internalAction({
     const memories: MemoryDoc[] = await attempt(
       errors,
       "memories",
-      () => ctx.runQuery(memoriesListForElder, { elderId: args.elderId, limit: 200 }),
+      () => ctx.runQuery(internal.memories.listForElder, { elderId: args.elderId, limit: 200 }),
       [],
     );
     const openThreads = memories
@@ -253,7 +249,7 @@ export const refreshQuestionBank = internalAction({
     const feedbackPosts = await attempt(
       errors,
       "engagement",
-      () => ctx.runQuery(engagementRecentFeedback, { elderId: args.elderId, sinceDays: 14 }),
+      () => ctx.runQuery(internal.engagement.recentFeedback, { elderId: args.elderId, sinceDays: 14 }),
       [],
     );
     const feedback = feedbackPosts.length
@@ -377,7 +373,7 @@ export const prepareCall = internalAction({
 
     // The refresh runs on its own so this action stays well inside Convex's time limit.
     await ctx.scheduler.runAfter(0, internal.conversation.refreshQuestionBank, { elderId, recentTopics });
-    if (errors.length) console.warn(`prepareCall ${elderId}`, errors.join(" | "));
+    if (errors.length) console.warn(`prepareCall ${elderId} failed: ${errors.map((e) => e.split(":")[0]).join(", ")}`);
     return { refreshScheduled: true, recentTopics: recentTopics.length, audience, errors };
   },
 });
@@ -391,50 +387,45 @@ export const planNextCall = internalAction({
     const context: PlanningContext = await ctx.runQuery(internal.conversation.getPlanningContext, { elderId });
     const elder = context.elder;
     if (!elder) throw new Error("Elder not found");
+    const lang = callLanguage(elder.language);
 
     // Topics he doesn't want to discuss always reach Pip (outside the memories budget).
     let avoidMemories: string[] = [];
     try {
-      const rows: MemoryDoc[] = await ctx.runQuery(memoriesListForElder, { elderId, kinds: ["avoid"], limit: 10 });
+      const rows: MemoryDoc[] = await ctx.runQuery(internal.memories.listForElder, { elderId, kinds: ["avoid"], limit: 10 });
       avoidMemories = rows.map((m) => m.text);
     } catch {
       // memories not available: the profile's topicsToAvoid still go through.
     }
 
     if (isOnboarding(elder)) {
-      // Same variables cartesia.startCall sends today (it also scrapes and caches the
-      // LinkedIn background before the call, so we only read the cached value here).
+      // Same variables cartesia.startCall sends (it scrapes + caches the background; we read the cache).
       const knownBackground = elder.knownBackground ?? "";
       const plan = buildCallPlan({ kind: "onboarding", knownBackground });
-      return { plan, dynamicVariables: buildOnboardingVariables(elder, knownBackground) };
+      return { plan, dynamicVariables: buildOnboardingVariables(elder, knownBackground, lang) };
     }
 
     if (context.queued.length === 0) {
-      // Don't make the call wait: use the default opening question now and fill the
-      // bank for next time.
+      // Don't make the call wait: use the default question now and fill the bank for next time.
       await ctx.scheduler.runAfter(0, internal.conversation.refreshQuestionBank, { elderId });
     }
     const bank = context.queued.map((r) => ({ _id: String(r._id), question: r.question, topicKey: r.topicKey }));
-    const mainQuestion = bank[0]?.question;
+    const question = firstBankQuestion(bank)?.question ?? FALLBACK_MAIN_QUESTION;
 
-    // Memories that relate to today's question, plus people/places so Pip can use names.
-    let memories: { kind: string; text: string; name?: string }[] = [];
-    try {
-      const hits: MemoryHit[] = mainQuestion
-        ? await ctx.runAction(memoriesSearch, { elderId, text: mainQuestion, k: 5 })
-        : [];
-      const people: MemoryHit[] = mainQuestion
-        ? await ctx.runAction(memoriesSearch, { elderId, text: mainQuestion, k: 3, kinds: ["person", "place"] })
-        : [];
-      memories = [...people, ...hits].filter((m) => m.status !== "resolved");
-    } catch {
-      // Memory search not available yet: plan without it.
-    }
+    // Memories related to today's question, plus people/places so Pip can use names. Each
+    // embedding request is capped (memories.ts), so this can't stall the call. Unfinished-story
+    // memories stay out: they'd read as a second plan (the question bank already ranks them first).
+    const settled = await Promise.allSettled([
+      ctx.runAction(internal.memories.search, { elderId, text: question, k: 3, kinds: ["person", "place"] }),
+      ctx.runAction(internal.memories.search, { elderId, text: question, k: 5 }),
+    ]);
+    const hits: MemoryHit[] = settled.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
+    const memories = hits.filter((m) => m.status !== "resolved" && m.kind !== "open_thread");
 
     // Worked out by the last refresh (after the previous call / new comments).
     const feedbackLine = context.feedbackLine;
 
     const plan = buildCallPlan({ kind: "story", bank, memories, feedbackLine });
-    return { plan, dynamicVariables: templateVariables(toPromptVariables(plan, elder, { avoid: avoidMemories })) };
+    return { plan, dynamicVariables: templateVariables(toPromptVariables(plan, elder, { avoid: avoidMemories, lang })) };
   },
 });

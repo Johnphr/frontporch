@@ -11,7 +11,7 @@
   "error_message": null,
   "end_reason": "client_hangup",
   "summary": "Walter told the story of the winter the main oven failed before a wedding order.",
-  "dynamic_variables": { "firstName": "Walter", "mainQuestion": "Tell me about the winter the big oven broke down." },
+  "dynamic_variables": { "first_name": "Walter", "question": "Tell me about the winter the big oven broke down." },
   "transcript": [
     { "role": "system", "text": "Call connected.", "start_timestamp": 0, "end_timestamp": 0 },
     {

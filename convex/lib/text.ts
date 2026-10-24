@@ -98,3 +98,12 @@ export function hash16(text: string): string {
   }
   return h1.toString(16).padStart(8, "0") + h2.toString(16).padStart(8, "0");
 }
+
+/**
+ * Prompt data can't open or close our fences: `<name ...>` / `</name>` (any case, any
+ * attributes) become `‹name ...›`. A nested `<</name>/name>` can't rebuild a tag either.
+ */
+export function neutralizeFences(text: string, names: string[]): string {
+  const tags = new RegExp(`<\\/?(?:${names.join("|")})\\b[^>]*>`, "gi");
+  return text.replace(tags, (m) => m.replace(/</g, "‹").replace(/>/g, "›"));
+}
