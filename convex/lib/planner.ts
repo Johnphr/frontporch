@@ -1,9 +1,11 @@
 // The question planner's pure logic: ranking the question bank, building the
 // CallPlan, turning it into the Vapi prompt variables, and small call checks.
-// No runtime imports, so `npm test` runs it directly in Node.
+// Only imports other pure lib files, so `npm test` runs it directly in Node.
 //
 // Claude writes the questions and the "why"; this file decides the order, so the
 // ranking is predictable and easy to tune.
+
+import { formatMemoriesForPrompt } from "./memoryText.ts";
 
 export type Turn = { role: string; text: string };
 
@@ -204,31 +206,9 @@ export function fallbackCandidates(input: {
 
 export type MemoryLike = { kind: string; text: string; name?: string };
 
-/**
- * Short bullet list for the prompt. People and places first (so Pip can use
- * names), then facts and story seeds. Topics to avoid / covered are not shown.
- */
+/** Pip's {{memories}} block. Delegates to the Data side's formatter so there is one format. */
 export function formatMemoriesBrief(memories: MemoryLike[], opts: { max?: number } = {}): string {
-  const max = opts.max ?? 8;
-  const order: Record<string, number> = { person: 0, place: 1, open_thread: 2, fact: 3, story_seed: 4 };
-  const seen = new Set<string>();
-  const lines: string[] = [];
-  const sorted = memories
-    .filter((m) => m && typeof m.text === "string" && m.text.trim() && m.kind in order)
-    .map((m, i) => ({ m, i }))
-    .sort((a, b) => order[a.m.kind] - order[b.m.kind] || a.i - b.i)
-    .map((x) => x.m);
-  for (const m of sorted) {
-    const text = m.text.trim();
-    const line =
-      m.name && !text.toLowerCase().includes(m.name.toLowerCase()) ? `- ${m.name}: ${text}` : `- ${text}`;
-    const key = line.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    lines.push(line);
-    if (lines.length >= max) break;
-  }
-  return lines.join("\n");
+  return formatMemoriesForPrompt(memories, { max: opts.max ?? 8 });
 }
 
 export type ElderProfile = {

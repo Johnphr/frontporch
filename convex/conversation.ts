@@ -34,7 +34,7 @@ import {
   type CandidateSource,
   type PromptVariables,
 } from "./lib/planner";
-import { asElderV2, isOnboarding, patchLoose, type ElderV2 } from "./lib/v2Fields";
+import { asElderV2, isOnboarding, type ElderV2 } from "./lib/v2Fields";
 
 const bankItemValidator = v.object({
   question: v.string(),
@@ -156,7 +156,7 @@ export const markPlanUsed = internalMutation({
 export const saveKnownBackground = internalMutation({
   args: { elderId: v.id("elders"), knownBackground: v.string() },
   handler: async (ctx, { elderId, knownBackground }) => {
-    await patchLoose(ctx.db, elderId, { knownBackground });
+    await ctx.db.patch(elderId, { knownBackground });
   },
 });
 

@@ -1,11 +1,6 @@
-// ONE place for the v2 fields that feat/memory-data adds to `elders` and `calls`
-// (stage, profile, knownBackground, kind, vapiCallId, summary, plan, endedReason).
-// They aren't in this branch's schema yet, so we read them defensively and write
-// them through two loosely typed helpers.
-//
-// TODO after feat/memory-data merges: delete the casts here and use the real
-// schema types (Doc<"elders">, Doc<"calls">) and ctx.db.patch / insert directly.
-// No runtime imports (unit-testable).
+// Normalizes an elders row for the planner: trims strings, validates the
+// profile shape and works out the call stage, so v1 rows (no v2 fields) and
+// half-filled rows behave predictably. No runtime imports (unit-testable).
 
 import type { ElderProfile } from "./planner.ts";
 
@@ -55,22 +50,4 @@ export function asElderV2(doc: unknown): ElderV2 | null {
 export function isOnboarding(elder: ElderV2): boolean {
   if (elder.stage) return elder.stage === "onboarding";
   return !elder.profile;
-}
-
-/** A db that can patch / insert any row (structurally matches Convex's ctx.db). */
-type LooseDb = {
-  patch: (id: never, value: never) => Promise<void>;
-  insert: (table: never, value: never) => Promise<unknown>;
-};
-
-/** Patch v2 fields onto a row. Remove once the schema has them (see TODO above). */
-export async function patchLoose(db: LooseDb, id: string, fields: Record<string, unknown>): Promise<void> {
-  const clean = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined));
-  await db.patch(id as never, clean as never);
-}
-
-/** Insert a row that includes v2 fields. Remove once the schema has them. */
-export async function insertLoose(db: LooseDb, table: string, fields: Record<string, unknown>): Promise<string> {
-  const clean = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined));
-  return String(await db.insert(table as never, clean as never));
 }

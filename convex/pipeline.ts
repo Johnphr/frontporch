@@ -18,7 +18,7 @@ import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery, type QueryCtx } from "./_generated/server";
 import { memoriesAddMany, memoriesListForElder, type MemoryDoc } from "./lib/dataRefs";
 import { isNearSilentCall, isNoConversation, runSteps, type StepReport } from "./lib/planner";
-import { asElderV2, insertLoose, patchLoose } from "./lib/v2Fields";
+import { asElderV2 } from "./lib/v2Fields";
 
 const turnValidator = v.object({ role: v.string(), text: v.string() });
 
@@ -41,22 +41,13 @@ const profileValidator = v.object({
 
 // ---------- queries + mutations ----------
 
-/**
- * Find the calls row Voice inserted at call start. TODO after feat/memory-data:
- * use the by_vapi index; until then we try callSid (we store the Vapi id there
- * too) and fall back to a scan of recent calls.
- */
+/** Find the calls row Voice inserted at call start (by Vapi call id, for this elder). */
 async function lookupCall(ctx: QueryCtx, vapiCallId: string, elderId: Id<"elders">): Promise<Id<"calls"> | null> {
-  const bySid = await ctx.db
+  const row = await ctx.db
     .query("calls")
-    .withIndex("by_sid", (q) => q.eq("callSid", vapiCallId))
+    .withIndex("by_vapi", (q) => q.eq("vapiCallId", vapiCallId))
     .first();
-  if (bySid) return bySid._id;
-  const recent = await ctx.db.query("calls").order("desc").take(200);
-  const match = recent.find(
-    (c) => c.elderId === elderId && (c as unknown as { vapiCallId?: string }).vapiCallId === vapiCallId,
-  );
-  return match?._id ?? null;
+  return row && row.elderId === elderId ? row._id : null;
 }
 
 export const findCall = internalQuery({
@@ -75,16 +66,15 @@ export const saveCallResult = internalMutation({
       endedReason: r.endedReason,
     };
     if (callId) {
-      await patchLoose(ctx.db, callId, { status: "completed", transcript: r.turns, ...v2 });
+      await ctx.db.patch(callId, { status: "completed", transcript: r.turns, ...v2 });
       return callId;
     }
-    return (await insertLoose(ctx.db, "calls", {
-      callSid: r.vapiCallId,
+    return ctx.db.insert("calls", {
       elderId: r.elderId,
       status: "completed",
       transcript: r.turns,
       ...v2,
-    })) as Id<"calls">;
+    });
   },
 });
 
@@ -99,7 +89,7 @@ export const getElderProfile = internalQuery({
 export const saveProfile = internalMutation({
   args: { elderId: v.id("elders"), profile: profileValidator },
   handler: async (ctx, { elderId, profile }) => {
-    await patchLoose(ctx.db, elderId, { profile, stage: "active" });
+    await ctx.db.patch(elderId, { profile, stage: "active" });
   },
 });
 
@@ -154,12 +144,18 @@ export const processCall = internalAction({
             ...(profile ? { profile } : {}),
             openThreads: open.map((m) => ({ id: m._id, text: m.text })),
           });
-          if (knowledge.items.length === 0 && knowledge.resolvedThreadIds.length === 0) return "nothing new";
+          // Only ids we actually sent: a garbled id from the model would fail
+          // addMany's v.id("memories") validator and lose the whole batch.
+          const openIds = new Map(open.map((m) => [String(m._id), m._id]));
+          const resolveThreadIds = knowledge.resolvedThreadIds
+            .map((id) => openIds.get(id))
+            .filter((id): id is Id<"memories"> => id !== undefined);
+          if (knowledge.items.length === 0 && resolveThreadIds.length === 0) return "nothing new";
           const saved = await ctx.runAction(memoriesAddMany, {
             elderId: r.elderId,
             ...(callId ? { callId } : {}),
             items: knowledge.items,
-            ...(knowledge.resolvedThreadIds.length ? { resolveThreadIds: knowledge.resolvedThreadIds } : {}),
+            ...(resolveThreadIds.length ? { resolveThreadIds } : {}),
           });
           return `${saved.inserted} new, ${saved.merged} merged, ${saved.resolved} threads resolved`;
         },

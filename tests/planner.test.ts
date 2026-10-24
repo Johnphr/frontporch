@@ -22,7 +22,7 @@ import {
   toPromptVariables,
   type Candidate,
 } from "../convex/lib/planner.ts";
-import { asElderV2, isOnboarding, insertLoose, patchLoose } from "../convex/lib/v2Fields.ts";
+import { asElderV2, isOnboarding } from "../convex/lib/v2Fields.ts";
 import { fixture, NOW } from "./helpers.ts";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -133,7 +133,7 @@ test("fallbackCandidates only uses the inputs", () => {
   assert.equal(out[0].sourceRef, "m1");
 });
 
-test("formatMemoriesBrief: people first, names prefixed, avoid/covered hidden, capped", () => {
+test("formatMemoriesBrief: uses the shared prompt format, people and places first, capped", () => {
   const text = formatMemoriesBrief(
     [
       { kind: "fact", text: "Ran a bakery on 5th Street" },
@@ -144,7 +144,12 @@ test("formatMemoriesBrief: people first, names prefixed, avoid/covered hidden, c
     ],
     { max: 3 },
   );
-  assert.equal(text, "- Eddie Morales: His foreman\n- Golden Crust plant in Fresno\n- Ran a bakery on 5th Street");
+  assert.equal(
+    text,
+    "People in his life: Eddie Morales (His foreman).\n" +
+      "Places that matter to him: Fresno (Golden Crust plant in Fresno).\n" +
+      "Ran a bakery on 5th Street.",
+  );
 });
 
 test("buildCallPlan: story uses top bank item, distinct threads, bankId", () => {
@@ -163,7 +168,7 @@ test("buildCallPlan: story uses top bank item, distinct threads, bankId", () => 
   });
   assert.equal(plan.mainQuestion, "Tell me how you hired Eddie.");
   assert.deepEqual(plan.threads, ["What was Golden Crust like?", "Tell me about Rosa.", "First day at the plant?"]);
-  assert.deepEqual(plan.memories, ["Eddie: His foreman"]);
+  assert.deepEqual(plan.memories, ["People in his life: Eddie (His foreman)."]);
   assert.equal(plan.feedback, "Readers loved the oven story.");
   assert.equal(plan.bankId, "b1");
 });
@@ -202,7 +207,7 @@ test("toPromptVariables covers exactly the {{variables}} in the Vapi prompts", (
   assert.equal(vars.language, "Spanish");
   assert.equal(vars.mainQuestion, "Q1?");
   assert.equal(vars.threads, "- Q2?");
-  assert.equal(vars.memories, "- Ran a bakery");
+  assert.equal(vars.memories, "- Ran a bakery.");
   assert.match(vars.profile, /Industry: Baking\./);
   assert.match(vars.profile, /Avoid: the strike\./);
   assert.equal(vars.feedback, "");
@@ -279,19 +284,4 @@ test("asElderV2 reads v1 and v2 rows; onboarding until a profile exists", () => 
   assert.equal(isOnboarding(v2), false);
   assert.equal(isOnboarding({ ...v2, stage: "onboarding" }), true);
   assert.equal(asElderV2(null), null);
-});
-
-test("patchLoose / insertLoose drop undefined fields", async () => {
-  const calls: unknown[] = [];
-  const db = {
-    patch: async (id: never, value: never) => { calls.push(["patch", id, value]); },
-    insert: async (table: never, value: never) => { calls.push(["insert", table, value]); return "new-id"; },
-  };
-  await patchLoose(db, "id1", { a: 1, b: undefined });
-  const id = await insertLoose(db, "calls", { c: "x", d: undefined });
-  assert.equal(id, "new-id");
-  assert.deepEqual(calls, [
-    ["patch", "id1", { a: 1 }],
-    ["insert", "calls", { c: "x" }],
-  ]);
 });
