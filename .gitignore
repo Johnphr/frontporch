@@ -23,3 +23,9 @@ backend/static/audio/*.mp3
 .idea/
 .DS_Store
 Thumbs.db
+
+# call transcripts pulled from Cartesia (personal conversations)
+transcripts/
+
+# full Cartesia agent record (has the Twilio account SID); system_prompt.md is the shared part
+Cartesia/agent_config.json
