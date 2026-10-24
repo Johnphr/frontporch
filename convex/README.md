@@ -60,6 +60,20 @@ row yet, `startCall` throws before any row is written. From the hourly cron that
 week's call (`schedule.tick` records the slot first), so sync every character first. Add a
 character: `../voice/README.md`.
 
+## Review generated posts (temporary page)
+
+Read every post as it would be published, before LinkedIn is connected:
+
+```bash
+npx convex env set POSTS_PAGE_KEY <long random string>   # off without it
+npx convex env get POSTS_PAGE_KEY                        # then open:
+# https://<deployment>.convex.site/posts?key=<that key>
+```
+
+Newest first, with the call's question and why the fact-check held a post. "Fact-check now"
+reruns the check (nothing is posted). Temporary: remove `postsPage.ts`, `lib/postsPage.ts` and the
+route in `http.ts` once posts are reviewed on LinkedIn.
+
 ## Try the after-call flow without a phone
 
 Fixtures in `../tests/fixtures/`. Use a throwaway seeded elder: fixture facts merge into his
