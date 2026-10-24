@@ -1,0 +1,72 @@
+[
+  {
+    "type": "post",
+    "id": "7380000000000000001",
+    "linkedinUrl": "https://www.linkedin.com/posts/walter-baker_bakery-story-activity-7380000000000000001-AbCd?utm_source=share&utm_medium=member_desktop",
+    "content": "In 1968 I opened a bakery on 5th Street with $400 and a borrowed oven. What did you learn from your first business?",
+    "author": { "name": "Walter Baker", "publicIdentifier": "walter-baker", "type": "profile" },
+    "postedAt": { "timestamp": 1792500000000, "date": "2026-10-19T14:40:00.000Z", "postedAgoShort": "5d" },
+    "engagement": {
+      "likes": 40,
+      "comments": 3,
+      "shares": 2,
+      "reactions": [
+        { "type": "LIKE", "count": 40 },
+        { "type": "APPRECIATION", "count": 6 },
+        { "type": "EMPATHY", "count": 2 }
+      ]
+    },
+    "comments": [
+      {
+        "type": "comment",
+        "id": "c1",
+        "commentary": "How did you price your bread back then?",
+        "actor": { "name": "Maria Lopez", "author": false },
+        "postId": "7380000000000000001"
+      },
+      {
+        "type": "comment",
+        "id": "c2",
+        "commentary": "Thanks Maria! About a dime a loaf.",
+        "actor": { "name": "Walter Baker", "author": true },
+        "postId": "7380000000000000001"
+      }
+    ]
+  },
+  {
+    "type": "post",
+    "id": "7380000000000000002",
+    "linkedinUrl": "https://www.linkedin.com/posts/walter-baker_mentors-activity-7380000000000000002-EfGh/",
+    "content": "The best boss I ever had never raised his voice.",
+    "postedAt": { "timestamp": 1791900000000 },
+    "engagement": { "likes": 12, "comments": 1, "shares": 0, "reactions": [] }
+  },
+  {
+    "type": "comment",
+    "id": "c3",
+    "commentary": "<p>This is so true &amp; rare.</p>",
+    "actor": { "name": "Sam Chen", "author": false },
+    "postId": "7380000000000000002",
+    "createdAt": "2026-10-14T10:00:00.000Z"
+  },
+  {
+    "type": "comment",
+    "id": "c4",
+    "commentary": "Comment on a post we didn't scrape",
+    "actor": { "name": "Someone" },
+    "postId": "9999"
+  },
+  {
+    "type": "reaction",
+    "id": "r1",
+    "reactionType": "LIKE",
+    "actor": { "name": "Ignored" },
+    "postId": "7380000000000000001"
+  },
+  {
+    "type": "post",
+    "id": "no-url",
+    "content": "A post without any URL is skipped",
+    "engagement": { "likes": 1 }
+  }
+]

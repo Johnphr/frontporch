@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "convex": "convex dev",
-    "deploy": "convex deploy"
+    "deploy": "convex deploy",
+    "test": "node --test \"tests/**/*.test.ts\""
   },
   "dependencies": {
     "convex": "^1.48.0"

@@ -1,0 +1,13 @@
+{
+  "posts": [
+    { "id": 901, "topic_id": 4242, "blurb": "I just took over my dad's bakery and the old staff don't respect me...", "like_count": 7 },
+    { "id": 902, "topic_id": 4242, "blurb": "second post in the same topic is ignored", "like_count": 1 },
+    { "id": 903, "topic_id": 1, "blurb": "Please read the rules", "like_count": 50 }
+  ],
+  "topics": [
+    { "id": 1, "title": "Welcome! Read the forum rules", "slug": "welcome", "posts_count": 1, "created_at": "2025-01-01T00:00:00.000Z", "pinned": true },
+    { "id": 4242, "title": "How do I earn respect from staff after taking over the family bakery?", "fancy_title": "How do I earn respect from staff after taking over the family bakery?", "slug": "earn-respect-family-bakery", "posts_count": 4, "created_at": "2026-10-20T09:30:00.000Z", "visible": true },
+    { "id": 4243, "title": "Old thread about ovens?", "slug": "old-ovens", "posts_count": 9, "created_at": "2026-10-20T09:30:00.000Z", "closed": true }
+  ],
+  "grouped_search_result": { "term": "bakery" }
+}

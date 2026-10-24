@@ -91,6 +91,14 @@ Daily cron → `apify.scrapeEngagement` (his recent posts with reactions + comme
 `engagement.upsert`. The next `planNextCall` reads `engagement.recentFeedback`, and
 `llm.summarizeFeedback` turns it into "what resonated" + reader questions worth asking him.
 
+**Audience questions** (extra input for the planner): weekly `apify.findAudienceQuestions`
+searches Reddit, Stack Exchange (official API) and, once enabled, Quora and Discourse
+for real questions people in his field ask ("how did you price your first product?").
+It filters (questions only, no medical/legal/financial, no NSFW), dedupes across sites and
+ranks by relevance to his profile + engagement + freshness into `audienceQuestions`.
+`planNextCall` can take one from `apify.topAudienceQuestions` and call
+`apify.markAudienceQuestionUsed` so it isn't asked twice.
+
 ## Contracts (agree on these first, then work in parallel)
 
 ```ts
@@ -121,7 +129,7 @@ type CallResult = {                // vapi.webhook -> pipeline.processCall
 `llm.writePost` · `llm.extractMemories` · `llm.extractProfile` · `llm.summarizeFeedback` ·
 `llm.planQuestions` · `memories.add` · `memories.search` · `engagement.upsert` ·
 `engagement.recentFeedback` · `apify.scrapeEngagement` · `apify.scrapeProfile` ·
-`linkedapi.createPost`
+`apify.findAudienceQuestions` · `apify.topAudienceQuestions` · `linkedapi.createPost`
 
 ## Data model (draft, not in `schema.ts` yet)
 

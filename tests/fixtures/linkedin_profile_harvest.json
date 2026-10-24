@@ -1,0 +1,47 @@
+[
+  {
+    "firstName": "Walter",
+    "lastName": "Baker",
+    "headline": "Retired master baker | Ran Baker's Bread Co. for 38 years",
+    "about": "I started baking at 14 in my uncle's shop and opened my own bakery in 1968. Today I mentor young bakers &amp; small business owners.",
+    "location": {
+      "linkedinText": "Dayton, Ohio, United States",
+      "parsed": { "city": "Dayton", "state": "Ohio", "country": "United States" }
+    },
+    "experience": [
+      {
+        "position": "Owner & Head Baker",
+        "companyName": "Baker's Bread Co.",
+        "duration": "38 yrs",
+        "startDate": { "month": "Mar", "year": 1968, "text": "Mar 1968" },
+        "endDate": { "month": "Jun", "year": 2006, "text": "Jun 2006" },
+        "description": "Grew from one oven to three stores and 40 employees."
+      },
+      {
+        "position": "Apprentice Baker",
+        "companyName": "Kessler's Bakery",
+        "startDate": { "year": 1960 },
+        "endDate": { "year": 1968 }
+      },
+      {
+        "position": "Volunteer Mentor",
+        "companyName": "SCORE",
+        "startDate": { "text": "2008" },
+        "endDate": { "text": "Present" }
+      }
+    ],
+    "education": [
+      {
+        "schoolName": "Dayton Vocational School",
+        "degree": "Certificate",
+        "fieldOfStudy": "Culinary Arts",
+        "period": "1958 - 1960"
+      }
+    ],
+    "skills": [
+      { "name": "Artisan Bread" },
+      { "name": "Small Business Management" },
+      { "name": "Mentoring" }
+    ]
+  }
+]
