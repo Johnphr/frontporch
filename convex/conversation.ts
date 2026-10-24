@@ -6,7 +6,7 @@
 //                                     reader feedback, audience + recent topics.
 //   prepareCall({ elderId })          ~1h before his call (schedule.tick): fresh
 //                                     audience questions (Apify) and recent topics in
-//                                     his field (Claude web search), in parallel, then
+//                                     his field (LLM web search), in parallel, then
 //                                     schedules a refresh with them.
 //   planNextCall({ elderId })         at call time -> { plan, dynamicVariables }. The
 //                                     kind comes from PR #7's lib/onboarding.planNextCall
@@ -15,7 +15,7 @@
 //                                     known_background). Story: question bank + memories +
 //                                     avoid topics + saved feedback line, as Cartesia
 //                                     dynamic_variables for voice/prompts/story-call.md.
-//                                     Fast: never waits on a refresh or a Claude call.
+//                                     Fast: never waits on a refresh or an LLM call.
 //                                     cartesia.startCall's story branch (slice 2) calls it.
 //   markPlanUsed({ elderId, bankId, callId })   cartesia.startCall, once a story call is placed.
 //
@@ -195,7 +195,7 @@ export const markPlanUsed = internalMutation({
 
 // ---------- actions ----------
 
-type RefreshResult = { queued: number; usedClaude: boolean; errors: string[] };
+type RefreshResult = { queued: number; usedLlm: boolean; errors: string[] };
 
 /** Best effort: a missing Data function (or any failure) just means "no input from it". */
 async function attempt<T>(errors: string[], label: string, fn: () => Promise<T>, fallback: T): Promise<T> {
@@ -281,7 +281,7 @@ export const refreshQuestionBank = internalAction({
     ].filter((q, i, all) => all.findIndex((x) => x.id === q.id) === i);
     const recentTopics: RecentTopic[] = args.recentTopics ?? [];
 
-    let usedClaude = true;
+    let usedLlm = true;
     let candidates: Candidate[] = await attempt(
       errors,
       "planQuestions",
@@ -302,7 +302,7 @@ export const refreshQuestionBank = internalAction({
       [],
     );
     if (candidates.length === 0) {
-      usedClaude = false;
+      usedLlm = false;
       candidates = fallbackCandidates({
         openThreads,
         readerQuestions: feedback.readerQuestions,
@@ -342,7 +342,7 @@ export const refreshQuestionBank = internalAction({
         firstSeenAt: r.firstSeenAt,
       })),
     });
-    return { queued: ranked.length, usedClaude, errors };
+    return { queued: ranked.length, usedLlm, errors };
   },
 });
 

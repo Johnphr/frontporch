@@ -248,7 +248,7 @@ export default defineSchema({
     .index("by_elder_status_priority", ["elderId", "status", "priority"])
     .index("by_elder_status_usedAt", ["elderId", "status", "usedAt"]),
   // One row per elder: what the last bank refresh worked out, reused at call time
-  // and by the post writer so they don't call Claude again.
+  // and by the post writer so they don't call the LLM again.
   questionBankMeta: defineTable({
     elderId: v.id("elders"),
     feedbackLine: v.string(), // one warm sentence Pip reads out ("" when nothing new)

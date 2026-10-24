@@ -21,7 +21,7 @@ Only what the diff doesn't show. Plan: `ARCHITECTURE.md` → Build order, slice 
   scheduled in the same transaction. A duplicate chain (e.g. `pollCall` run by hand) stops.
 - Dial timeout / 5xx → `start_unknown` (blocks a new call) instead of `failed`.
 - No PII in logs or stored errors: scrape failures log a fixed string, call-endpoint errors keep
-  only the HTTP status, Claude errors are fixed messages (`JSON.parse` errors quote the input).
+  only the HTTP status, LLM errors are fixed messages (`JSON.parse` errors quote the input).
 - `mergeProfile` puts new list items first so full lists keep learning.
 - `finishProcessing` keeps Cartesia's `error_message` (e.g. busy) on `no_conversation`.
 - Open-call guard: also `ended` (awaiting processing) and `start_unknown`; 90 min window.
@@ -50,7 +50,7 @@ Only what the diff doesn't show. Plan: `ARCHITECTURE.md` → Build order, slice 
 
 ## Not verified yet (needs real keys)
 - A real call: transcript `role` values, terminal `status` values, `end_reason` values.
-- `llm.extractProfile` against real Claude output.
+- `llm.extractProfile` against real LLM output (OpenAI since feat/openai-llm).
 - Whether a network timeout on `POST /agents/calls` can still place a call (row says to
   check Cartesia's call log before retrying).
 
