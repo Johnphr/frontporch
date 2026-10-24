@@ -10,6 +10,7 @@
 // dynamic variables, so the call record shows who it was.
 
 import type { CallLanguage } from "./prompts/principles.ts";
+import { isE164 } from "./signupRules.ts";
 
 export const LOOKUP_TOOL_NAME = "lookup_caller";
 export const LOOKUP_PATH = "/cartesia/inbound-lookup";
@@ -20,12 +21,8 @@ export const BACKSTOP_WINDOW_MS = 3 * 60 * 60_000;
 /** Max size of the JSON we send back (Cartesia passes at most 16 KiB of it to the model). */
 export const MAX_LOOKUP_BYTES = 15_000;
 
-/** The E.164 rule elders.seed enforces too (one place, same digit range: 7 to 15 digits). */
-export const E164 = /^\+[1-9]\d{6,14}$/;
-
-export function isE164(phone: string): boolean {
-  return E164.test(phone);
-}
+// The E.164 rule elders.seed and the sign-up page use (lib/signupRules.ts): one place.
+export { isE164 };
 
 /**
  * A phone number as Cartesia or a person writes it -> E.164 ("+14155550123"), or "" if it
@@ -42,7 +39,7 @@ export function normalizePhone(raw: unknown): string {
     else if (!(digits.length === 11 && digits.startsWith("1"))) return "";
   }
   const out = `+${digits}`;
-  return E164.test(out) ? out : "";
+  return isE164(out) ? out : "";
 }
 
 /**

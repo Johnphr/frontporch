@@ -4,7 +4,6 @@
 
 import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
-import { isE164 } from "./lib/inbound";
 import { isProfileUsable, normalizeProfile } from "./lib/onboarding";
 import { localParts, normalizeDay } from "./lib/schedule";
 import { isE164 } from "./lib/signupRules";
