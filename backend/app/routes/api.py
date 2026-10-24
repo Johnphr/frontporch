@@ -12,7 +12,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ..deps import Services, get_services
-from ..services.questions import fetch_from_apify, route_new_questions
+from ..services.questions import (all_sources, prepare_manual, refresh_questions,
+                                  route_new_questions)
 
 router = APIRouter(prefix="/api", tags=["api"])
 
@@ -30,6 +31,11 @@ class ManualQuestionIn(BaseModel):
     body: str | None = None
     sourceUrl: str | None = None
     source: str = "manual"
+
+
+class RefreshIn(BaseModel):
+    sources: list[str] | None = Field(default=None, description="Source names; default all enabled")
+    limit: int | None = Field(default=None, ge=1, le=100, description="Max questions per source")
 
 
 class OutboundCallIn(BaseModel):
@@ -86,13 +92,22 @@ async def create_elder(body: ElderIn, services: Services = Depends(get_services)
     return {"id": await services.store.create_elder(**fields)}
 
 
+@router.get("/questions/sources")
+async def question_sources(services: Services = Depends(get_services)):
+    """Every configured source, for the dashboard's refresh picker."""
+    return [
+        {"name": src.get("name"), "label": src.get("label") or src.get("name"),
+         "kind": src.get("kind", "apify"), "source": src.get("source", "web"),
+         "enabled": bool(src.get("enabled"))}
+        for src in all_sources(services.settings)
+    ]
+
+
 @router.post("/questions/refresh")
-async def refresh_questions(services: Services = Depends(get_services)):
-    questions, errors = await fetch_from_apify(services.settings)
-    inserted = await services.store.upsert_questions(questions) if questions else []
-    routing = await route_new_questions(services.store, services.llm)
-    return {"fetched": len(questions), "inserted": len(inserted or []), "errors": errors,
-            "routing": routing}
+async def refresh_questions_route(body: RefreshIn | None = None,
+                                  services: Services = Depends(get_services)):
+    body = body or RefreshIn()
+    return await refresh_questions(services, body.sources, body.limit)
 
 
 @router.post("/questions/manual")
@@ -103,7 +118,7 @@ async def add_manual_question(body: ManualQuestionIn, services: Services = Depen
         question["body"] = body.body
     if body.sourceUrl:
         question["sourceUrl"] = body.sourceUrl
-    ids = await services.store.upsert_questions([question])
+    ids = await services.store.upsert_questions([prepare_manual(question)])
     routing = await route_new_questions(services.store, services.llm)
     return {"ids": ids, "routing": routing}
 

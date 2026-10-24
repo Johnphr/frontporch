@@ -122,17 +122,34 @@ class LLM:
             raise RuntimeError(f"No structured output (stop_reason={response.stop_reason})")
         return response.parsed_output
 
-    async def triage_questions(self, questions: list[dict], elders: list[dict]) -> TriageResult:
-        q_lines = "\n".join(
-            f"[{i}] {q['title']}\n    {(q.get('body') or '')[:400]}" for i, q in enumerate(questions)
-        )
+    async def triage_questions(self, questions: list[dict], elders: list[dict],
+                               batch_size: int = 25) -> TriageResult:
+        """Triage in batches so a big scrape doesn't become one giant request.
+
+        Returned indices always refer to positions in the full `questions` list.
+        """
         e_lines = "\n".join(
             f"[{i}] {e['name']}: {', '.join(e.get('expertise', []))}. {e.get('bio') or ''}"
             for i, e in enumerate(elders)
         )
-        user = f"ELDERS:\n{e_lines or '(none yet)'}\n\nQUESTIONS:\n{q_lines}"
-        return await self._parse(system=TRIAGE_SYSTEM, user=user, schema=TriageResult,
-                                 effort="medium", max_tokens=16000)
+        items: list[TriageItem] = []
+        for start in range(0, len(questions), batch_size):
+            batch = questions[start:start + batch_size]
+            q_lines = "\n".join(
+                f"[{i}] ({q.get('source', 'web')}"
+                f"{' · ' + q['community'] if q.get('community') else ''}) {q['title']}\n"
+                f"    {(q.get('body') or '')[:400]}"
+                for i, q in enumerate(batch)
+            )
+            user = f"ELDERS:\n{e_lines or '(none yet)'}\n\nQUESTIONS:\n{q_lines}"
+            result = await self._parse(system=TRIAGE_SYSTEM, user=user, schema=TriageResult,
+                                       effort="medium", max_tokens=16000)
+            seen: set[int] = set()
+            for item in result.items:
+                if 0 <= item.index < len(batch) and item.index not in seen:
+                    seen.add(item.index)
+                    items.append(item.model_copy(update={"index": start + item.index}))
+        return TriageResult(items=items)
 
     async def decide_follow_up(self, question: dict, turns: list[dict], follow_ups_left: int
                                ) -> FollowUpDecision:

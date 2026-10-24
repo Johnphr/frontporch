@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     # --- Apify (finding questions) ---
     apify_token: str | None = None
     question_sources_file: str = "question_sources.json"
+    # Optional: raises the Stack Exchange API limit from 300 to 10,000 requests/day.
+    stackexchange_key: str | None = None
 
     # --- Publishing ---
     # Platforms an answer goes to when the elder says "yes" on the call.

@@ -119,13 +119,50 @@ npm run dev
 ### 6. Optional integrations
 
 - **Cartesia:** without a key, Pip falls back to Twilio's built-in voice. Pick a voice at play.cartesia.ai and set `CARTESIA_VOICE_ID`.
-- **Apify:** set `APIFY_TOKEN`. Sources are in `backend/question_sources.json`. Each Actor has its own input format, so check the Actor's *Input* tab in the Apify Store and adjust `input` and `fields`. The Quora source is disabled until you pick an Actor.
+- **Finding questions:** see [Finding questions](#finding-questions) below.
 - **Bluesky:** create an app password (Settings → Privacy and security → App passwords).
 - **LinkedIn:** create an app, add the "Share on LinkedIn" and "Sign In with LinkedIn using OpenID Connect" products, generate a token with `w_member_social`, and get your person id from `GET https://api.linkedin.com/v2/userinfo` (`sub` field) → `LINKEDIN_AUTHOR_URN=urn:li:person:<sub>`. `LINKEDIN_VERSION` is a `YYYYMM` string; LinkedIn retires versions after about a year, so update it if you get a version error.
 
+## Finding questions
+
+Sources live in `backend/question_sources.json`. Each one has a `kind`:
+
+| Source | Kind | Cost / key | Default |
+|---|---|---|---|
+| Reddit r/AskOldPeople | `apify` ([trudax/reddit-scraper-lite](https://apify.com/trudax/reddit-scraper-lite)) | ~$3.40 per 1,000 results, `APIFY_TOKEN` | on |
+| Reddit advice subs (NoStupidQuestions, Cooking, HomeImprovement, Parenting, gardening, Advice) | `apify` (same Actor, one run) | same | on |
+| Quora | `apify` ([blackfalcondata/quora-scraper](https://apify.com/blackfalcondata/quora-scraper)) | ~$0.80 per 1,000 results | **off** until live-tested |
+| Stack Exchange (Lifehacks, DIY, Cooking, Gardening, Parenting) | `stackexchange_api` (official API) | free, 300 requests/day; `STACKEXCHANGE_KEY` raises it to 10,000 | on |
+| Discourse forum | `discourse_json` (public `/latest.json`) | free | off (set `forumUrl` to a real forum) |
+
+What happens on **Find questions** (`POST /api/questions/refresh`, or `refresh_questions()` in code):
+
+1. Selected sources run in parallel. One failing source never stops the others.
+2. **Filter:** drops non-questions, removed or NSFW posts, closed or pinned topics, posts older than `maxAgeDays` (default 14; `null` = no limit), and topics that need a professional (medical, legal, investing, crisis).
+3. **Dedupe:** the same question on two sites (matching normalized title, `fingerprint`) is kept once. Convex also skips anything it already has.
+4. **Rank:** `priority` = engagement + freshness + few answers so far. Family questions (`source: "family"`) always go first, then highest priority.
+5. **Route:** Claude triages in batches of 25 and assigns each question to the best-matching elder.
+
+The response reports per-source counts (`fetched`, `filtered` with reasons, `duplicate`, `inserted`). The dashboard lets you pick sources and a per-source limit.
+
+**Dry run** (prints questions, never writes to Convex), from `backend/`:
+
+```bash
+python -m app.scripts.try_sources --list
+python -m app.scripts.try_sources --source stackexchange-everyday --limit 5
+python -m app.scripts.try_sources --source reddit-askoldpeople --limit 5 --show-filtered
+```
+
+**Adding a source:** copy an entry, give it a unique `name` and `label`, then set `kind`:
+- `apify`: set `actor` and `input` (copy from the Actor's *Input* tab). If its output keys differ from the defaults in `backend/app/services/sources/__init__.py`, add a `fields` map.
+- `stackexchange_api`: set `sites`.
+- `discourse_json`: set `forumUrl` and an optional `category` slug.
+
+Optional per-source settings: `maxQuestions`, `maxAgeDays`, and `requireQuestion` (set `false` for subs where every post is a question).
+
 ## Demo flow (3 minutes)
 
-1. **Dashboard → Find questions with Apify** (or type one in with the manual form as a backup). Claude assigns it to an elder.
+1. **Dashboard → Find questions** (or type one in with the manual form as a backup). Claude assigns it to an elder.
 2. **Call now.** A teammate's grandparent (or a teammate playing one) picks up. Pip asks the question; they answer out loud. The transcript appears live in the dashboard.
 3. Pip reads back the summary: "Should I post it?" → "Yes."
 4. The answer appears on the **Feed** and on Bluesky.

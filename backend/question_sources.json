@@ -1,34 +1,104 @@
 [
   {
     "name": "reddit-askoldpeople",
+    "label": "Reddit · r/AskOldPeople",
+    "kind": "apify",
     "source": "reddit",
     "enabled": true,
     "actor": "trudax/reddit-scraper-lite",
     "maxQuestions": 15,
+    "maxAgeDays": 14,
+    "requireQuestion": false,
     "input": {
       "startUrls": [{ "url": "https://www.reddit.com/r/AskOldPeople/new/" }],
       "maxItems": 40,
-      "skipComments": true
-    },
-    "fields": {
-      "title": ["title"],
-      "body": ["body", "selftext", "text"],
-      "url": ["url", "link"],
-      "id": ["id", "parsedId"]
+      "maxPostCount": 40,
+      "skipComments": true,
+      "skipUserPosts": true,
+      "skipCommunity": true,
+      "includeMediaLinks": true,
+      "includeNSFW": false
+    }
+  },
+  {
+    "name": "reddit-advice",
+    "label": "Reddit · advice subs",
+    "kind": "apify",
+    "source": "reddit",
+    "enabled": true,
+    "actor": "trudax/reddit-scraper-lite",
+    "maxQuestions": 25,
+    "maxAgeDays": 14,
+    "input": {
+      "startUrls": [
+        { "url": "https://www.reddit.com/r/NoStupidQuestions/new/" },
+        { "url": "https://www.reddit.com/r/Cooking/new/" },
+        { "url": "https://www.reddit.com/r/HomeImprovement/new/" },
+        { "url": "https://www.reddit.com/r/Parenting/new/" },
+        { "url": "https://www.reddit.com/r/gardening/new/" },
+        { "url": "https://www.reddit.com/r/Advice/new/" }
+      ],
+      "maxItems": 90,
+      "maxPostCount": 15,
+      "skipComments": true,
+      "skipUserPosts": true,
+      "skipCommunity": true,
+      "includeMediaLinks": true,
+      "includeNSFW": false
     }
   },
   {
     "name": "quora-life-advice",
+    "label": "Quora · life advice (test before enabling)",
+    "kind": "apify",
     "source": "quora",
     "enabled": false,
-    "actor": "REPLACE_WITH_A_QUORA_ACTOR_FROM_THE_APIFY_STORE",
-    "maxQuestions": 10,
-    "input": {},
+    "actor": "blackfalcondata/quora-scraper",
+    "maxQuestions": 15,
+    "maxAgeDays": null,
+    "input": {
+      "searchQueries": [
+        "advice older generation",
+        "life lessons learned",
+        "marriage advice long",
+        "home repair tips",
+        "cooking from scratch"
+      ],
+      "resultTypes": ["question"],
+      "maxItems": 40,
+      "includeAnswers": false,
+      "excludeEmptyFields": true
+    },
     "fields": {
-      "title": ["question", "title"],
-      "body": ["details", "description"],
-      "url": ["url", "questionUrl"],
-      "id": ["id", "url"]
+      "title": ["title"],
+      "url": ["url"],
+      "id": ["questionId", "url"],
+      "score": ["followerCount"],
+      "answers": ["answerCount"],
+      "postedAt": ["creationTime"]
     }
+  },
+  {
+    "name": "stackexchange-everyday",
+    "label": "Stack Exchange · Lifehacks, DIY, Cooking, Gardening, Parenting",
+    "kind": "stackexchange_api",
+    "source": "stackexchange",
+    "enabled": true,
+    "sites": ["lifehacks", "diy", "cooking", "gardening", "parenting"],
+    "pageSize": 15,
+    "maxQuestions": 25,
+    "maxAgeDays": 30,
+    "requireQuestion": false
+  },
+  {
+    "name": "discourse-example",
+    "label": "Discourse forum (point at a real forum first)",
+    "kind": "discourse_json",
+    "source": "discourse",
+    "enabled": false,
+    "forumUrl": "https://meta.discourse.org",
+    "category": "support",
+    "maxQuestions": 10,
+    "maxAgeDays": 14
   }
 ]

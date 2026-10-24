@@ -42,10 +42,20 @@ export default defineSchema({
     status: questionStatus,
     assignedElderId: v.optional(v.id("elders")),
     skipReason: v.optional(v.string()),
+    // --- question sourcing (feat/question-sources). All optional so legacy
+    // rows, manual questions and family questions keep working. ---
+    community: v.optional(v.string()), // e.g. "AskOldPeople", "diy", forum name
+    score: v.optional(v.number()), // upvotes / likes / followers on the source site
+    answerCount: v.optional(v.number()), // answers or comments it already has
+    postedAt: v.optional(v.number()), // epoch ms when it was posted on the source site
+    tags: v.optional(v.array(v.string())),
+    fingerprint: v.optional(v.string()), // normalized title, for cross-site dedupe
+    priority: v.optional(v.number()), // higher = ask sooner
   })
     .index("by_status", ["status"])
     .index("by_elder_status", ["assignedElderId", "status"])
-    .index("by_external", ["externalId"]),
+    .index("by_external", ["externalId"])
+    .index("by_fingerprint", ["fingerprint"]),
 
   calls: defineTable({
     callSid: v.string(),

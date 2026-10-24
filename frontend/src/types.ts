@@ -30,6 +30,21 @@ export type Question = {
   topics: string[];
   assignedElderName?: string;
   skipReason?: string;
+  // Source metadata (feat/question-sources); missing on older/manual questions.
+  community?: string;
+  score?: number;
+  answerCount?: number;
+  postedAt?: number; // epoch ms on the source site
+  tags?: string[];
+  priority?: number;
+};
+
+export type QuestionSource = {
+  name: string;
+  label: string;
+  kind: string;
+  source: string;
+  enabled: boolean;
 };
 
 export type PublishedAnswer = {

@@ -1,6 +1,8 @@
 // Typed helpers for the FastAPI backend. All writes go through here;
 // reads come straight from Convex.
 
+import type { QuestionSource } from "./types";
+
 const API_URL = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") ??
   "http://localhost:8000";
 
@@ -54,10 +56,14 @@ export type NewElder = {
 
 export type NewQuestion = { title: string; body?: string; sourceUrl?: string };
 
+export type RefreshOptions = { sources?: string[]; limit?: number };
+
 export const backend = {
   health: () => request<Health>("/api/health"),
   createElder: (elder: NewElder) => post<{ elderId: string }>("/api/elders", elder),
-  refreshQuestions: () => post<Record<string, unknown>>("/api/questions/refresh"),
+  questionSources: () => request<QuestionSource[]>("/api/questions/sources"),
+  refreshQuestions: (options: RefreshOptions = {}) =>
+    post<Record<string, unknown>>("/api/questions/refresh", options),
   addQuestion: (q: NewQuestion) => post<Record<string, unknown>>("/api/questions/manual", q),
   routeQuestions: () => post<Record<string, unknown>>("/api/questions/route"),
   callElder: (elderId: string) => post<{ callSid: string }>("/api/calls/outbound", { elderId }),
