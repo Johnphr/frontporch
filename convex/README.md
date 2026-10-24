@@ -239,6 +239,9 @@ npx convex run schedule:tick '{"now": 1792944000000}'   # Sunday 2026-10-25 09:0
 - `http.ts` and `crons.ts` must keep their default exports, even when empty.
 - Vector search (`ctx.vectorSearch`) only works inside actions.
 - Files with `"use node"` at the top may only export actions.
-- v1 leftovers: `questions.ts`, `answers.ts`, `replies.ts` get deleted;
-  `elders.ts`, `calls.ts`, `lib/auth.ts` still use the old `secret` argument
-  and get converted to internal functions (Core: Data).
+- No public functions: every query, mutation and action is `internal*` (run them with
+  `npx convex run`). Public Convex functions are callable by anyone with the deployment URL;
+  the deleted v1 dashboard queries exposed call transcripts that way. Keep it that way.
+- v1 leftovers are deleted (`questions.ts`, `answers.ts`, `replies.ts`, `calls.ts`,
+  `lib/auth.ts`); `elders.ts` keeps only `seed`. The v1 `questions`, `answers` and `replies`
+  tables stay in `schema.ts` until they're empty.

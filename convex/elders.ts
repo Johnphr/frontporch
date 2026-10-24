@@ -1,62 +1,11 @@
-import { query, mutation, internalMutation } from "./_generated/server";
+// Elders: only `seed` (internal, for setup and testing). The v1 public queries and
+// secret-arg mutations from the deleted Python server were removed: public Convex
+// functions are callable by anyone with the deployment URL.
+
+import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
-import { assertBackend, maskPhone } from "./lib/auth";
 import { isProfileUsable, normalizeProfile } from "./lib/onboarding";
 import { localParts, normalizeDay } from "./lib/schedule";
-
-// ---------- backend only (secret required) ----------
-
-export const create = mutation({
-  args: {
-    secret: v.string(),
-    name: v.string(),
-    phone: v.string(),
-    expertise: v.array(v.string()),
-    language: v.string(),
-    bio: v.optional(v.string()),
-  },
-  handler: async (ctx, { secret, ...elder }) => {
-    assertBackend(secret);
-    const existing = await ctx.db
-      .query("elders")
-      .withIndex("by_phone", (q) => q.eq("phone", elder.phone))
-      .unique();
-    if (existing) {
-      await ctx.db.patch(existing._id, elder);
-      return existing._id;
-    }
-    return await ctx.db.insert("elders", elder);
-  },
-});
-
-export const getByPhone = query({
-  args: { secret: v.string(), phone: v.string() },
-  handler: async (ctx, { secret, phone }) => {
-    assertBackend(secret);
-    return await ctx.db
-      .query("elders")
-      .withIndex("by_phone", (q) => q.eq("phone", phone))
-      .unique();
-  },
-});
-
-export const getPrivate = query({
-  args: { secret: v.string(), elderId: v.id("elders") },
-  handler: async (ctx, { secret, elderId }) => {
-    assertBackend(secret);
-    return await ctx.db.get(elderId);
-  },
-});
-
-export const listPrivate = query({
-  args: { secret: v.string() },
-  handler: async (ctx, { secret }) => {
-    assertBackend(secret);
-    return await ctx.db.query("elders").collect();
-  },
-});
-
-// ---------- internal (npx convex run) ----------
 
 /**
  * Add or update someone to call, for testing:
@@ -112,22 +61,5 @@ export const seed = internalMutation({
       language: language ?? "en-US",
       expertise: [], // v1 field, still required by the schema
     });
-  },
-});
-
-// ---------- public (React app) ----------
-
-export const list = query({
-  args: {},
-  handler: async (ctx) => {
-    const elders = await ctx.db.query("elders").collect();
-    return elders.map((e) => ({
-      _id: e._id,
-      name: e.name,
-      expertise: e.expertise,
-      language: e.language,
-      bio: e.bio,
-      phoneMasked: maskPhone(e.phone),
-    }));
   },
 });

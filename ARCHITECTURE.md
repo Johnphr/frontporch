@@ -268,9 +268,11 @@ reactions/comments changed in the window, most recently changed first.
 `cartesia.startCall` at the call hour (each local slot once, DST-safe, `lib/schedule.ts`);
 daily `apify.scrapeEngagement` and weekly `apify.findAudienceQuestions` for active elders.
 
-**v1 leftovers in `convex/`**: `questions.ts`, `answers.ts`, `replies.ts` (and their tables)
-belong to the old product; delete them. `elders.ts`, `calls.ts`, `lib/auth.ts` take a `secret`
-argument from the deleted Python server; convert to internal functions. (Core: Data.)
+**v1 leftovers in `convex/`** (done): `questions.ts`, `answers.ts`, `replies.ts`, `calls.ts` and
+`lib/auth.ts` are deleted; `elders.ts` keeps only the internal `seed`. There are **no public
+Convex functions**: anyone with the deployment URL can call public ones, and the v1 dashboard
+queries exposed call transcripts. Keep new functions `internal*`. The v1 `questions`, `answers`
+and `replies` tables stay in `schema.ts` until they're empty, so a deploy can't fail on old rows.
 
 ## Repo layout
 

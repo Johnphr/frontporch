@@ -1,6 +1,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+// v1 leftovers: validators for the questions/answers tables below (drop with them).
 export const questionStatus = v.union(
   v.literal("new"),
   v.literal("assigned"),
@@ -65,6 +66,8 @@ export default defineSchema({
     lastBankRefreshAt: v.optional(v.number()), // epoch ms, debounces question-bank refreshes
   }).index("by_phone", ["phone"]),
 
+  // v1 leftover (old "answer internet questions" product): no functions use it anymore.
+  // Kept so a deploy can't fail on existing rows; drop the table once it's empty.
   questions: defineTable({
     source: v.string(), // reddit | quora | discourse | manual | ...
     title: v.string(),
@@ -150,6 +153,8 @@ export default defineSchema({
     .index("by_elder_scraped", ["elderId", "scrapedAt"])
     .index("by_elder_changed", ["elderId", "changedAt"]),
 
+  // v1 leftover (old "answer internet questions" product): no functions use it anymore.
+  // Kept so a deploy can't fail on existing rows; drop the table once it's empty.
   answers: defineTable({
     elderId: v.id("elders"),
     questionId: v.id("questions"),
@@ -166,6 +171,8 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_elder", ["elderId"]),
 
+  // v1 leftover (old "answer internet questions" product): no functions use it anymore.
+  // Kept so a deploy can't fail on existing rows; drop the table once it's empty.
   replies: defineTable({
     answerId: v.id("answers"),
     elderId: v.id("elders"),
