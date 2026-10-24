@@ -12,9 +12,9 @@
 //                                     kind comes from PR #7's lib/onboarding.planNextCall
 //                                     (cartesia.reserveCall uses the same rule). Onboarding:
 //                                     PR #7's buildOnboardingVariables (first_name,
-//                                     known_background). Story: question bank + memories +
+//                                     goal, context). Story: question bank + memories +
 //                                     avoid topics + saved feedback line, as Cartesia
-//                                     dynamic_variables for voice/prompts/story-call.md.
+//                                     dynamic_variables for lib/prompts/agent.ts.
 //                                     Fast: never waits on a refresh or an LLM call.
 //                                     cartesia.startCall's story branch (slice 2) calls it.
 //   markPlanUsed({ elderId, bankId, callId })   cartesia.startCall, once a story call is placed.
@@ -38,7 +38,7 @@ import {
   type CandidateSource,
 } from "./lib/planner";
 import { templateVariables } from "./lib/cartesia";
-import { buildOnboardingVariables, callLanguage } from "./lib/onboarding";
+import { buildOnboardingVariables, callCharacter } from "./lib/onboarding";
 import { asElderV2, isOnboarding, type ElderV2 } from "./lib/v2Fields";
 
 const bankItemValidator = v.object({
@@ -398,7 +398,7 @@ export const planNextCall = internalAction({
     const context: PlanningContext = await ctx.runQuery(internal.conversation.getPlanningContext, { elderId });
     const elder = context.elder;
     if (!elder) throw new Error("Elder not found");
-    const lang = callLanguage(elder.language);
+    const lang = callCharacter(elder).language; // the character's language, same as cartesia.startCall
 
     // Topics he doesn't want to discuss always reach Pip (outside the memories budget).
     let avoidMemories: string[] = [];

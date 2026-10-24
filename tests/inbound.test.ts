@@ -26,6 +26,7 @@ import {
   verifyBearer,
   verifyLiveCall,
 } from "../convex/lib/inbound.ts";
+import { getCharacter } from "../convex/lib/characters.ts";
 import { buildOnboardingVariables } from "../convex/lib/onboarding.ts";
 import { inboundAgent } from "../convex/lib/prompts/inbound.ts";
 
@@ -151,23 +152,29 @@ test("unknown and error answers reveal nothing and share the known-caller field 
 });
 
 test("knownCallerResponse: persona + language + the outbound call's variables, all strings", () => {
+  const pip = getCharacter("pip")!;
   const vars = buildOnboardingVariables({ name: "Walter Smith" }, "", "en");
-  const res = knownCallerResponse({ kind: "onboarding", lang: "en", variables: vars });
+  const res = knownCallerResponse({ kind: "onboarding", lang: "en", character: pip, variables: vars });
   assert.equal(res.caller_known, "yes");
   assert.equal(res.call_kind, "onboarding");
   assert.equal(res.speak_as, "Pip");
+  assert.equal(res.persona, pip.personality);
+  // the same variables the character agents get: first_name, goal, context
   assert.equal(res.first_name, "Walter");
-  assert.equal(res.known_background, "none");
+  assert.ok(res.goal.length > 20);
+  assert.equal(res.context, "none");
   for (const value of Object.values(res)) assert.equal(typeof value, "string");
 
   const es = knownCallerResponse({
     kind: "story",
     lang: "es",
-    variables: { first_name: "Juan", profile: "none", memories: "none", feedback: "none", question: "¿Cómo empezó?" },
+    character: getCharacter("juanito")!,
+    variables: { first_name: "Juan", goal: "Una buena historia.", context: "<question>\n¿Cómo empezó?\n</question>" },
   });
   assert.equal(es.speak_as, "Juanito");
   assert.equal(es.language, "es");
-  assert.equal(es.question, "¿Cómo empezó?");
+  assert.match(es.context, /¿Cómo empezó\?/);
+  assert.equal(knownCallerResponse({ kind: "story", lang: "en", character: { name: "Pip" }, variables: {} }).persona, "none");
 });
 
 test("clampResponse keeps the answer under Cartesia's tool-result cap", () => {

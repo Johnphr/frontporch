@@ -26,7 +26,8 @@ export type PrepareOptions = {
   maxHashtags?: number;
 };
 
-export type PreparedPost = { text: string; warnings: string[] };
+/** `text` is what gets posted; `body` is the same without our disclosure line (what the post guard checks). */
+export type PreparedPost = { text: string; body: string; warnings: string[] };
 
 export type GuardMode = "enforce" | "warn" | "off";
 
@@ -217,7 +218,7 @@ export function prepareLinkedInText(raw: string, opts: PrepareOptions = {}): Pre
     );
   }
 
-  return { text: body + sep + disclosure, warnings };
+  return { text: body + sep + disclosure, body, warnings };
 }
 
 /** Delay before polling a LinkedAPI workflow again. */

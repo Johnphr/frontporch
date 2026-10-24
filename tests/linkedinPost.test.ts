@@ -49,6 +49,13 @@ test("fixture post: plain text, 3 hashtags, disclosure exactly once at the end",
   assert.ok(text.endsWith(DEFAULT_DISCLOSURE));
 });
 
+test("body is the post without our disclosure (what the post guard fact-checks)", () => {
+  const { text, body } = prepareLinkedInText("A story.\n\nWritten up with AI from my own words.");
+  assert.equal(body, "A story.");
+  assert.equal(count(body, DEFAULT_DISCLOSURE), 0);
+  assert.equal(text, `${body}\n\n${DEFAULT_DISCLOSURE}`);
+});
+
 test("disclosure is not duplicated when the text already has ours", () => {
   const once = prepareLinkedInText("A story.").text;
   const twice = prepareLinkedInText(once).text;

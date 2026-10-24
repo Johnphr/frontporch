@@ -27,7 +27,7 @@ Cartesia runs the call; Convex starts it, polls for the transcript, and has the 
 his profile + story seeds. Setup: `../voice/README.md`.
 
 ```bash
-npx convex run cartesiaAgents:syncAgent                              # push the agents (Spanish: '{"language":"es"}')
+npx convex run cartesiaAgents:syncAgent                              # push one agent per character (lib/characters.ts)
 npx convex run elders:seed '{"name":"Walter Smith","phone":"+14155550123","language":"en-US",
   "timezone":"America/Los_Angeles","callDay":"sunday","callHour":10}'   # -> elderId (es-MX → Juanito)
 npx convex run cartesia:startCall '{"elderId":"<id>"}'               # phone rings
@@ -46,19 +46,34 @@ Local backend + `"use node"` files need Node 20–24: `npx -p node@24 -c 'npx co
 
 | Env var | Purpose |
 |---|---|
-| `CARTESIA_API_KEY`, `CARTESIA_FROM_NUMBER_ID` | Cartesia account + the phone number's id (`ap_...`) |
-| `CARTESIA_ONBOARDING_AGENT_ID` | printed by the first `syncAgent` run |
-| `CARTESIA_STORY_AGENT_ID` | story agent (slice 2), printed by the first `syncAgent` run that creates it |
-| `CARTESIA_ONBOARDING_AGENT_ID_ES`, `CARTESIA_STORY_AGENT_ID_ES` | Juanito (Spanish elders), printed by `cartesiaAgents:syncAgent '{"language":"es"}'` |
-| `CARTESIA_VOICE_ID`, `CARTESIA_MODEL` | optional voice + in-call model (default `claude-haiku-4.5`) |
-| `CARTESIA_VOICE_ID_ES` | a Spanish voice; required before syncing Juanito |
+| `CARTESIA_API_KEY`, `CARTESIA_FROM_NUMBER_ID` | Cartesia account + the phone number's id (`ap_...`); every character calls from it |
+| `CARTESIA_VOICE_ID`, `CARTESIA_MODEL` | optional Pip voice + in-call model (default `claude-haiku-4.5`) |
+| `CARTESIA_VOICE_ID_ES` | Juanito's Spanish voice; required before syncing him |
 | `OPENAI_API_KEY` | LLM jobs (profile, memories, post, planner) + memory embeddings; `OPENAI_MODEL` optional (default `gpt-6-luna`) |
 | `APIFY_TOKEN` | optional: prefill his LinkedIn background (needs `linkedinUrl` on the elder) |
 | `AUTO_POST` | optional, default `on`. `off` = story posts are saved but not sent to LinkedIn (preview only, for tests) |
+| `PUBLIC_CALLS` | optional, default off. Lets the sign-up page start his first call (`signup:requestCall`; max 3 a day, 10 min apart). `on` = only `CALL_ALLOWLIST` numbers; `all` = anyone (only once SMS is real) |
+| `CALL_ALLOWLIST` | comma-separated E.164 test numbers the sign-up page may call when `PUBLIC_CALLS=on` |
 
-If his kind + language has no agent id, `startCall` throws before any row is written. From the
-hourly cron that costs that week's call (`schedule.tick` records the slot first), so keep the ids
-of every language your elders use set.
+Agent ids are not env vars: `syncAgent` saves one row per character in the `characterAgents`
+table (`characterId`, `agentId`, `syncedAt`), and `startCall` reads it. If his character has no
+row yet, `startCall` throws before any row is written. From the hourly cron that costs that
+week's call (`schedule.tick` records the slot first), so sync every character first. Add a
+character: `../voice/README.md`.
+
+## Review generated posts (temporary page)
+
+Read every post as it would be published, before LinkedIn is connected:
+
+```bash
+npx convex env set POSTS_PAGE_KEY <long random string>   # off without it
+npx convex env get POSTS_PAGE_KEY                        # then open:
+# https://<deployment>.convex.site/posts?key=<that key>
+```
+
+Newest first, with the call's question and why the fact-check held a post. "Fact-check now"
+reruns the check (nothing is posted). Temporary: remove `postsPage.ts`, `lib/postsPage.ts` and the
+route in `http.ts` once posts are reviewed on LinkedIn.
 
 ## Try the after-call flow without a phone
 
@@ -83,12 +98,11 @@ are never duplicated, and the post is reused).
 For an elder who already did the onboarding call (his row has `stage: "active"` and a profile).
 `startCall` picks the kind by itself: onboarding until the profile is usable, then story.
 
-1. Story agent + preview-only posting (once):
+1. Agents + preview-only posting (once):
 
    ```bash
-   npx convex run cartesiaAgents:syncAgent '{"only":"story"}'   # first run prints the next line
-   npx convex env set CARTESIA_STORY_AGENT_ID <id>             # Spanish elders: '{"language":"es"}' -> ..._ES
-   npx convex env set AUTO_POST off                       # posts stay `pending`, nothing goes to LinkedIn
+   npx convex run cartesiaAgents:syncAgent   # same agent per character for onboarding and story calls
+   npx convex env set AUTO_POST off          # posts stay `pending`, nothing goes to LinkedIn
    ```
 
    Also needed: `OPENAI_API_KEY` (planning, memories, post, memory search).
@@ -107,7 +121,7 @@ For an elder who already did the onboarding call (his row has `stage: "active"` 
    ```
 
    `plan.question` (the call's one goal: a story that starts from it), `plan.memories` and
-   `dynamicVariables` are exactly what the story agent gets. An empty bank falls back to a default opening question (and schedules a
+   `dynamicVariables` (`first_name`, `goal`, `context`) are exactly what his character's agent gets. An empty bank falls back to a default opening question (and schedules a
    refresh), so run step 2 first for a real follow-up.
 
 4. Call him:
@@ -147,7 +161,7 @@ poll → `pipeline.processCall`. Unknown numbers get a polite goodbye and no row
 
    ```bash
    npx convex env set CARTESIA_TOOL_SECRET <long random string>
-   npx convex run cartesiaAgents:syncAgent '{"only":"inbound","assignNumber":true}'   # prints the next two lines
+   npx convex run cartesiaAgents:syncAgent '{"inbound":true,"assignNumber":true}'   # prints the next two lines
    npx convex env set CARTESIA_LOOKUP_TOOL_ID <id>
    npx convex env set CARTESIA_INBOUND_AGENT_ID <id>
    ```
@@ -274,9 +288,10 @@ npx convex run schedule:tick '{"now": 1792944000000}'   # Sunday 2026-10-25 09:0
 - `http.ts` and `crons.ts` must keep their default exports, even when empty.
 - Vector search (`ctx.vectorSearch`) only works inside actions.
 - Files with `"use node"` at the top may only export actions.
-- No public functions: every query, mutation and action is `internal*` (run them with
+- Only `signup.ts` is public (the sign-up page); everything else is `internal*` (run it with
   `npx convex run`). Public Convex functions are callable by anyone with the deployment URL;
-  the deleted v1 dashboard queries exposed call transcripts that way. Keep it that way.
+  the deleted v1 dashboard queries exposed call transcripts that way. Public functions return
+  ids and ok/reason only, never elder rows or transcripts.
 - v1 leftovers are deleted (`questions.ts`, `answers.ts`, `replies.ts`, `calls.ts`,
   `lib/auth.ts`); `elders.ts` keeps only `seed`. The v1 `questions`, `answers` and `replies`
   tables stay in `schema.ts` until they're empty.

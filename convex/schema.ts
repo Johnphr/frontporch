@@ -64,7 +64,15 @@ export default defineSchema({
     lastPreparedSlot: v.optional(v.string()), // "YYYY-MM-DDTHH" local slot already prepared
     lastCallSlot: v.optional(v.string()), // "YYYY-MM-DDTHH" local slot already called
     lastBankRefreshAt: v.optional(v.number()), // epoch ms, debounces question-bank refreshes
+    characterId: v.optional(v.string()), // who calls him (lib/characters.ts); missing = default for his language
   }).index("by_phone", ["phone"]),
+
+  // One Cartesia agent per character (lib/characters.ts), written by cartesiaAgents.syncAgent.
+  characterAgents: defineTable({
+    characterId: v.string(),
+    agentId: v.string(),
+    syncedAt: v.number(), // epoch ms
+  }).index("by_character", ["characterId"]),
 
   // v1 leftover (old "answer internet questions" product): no functions use it anymore.
   // Kept so a deploy can't fail on existing rows; drop the table once it's empty.

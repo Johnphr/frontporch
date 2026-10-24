@@ -149,20 +149,23 @@ export function lookupErrorResponse(): LookupResponse {
 }
 
 /**
- * Known caller: who to be, in which language, which call, and the same variables an outbound
- * call of that kind would send (onboarding: first_name + known_background; story: first_name,
- * profile, memories, feedback, question). Values are already "none"-filled strings.
+ * Known caller: who to be (his character), in which language, which call, and the same
+ * variables an outbound call of that kind sends to the character agents: first_name, goal and
+ * context (lib/prompts/agent.ts). Values are already "none"-filled strings.
  */
 export function knownCallerResponse(a: {
   kind: "onboarding" | "story";
   lang: CallLanguage;
+  /** His character (lib/characters.ts): who the inbound agent speaks as, and how. */
+  character: { name: string; personality?: string };
   variables: Record<string, string>;
 }): LookupResponse {
   const out: LookupResponse = {
     caller_known: "yes",
     call_kind: a.kind,
     language: a.lang,
-    speak_as: a.lang === "es" ? "Juanito" : "Pip",
+    speak_as: a.character.name,
+    persona: a.character.personality?.trim() || "none",
   };
   for (const [k, value] of Object.entries(a.variables)) out[k] = String(value);
   return clampResponse(out);
@@ -280,7 +283,7 @@ export function inboundPlanToMark(call: { direction?: string; plan?: unknown } |
 }
 
 /**
- * syncAgent for the inbound pieces: create only when asked ('{"only":"inbound"}'); a plain sync
+ * syncAgent for the inbound pieces: create only when asked ('{"inbound":true}'); a plain sync
  * updates only when BOTH ids are set (never creates a stray lookup tool), otherwise skips.
  */
 export function inboundSyncMode(mayCreate: boolean, agentId?: string, toolId?: string): "create" | "update" | "skip" {

@@ -7,6 +7,7 @@ import { v } from "convex/values";
 import { isE164 } from "./lib/inbound";
 import { isProfileUsable, normalizeProfile } from "./lib/onboarding";
 import { localParts, normalizeDay } from "./lib/schedule";
+import { isE164 } from "./lib/signupRules";
 
 /**
  * Add or update someone to call, for testing:

@@ -13,6 +13,7 @@ export type ElderV2 = {
   profile?: Profile;
   knownBackground?: string;
   linkedinUrl?: string;
+  characterId?: string;
 };
 
 function str(value: unknown): string | undefined {
@@ -33,6 +34,7 @@ export function asElderV2(doc: unknown): ElderV2 | null {
     ...(Object.keys(profile).length ? { profile } : {}),
     ...(str(d.knownBackground) ? { knownBackground: str(d.knownBackground) } : {}),
     ...(str(d.linkedinUrl) ? { linkedinUrl: str(d.linkedinUrl) } : {}),
+    ...(str(d.characterId) ? { characterId: str(d.characterId) } : {}),
   };
 }
 

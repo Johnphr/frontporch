@@ -2,14 +2,18 @@ import { httpRouter } from "convex/server";
 import { internal } from "./_generated/api";
 import { httpAction } from "./_generated/server";
 import { LOOKUP_PATH, lookupErrorResponse, parseLookupRequest, verifyBearer } from "./lib/inbound";
+import { servePostsPage } from "./postsPage";
 
-// Webhooks, served at https://<deployment>.convex.site. Cartesia call transcripts are polled
-// (cartesia.pollCall); the only route is the inbound agent's lookup_caller tool.
-// This file must keep a default-exported router. Env: CARTESIA_TOOL_SECRET.
+// Served at https://<deployment>.convex.site. Cartesia transcripts are polled (cartesia.pollCall)
+// until Cartesia ships call webhooks. Routes: the inbound agent's lookup_caller tool and the
+// temporary posts page. This file must keep a default-exported router. Env: CARTESIA_TOOL_SECRET.
 
 declare const process: { env: Record<string, string | undefined> };
 
 const http = httpRouter();
+
+// TEMPORARY: posts review page (convex/postsPage.ts). Remove with that file.
+http.route({ path: "/posts", method: "GET", handler: servePostsPage });
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });

@@ -48,7 +48,7 @@ import {
   type BackstopCall,
   type LookupResponse,
 } from "./lib/inbound";
-import { buildOnboardingVariables, callLanguage, firstName, planNextCall, type CallKind } from "./lib/onboarding";
+import { buildOnboardingVariables, callCharacter, firstName, planNextCall, type CallKind } from "./lib/onboarding";
 import { asElderV2 } from "./lib/v2Fields";
 
 declare const process: { env: Record<string, string | undefined> };
@@ -62,6 +62,7 @@ type ElderForLookup = {
   phone: string; // normalized E.164 (what matched)
   name: string;
   language?: string;
+  characterId?: string;
   stage?: "onboarding" | "active";
   profile?: Doc<"elders">["profile"];
   knownBackground?: string;
@@ -73,6 +74,7 @@ function forLookup(elder: Doc<"elders">, phone: string): ElderForLookup {
     phone,
     name: elder.name,
     language: elder.language,
+    characterId: elder.characterId,
     stage: elder.stage,
     profile: elder.profile,
     knownBackground: elder.knownBackground,
@@ -196,8 +198,11 @@ export const saveLookup = internalMutation({
 });
 
 /** Story variables when planning fails mid-call: enough for a warm, open conversation. */
+const FALLBACK_STORY_GOAL =
+  "Have a warm, open chat about their working life and hear one good story, in their own words, with concrete detail.";
+
 function fallbackStoryVariables(name: string, lang: "en" | "es"): Record<string, string> {
-  return templateVariables({ first_name: firstName(name, lang), profile: "", memories: "", feedback: "", question: "" });
+  return templateVariables({ first_name: firstName(name, lang), goal: FALLBACK_STORY_GOAL, context: "" });
 }
 
 type Verification =
@@ -254,7 +259,8 @@ export const handleLookup = internalAction({
     }
     const normalized = asElderV2(elder) ?? { _id: String(elder._id), name: elder.name };
     const kind: CallKind = planNextCall(normalized).kind;
-    const lang = callLanguage(elder.language);
+    const character = callCharacter(elder); // the same character an outbound call would use
+    const lang = character.language;
 
     let callId: Id<"calls"> | undefined;
     try {
@@ -286,7 +292,7 @@ export const handleLookup = internalAction({
       } else {
         variables = buildOnboardingVariables(elder, elder.knownBackground, lang);
       }
-      const response = knownCallerResponse({ kind, lang, variables });
+      const response = knownCallerResponse({ kind, lang, character, variables });
       if (callId) await ctx.runMutation(internal.inbound.saveLookup, { callId, plan, response });
       console.log(`inbound.handleLookup: elder ${elder._id} ${kind} (${lang})${callId ? ` call ${callId}` : ""}`);
       return response;
