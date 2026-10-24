@@ -149,14 +149,18 @@ still validate. Bookkeeping fields are written by code, never by hand.
 ```ts
 elders:   + stage?: "onboarding" | "active"       // missing = onboarding
           + timezone (IANA), callDay ("sunday"), callHour (0-23 local), linkedinUrl,
-          + profile?: { industry, specialty, careerSummary, topics[], storySeeds[], topicsToAvoid[] },
+          + profile?: { industry?, specialty?, careerSummary?, topics?[], storySeeds?[], topicsToAvoid?[] }
+            (all optional, as PR #7 defines it; merged over onboarding calls),
           + knownBackground
           // bookkeeping: lastPreparedSlot, lastCallSlot ("YYYY-MM-DDTHH" local),
           //              lastBankRefreshAt (debounces question-bank refreshes)
 
 calls:    callSid -> optional (v1 only)
-          + kind?: onboarding | story, cartesiaCallId?, plan? (CallPlan), summary?,
-            endReason?, pollAttempts?, processedAt?
+          status: queued | in_progress | ended | done | no_conversation | failed |
+                  poll_error | poll_timeout | process_failed   (PR #7 lifecycle)
+          + kind? ("onboarding" | "story"), cartesiaCallId?, summary?, endReason?, error?,
+            pollAttempts?, lastPolledAt?, processingAt? (claim, stale after 15 min),
+            processedAt? (set only on success), plan? (CallPlan, Brain)
           indexes by_cartesia, by_elder
 
 memories: elderId, callId?, kind, text, name?, status (active | resolved),
@@ -183,7 +187,7 @@ questionBank: Core: Brain (conversation.ts).
 similarity ≥ 0.85, or same-named person/place; two different names never merge),
 bumps `mentionCount`, keeps the more specific text, marks finished open threads
 resolved. A repeat run for a `callId` that already has memories is skipped
-(the pipeline also guards with `calls.processedAt`).
+(the pipeline also guards with its `processingAt` / `processedAt` claim).
 `search({ elderId, text, k, kinds?, includeResolved? })` → `{ _id, kind, text, name?, status, score }[]`.
 `listForElder({ elderId, kinds?, status?, limit? })` (newest first, no embeddings).
 `resolveThreads({ elderId, ids })`. Prompt text: `formatMemoriesForPrompt` in `lib/memoryText.ts`.
