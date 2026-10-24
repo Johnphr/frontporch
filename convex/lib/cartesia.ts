@@ -10,7 +10,9 @@
 export const CARTESIA_API = "https://api.cartesia.ai";
 export const CARTESIA_VERSION = "2026-08-14";
 export const DEFAULT_MODEL = "claude-haiku-4.5"; // in-call model; list: GET /agents/models
-export const RINGING_TIMEOUT_SECONDS = 30;
+// International calls (e.g. a US number to a Mexican mobile) can take 15-30 s just to connect; at
+// 30 s a call ended "no-answer" before his phone ever rang. 60 s = Twilio's own default.
+export const RINGING_TIMEOUT_SECONDS = 60;
 /** Silence is thinking (voice/conversation-guide.md rule 4): check in late, hang up much later. */
 export const INACTIVITY_CHECK_IN_SECS = 30;
 export const INACTIVITY_END_CALL_SECS = 120;
