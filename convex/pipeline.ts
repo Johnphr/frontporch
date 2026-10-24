@@ -1,150 +1,84 @@
-// Post-call pipeline. After a Cartesia call ends, cartesia.pollCall does:
-//   const turns = normalizeCartesiaTranscript(call.transcript)        (lib/cartesiaTranscript.ts)
-//   const callId = await ctx.runMutation(internal.pipeline.recordCallResult, {
-//     cartesiaCallId, elderId, kind, turns, summary, endReason })
-//   await ctx.scheduler.runAfter(0, internal.pipeline.processCall, { callId })
+// After a call ends (scheduled by cartesia.pollCall).
 //
-// processCall runs ONCE per call: it claims the calls row (sets processedAt) before
-// doing anything, so a retry or a second trigger is a no-op. To re-run on purpose
-// (e.g. after fixing a failed step), use pipeline.reprocessCall({ callId }).
+//   processCall({ callId }):
+//     1. claimProcessing: atomic, so two runs can't both process one call (a claim older
+//        than 15 min is assumed crashed and can be retaken)
+//     2. voicemail / no answer / under 30 words from him -> status `no_conversation`
+//     3. onboarding: llm.extractProfile (merged with what earlier calls learned) ->
+//        elders.profile; stage -> "active" once the profile is usable, else he gets
+//        another onboarding call. No post from onboarding (team default 3). Then a
+//        question-bank refresh is scheduled (best effort) so the first story call has one.
+//        story (slices 2-3), each step isolated (lib/planner.runSteps):
+//          memories  llm.extractKnowledge -> memories.addMany (+ resolve the open threads he
+//                    finished; only thread ids we sent are passed back)
+//          post      llm.writePost (may decline: no post) -> one posts row per call
+//                    (posts.by_call) -> linkedapi.createPost, scheduled only for a new row
+//          plan      conversation.refreshQuestionBank (scheduled)
+//     4. status `done` + processedAt; any error (or a failed story step) -> `process_failed`
+//        + error. A retry is safe: memories.addMany skips a callId it already has and the
+//        post row is reused, so no duplicate memories or second LinkedIn post.
 //
-// Steps (each isolated: one failure never stops the rest):
-//   1. memories    llm.extractKnowledge -> memories.addMany (+ resolve finished open threads)
-//   2. profile     onboarding: llm.extractProfile -> elders.profile; stage "active" once usable
-//      post        story call: llm.writePost (may decline) -> one posts row per call
-//                  -> linkedapi.createPost (scheduled; it has its own claim, no double posting)
-//   3. plan        conversation.refreshQuestionBank (scheduled)
-// Steps are skipped on voicemail / no answer / failed dials, or when he barely spoke
-// (a call that merely ended on silence or a hang-up still counts).
-// Returns a step report, visible in the Convex dashboard logs.
-//
+// Retry by hand: npx convex run pipeline:processCall '{"callId":"<id>"}'
 // Owner: Core: Brain.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { internalAction, internalMutation, internalQuery, type ActionCtx } from "./_generated/server";
+import { clip, isNoConversation, type Turn } from "./lib/cartesia";
 import { memoriesAddMany, memoriesListForElder, type MemoryDoc } from "./lib/dataRefs";
-import {
-  isNearSilentCall,
-  isNoConversation,
-  isUsableProfile,
-  processDecision,
-  runSteps,
-  type StepReport,
-} from "./lib/planner";
-import { asElderV2 } from "./lib/v2Fields";
-import { elderProfile } from "./schema";
+import { canClaimProcessing, finishPatch, isProfileUsable, mergeProfile, type Profile } from "./lib/onboarding";
+import { runSteps, type StepReport } from "./lib/planner";
 
-const turnValidator = v.object({ role: v.union(v.literal("pip"), v.literal("elder")), text: v.string() });
-const kindValidator = v.union(v.literal("onboarding"), v.literal("story"));
+const PROCESSABLE = new Set(["ended", "process_failed"]);
 
-// ---------- recording the call (called by cartesia.pollCall) ----------
-
-/**
- * Save a finished Cartesia call on its calls row (found by cartesiaCallId, created if
- * missing). Returns the callId to pass to processCall.
- */
-export const recordCallResult = internalMutation({
-  args: {
-    cartesiaCallId: v.string(),
-    elderId: v.id("elders"),
-    kind: kindValidator,
-    turns: v.array(turnValidator),
-    summary: v.optional(v.string()),
-    endReason: v.string(),
-  },
-  handler: async (ctx, r): Promise<Id<"calls">> => {
-    const existing = await ctx.db
-      .query("calls")
-      .withIndex("by_cartesia", (q) => q.eq("cartesiaCallId", r.cartesiaCallId))
-      .first();
-    if (existing && existing.elderId !== r.elderId) {
-      throw new Error(`Cartesia call ${r.cartesiaCallId} belongs to another elder`);
-    }
-    const fields = {
-      status: "completed",
-      kind: r.kind,
-      transcript: r.turns,
-      endReason: r.endReason,
-      ...(r.summary ? { summary: r.summary } : {}),
-    };
-    if (existing) {
-      await ctx.db.patch(existing._id, fields);
-      return existing._id;
-    }
-    return ctx.db.insert("calls", { elderId: r.elderId, cartesiaCallId: r.cartesiaCallId, ...fields });
-  },
-});
-
-// ---------- claim + helpers ----------
-
-type ClaimedCall = {
-  callId: Id<"calls">;
-  elderId: Id<"elders">;
-  kind: "onboarding" | "story";
-  turns: { role: string; text: string }[];
-  endReason: string;
-  cartesiaCallId?: string;
-};
-
-type ClaimResult = { ok: true; call: ClaimedCall } | { ok: false; reason: string };
-
-/** Atomic: read the call and set processedAt in one transaction, or say why not. */
-export const claimCall = internalMutation({
-  args: { callId: v.id("calls") },
-  handler: async (ctx, { callId }): Promise<ClaimResult> => {
-    const call = await ctx.db.get(callId);
-    const decision = processDecision(call);
-    if (decision.action === "skip" || !call) {
-      return { ok: false, reason: decision.action === "skip" ? decision.reason : "not found" };
-    }
-    await ctx.db.patch(callId, { processedAt: Date.now() });
-    return {
-      ok: true,
-      call: {
-        callId,
-        elderId: call.elderId,
-        kind: call.kind ?? "story",
-        turns: call.transcript,
-        endReason: call.endReason ?? "",
-        ...(call.cartesiaCallId ? { cartesiaCallId: call.cartesiaCallId } : {}),
-      },
-    };
-  },
-});
-
-/**
- * Deliberate re-run: clears processedAt and schedules processCall again. Memories
- * merge (addMany skips a callId it already has) and the post row is reused, so this
- * never creates a second LinkedIn post.
- */
-export const reprocessCall = internalMutation({
+export const claimProcessing = internalMutation({
   args: { callId: v.id("calls") },
   handler: async (ctx, { callId }) => {
     const call = await ctx.db.get(callId);
-    if (!call) throw new Error("Call not found");
-    await ctx.db.patch(callId, { processedAt: undefined });
-    await ctx.scheduler.runAfter(0, internal.pipeline.processCall, { callId });
-    return { scheduled: true };
+    if (!call) return { ok: false as const, reason: "Call not found" };
+    if (!PROCESSABLE.has(call.status)) return { ok: false as const, reason: `Call is "${call.status}"` };
+    const check = canClaimProcessing(call, Date.now());
+    if (!check.ok) return check;
+    const elder = await ctx.db.get(call.elderId);
+    if (!elder) return { ok: false as const, reason: "Elder not found" };
+    await ctx.db.patch(callId, { processingAt: Date.now() });
+    return {
+      ok: true as const,
+      call: { kind: call.kind, endReason: call.endReason, transcript: call.transcript },
+      elder: { _id: elder._id, profile: elder.profile, knownBackground: elder.knownBackground },
+    };
   },
 });
 
-export const getElderProfile = internalQuery({
-  args: { elderId: v.id("elders") },
-  handler: async (ctx, { elderId }) => {
-    const elder = asElderV2(await ctx.db.get(elderId));
-    return elder ? { profile: elder.profile ?? null, knownBackground: elder.knownBackground ?? null } : null;
+export const finishProcessing = internalMutation({
+  args: { callId: v.id("calls"), status: v.string(), error: v.optional(v.string()) },
+  handler: async (ctx, { callId, status, error }) => {
+    // Releases the claim (a failed run can be retried right away); keeps Cartesia's reason.
+    await ctx.db.patch(callId, finishPatch(status, error, Date.now()));
   },
 });
 
-/** Save the profile; he moves to story calls only once it's usable (else onboard again). */
+/** Merges inside the transaction, so two calls processed at once can't drop an update. */
 export const saveProfile = internalMutation({
-  args: { elderId: v.id("elders"), profile: elderProfile },
-  handler: async (ctx, { elderId, profile }): Promise<{ stage: "onboarding" | "active" }> => {
-    const stage = isUsableProfile(profile) ? "active" : "onboarding";
-    await ctx.db.patch(elderId, { profile, stage });
-    return { stage };
+  args: {
+    elderId: v.id("elders"),
+    extracted: v.object({
+      industry: v.optional(v.string()),
+      specialty: v.optional(v.string()),
+      careerSummary: v.optional(v.string()),
+      topics: v.optional(v.array(v.string())),
+      storySeeds: v.optional(v.array(v.string())),
+      topicsToAvoid: v.optional(v.array(v.string())),
+    }),
+  },
+  handler: async (ctx, { elderId, extracted }): Promise<{ usable: boolean }> => {
+    const elder = await ctx.db.get(elderId);
+    if (!elder) throw new Error("Elder not found");
+    const profile = mergeProfile(elder.profile, extracted);
+    const usable = isProfileUsable(profile);
+    await ctx.db.patch(elderId, { profile, stage: usable ? "active" : "onboarding" });
+    return { usable };
   },
 });
 
@@ -178,120 +112,136 @@ export const findPostForCall = internalQuery({
   },
 });
 
-// ---------- the pipeline ----------
-
-type ProcessResult =
-  | { callId: Id<"calls">; steps: StepReport[] }
-  | { callId: Id<"calls">; skipped: string };
+/** Story call steps (slices 2-3). Each step is isolated; the caller turns failures into process_failed. */
+async function runStoryCall(
+  ctx: ActionCtx,
+  callId: Id<"calls">,
+  elder: { _id: Id<"elders">; profile?: Profile },
+  turns: Turn[],
+): Promise<StepReport[]> {
+  const profile = elder.profile;
+  return runSteps([
+    {
+      step: "memories",
+      run: async () => {
+        let open: MemoryDoc[] = [];
+        try {
+          open = await ctx.runQuery(memoriesListForElder, {
+            elderId: elder._id,
+            kinds: ["open_thread"],
+            status: "active",
+            limit: 20,
+          });
+        } catch {
+          // memories.listForElder unavailable: extract without open threads
+        }
+        const knowledge = await ctx.runAction(internal.llm.extractKnowledge, {
+          turns,
+          ...(profile ? { profile } : {}),
+          openThreads: open.map((m) => ({ id: m._id, text: m.text })),
+        });
+        // Only ids we actually sent: a garbled id from the model would fail
+        // addMany's v.id("memories") validator and lose the whole batch.
+        const openIds = new Map(open.map((m) => [String(m._id), m._id]));
+        const resolveThreadIds = knowledge.resolvedThreadIds
+          .map((id) => openIds.get(id))
+          .filter((id): id is Id<"memories"> => id !== undefined);
+        if (knowledge.items.length === 0 && resolveThreadIds.length === 0) return "nothing new";
+        const saved = await ctx.runAction(memoriesAddMany, {
+          elderId: elder._id,
+          callId,
+          items: knowledge.items,
+          ...(resolveThreadIds.length ? { resolveThreadIds } : {}),
+        });
+        return `${saved.inserted} new, ${saved.merged} merged, ${saved.resolved} threads resolved`;
+      },
+    },
+    {
+      step: "post",
+      run: async () => {
+        // A retry reuses the call's post instead of writing another.
+        const already = await ctx.runQuery(internal.pipeline.findPostForCall, { callId });
+        if (already) return `post ${already.postId} already exists (${already.status})`;
+        const saved = await ctx.runQuery(internal.conversation.getSavedFeedback, { elderId: elder._id });
+        const feedback = saved?.resonated || saved?.feedbackLine || "";
+        const post = await ctx.runAction(internal.llm.writePost, {
+          turns,
+          ...(profile ? { profile } : {}),
+          ...(feedback ? { feedback } : {}),
+        });
+        if (post.skip) return `no post: ${post.reason}`;
+        const { postId, created } = await ctx.runMutation(internal.pipeline.insertPost, {
+          elderId: elder._id,
+          callId,
+          text: post.text,
+        });
+        if (!created) return `post ${postId} already exists`;
+        // Posting runs on its own (guard + LinkedAPI + polling) so it can't hold up the rest.
+        await ctx.scheduler.runAfter(0, internal.linkedapi.createPost, { postId });
+        return `post ${postId} scheduled`;
+      },
+    },
+    {
+      step: "plan",
+      run: async () => {
+        await ctx.scheduler.runAfter(0, internal.conversation.refreshQuestionBank, { elderId: elder._id });
+        return "question bank refresh scheduled";
+      },
+    },
+  ]);
+}
 
 export const processCall = internalAction({
   args: { callId: v.id("calls") },
-  handler: async (ctx, { callId }): Promise<ProcessResult> => {
-    const claim: ClaimResult = await ctx.runMutation(internal.pipeline.claimCall, { callId });
-    if (!claim.ok) {
-      console.log(`processCall ${callId} skipped: ${claim.reason}`);
-      return { callId, skipped: claim.reason };
+  handler: async (ctx, { callId }): Promise<{ status: string; reason?: string }> => {
+    const claim = await ctx.runMutation(internal.pipeline.claimProcessing, { callId });
+    if (!claim.ok) return { status: "skipped", reason: claim.reason };
+    const { call, elder } = claim;
+
+    try {
+      const turns = call.transcript as Turn[];
+      if (isNoConversation(call.endReason, turns)) {
+        await ctx.runMutation(internal.pipeline.finishProcessing, { callId, status: "no_conversation" });
+        console.log(`pipeline.processCall: call ${callId} no_conversation (${call.endReason ?? "few words"})`);
+        return { status: "no_conversation" };
+      }
+      if (call.kind === "story") {
+        const steps = await runStoryCall(ctx, callId, elder, turns);
+        const failed = steps.filter((s) => s.status === "failed");
+        // Step details can quote the model or his words: keep only step names in errors.
+        const error = failed.length ? `story steps failed: ${failed.map((s) => s.step).join(", ")}` : undefined;
+        await ctx.runMutation(internal.pipeline.finishProcessing, {
+          callId,
+          status: failed.length ? "process_failed" : "done",
+          ...(error ? { error } : {}),
+        });
+        console.log(`pipeline.processCall: call ${callId} story ${failed.length ? "process_failed" : "done"}`, JSON.stringify(steps.map((s) => `${s.step}:${s.status}`)));
+        return failed.length ? { status: "process_failed", reason: error } : { status: "done" };
+      }
+      if (call.kind !== "onboarding") throw new Error(`Unknown call kind "${call.kind ?? "unknown"}"`);
+
+      const extracted: Profile = await ctx.runAction(internal.llm.extractProfile, {
+        turns: call.transcript,
+        knownBackground: elder.knownBackground,
+        existingProfile: elder.profile,
+      });
+      const { usable } = await ctx.runMutation(internal.pipeline.saveProfile, { elderId: elder._id, extracted });
+      await ctx.runMutation(internal.pipeline.finishProcessing, { callId, status: "done" });
+      if (usable) {
+        // Best effort: have a question bank ready for his first story call.
+        try {
+          await ctx.scheduler.runAfter(0, internal.conversation.refreshQuestionBank, { elderId: elder._id });
+        } catch {
+          console.warn(`pipeline.processCall: call ${callId} bank refresh not scheduled`);
+        }
+      }
+      console.log(`pipeline.processCall: call ${callId} done (profile ${usable ? "usable, stage active" : "thin, onboarding again"})`);
+      return { status: "done" };
+    } catch (err) {
+      const error = clip(err instanceof Error ? err.message : String(err));
+      await ctx.runMutation(internal.pipeline.finishProcessing, { callId, status: "process_failed", error });
+      console.warn(`pipeline.processCall: call ${callId} process_failed`);
+      return { status: "process_failed", reason: error };
     }
-    const call = claim.call;
-    const skipContent = isNoConversation(call.endReason)
-      ? `no conversation (${call.endReason})`
-      : isNearSilentCall(call.turns)
-        ? "he barely spoke"
-        : false;
-
-    const elderInfo = await ctx.runQuery(internal.pipeline.getElderProfile, { elderId: call.elderId });
-    const profile = elderInfo?.profile ?? undefined;
-
-    const steps = await runSteps([
-      {
-        step: "memories",
-        skip: skipContent,
-        run: async () => {
-          let open: MemoryDoc[] = [];
-          try {
-            open = await ctx.runQuery(memoriesListForElder, {
-              elderId: call.elderId,
-              kinds: ["open_thread"],
-              status: "active",
-              limit: 20,
-            });
-          } catch {
-            // memories.listForElder unavailable: extract without open threads
-          }
-          const knowledge = await ctx.runAction(internal.llm.extractKnowledge, {
-            turns: call.turns,
-            ...(profile ? { profile } : {}),
-            openThreads: open.map((m) => ({ id: m._id, text: m.text })),
-          });
-          // Only ids we actually sent: a garbled id from the model would fail
-          // addMany's v.id("memories") validator and lose the whole batch.
-          const openIds = new Map(open.map((m) => [String(m._id), m._id]));
-          const resolveThreadIds = knowledge.resolvedThreadIds
-            .map((id) => openIds.get(id))
-            .filter((id): id is Id<"memories"> => id !== undefined);
-          if (knowledge.items.length === 0 && resolveThreadIds.length === 0) return "nothing new";
-          const saved = await ctx.runAction(memoriesAddMany, {
-            elderId: call.elderId,
-            callId,
-            items: knowledge.items,
-            ...(resolveThreadIds.length ? { resolveThreadIds } : {}),
-          });
-          return `${saved.inserted} new, ${saved.merged} merged, ${saved.resolved} threads resolved`;
-        },
-      },
-      call.kind === "onboarding"
-        ? {
-            step: "profile",
-            skip: skipContent,
-            run: async () => {
-              const newProfile = await ctx.runAction(internal.llm.extractProfile, {
-                turns: call.turns,
-                ...(elderInfo?.knownBackground ? { knownBackground: elderInfo.knownBackground } : {}),
-              });
-              const { stage } = await ctx.runMutation(internal.pipeline.saveProfile, {
-                elderId: call.elderId,
-                profile: newProfile,
-              });
-              return `${newProfile.industry || "?"} / ${newProfile.specialty || "?"} -> stage ${stage}`;
-            },
-          }
-        : {
-            step: "post",
-            skip: skipContent,
-            run: async () => {
-              // A re-run (reprocessCall) reuses the call's post instead of writing another.
-              const already = await ctx.runQuery(internal.pipeline.findPostForCall, { callId });
-              if (already) return `post ${already.postId} already exists (${already.status})`;
-              const saved = await ctx.runQuery(internal.conversation.getSavedFeedback, { elderId: call.elderId });
-              const feedback = saved?.resonated || saved?.feedbackLine || "";
-              const post = await ctx.runAction(internal.llm.writePost, {
-                turns: call.turns,
-                ...(profile ? { profile } : {}),
-                ...(feedback ? { feedback } : {}),
-              });
-              if (post.skip) return `no post: ${post.reason}`;
-              const { postId, created } = await ctx.runMutation(internal.pipeline.insertPost, {
-                elderId: call.elderId,
-                callId,
-                text: post.text,
-              });
-              if (!created) return `post ${postId} already exists`;
-              // Posting runs on its own (guard + LinkedAPI + polling) so it can't hold up the rest.
-              await ctx.scheduler.runAfter(0, internal.linkedapi.createPost, { postId });
-              return `post ${postId} scheduled`;
-            },
-          },
-      {
-        step: "plan",
-        skip: skipContent,
-        run: async () => {
-          await ctx.scheduler.runAfter(0, internal.conversation.refreshQuestionBank, { elderId: call.elderId });
-          return "question bank refresh scheduled";
-        },
-      },
-    ]);
-
-    console.log(`processCall ${callId} (${call.cartesiaCallId ?? "no cartesia id"})`, JSON.stringify(steps));
-    return { callId, steps };
   },
 });

@@ -35,12 +35,13 @@ export const memoryKind = v.union(
 );
 
 export const elderProfile = v.object({
-  industry: v.string(),
-  specialty: v.string(),
-  careerSummary: v.string(),
-  topics: v.array(v.string()), // what he can talk about
-  storySeeds: v.array(v.string()), // stories he mentioned, for later calls
-  topicsToAvoid: v.array(v.string()),
+  // Same shape as PR #7's elders.profile: every field optional (filled over onboarding calls).
+  industry: v.optional(v.string()),
+  specialty: v.optional(v.string()),
+  careerSummary: v.optional(v.string()),
+  topics: v.optional(v.array(v.string())), // what he can talk about
+  storySeeds: v.optional(v.array(v.string())), // stories he mentioned, for later calls
+  topicsToAvoid: v.optional(v.array(v.string())),
 });
 
 export default defineSchema({
@@ -50,15 +51,15 @@ export default defineSchema({
     expertise: v.array(v.string()),
     language: v.string(), // BCP-47, e.g. en-US, es-MX
     bio: v.optional(v.string()),
-    // ---- v2 (Data): all optional so v1 rows still validate ----
+    // ---- v2 (onboarding slice, PR #7) ----
+    stage: v.optional(v.union(v.literal("onboarding"), v.literal("active"))), // missing = onboarding
+    linkedinUrl: v.optional(v.string()),
+    knownBackground: v.optional(v.string()), // cached apify.scrapeProfile result
+    profile: v.optional(elderProfile),
+    // ---- v2 (Data): scheduling + bookkeeping, all optional ----
     timezone: v.optional(v.string()), // IANA, e.g. America/Los_Angeles
     callDay: v.optional(v.string()), // sunday..saturday, his local time
     callHour: v.optional(v.number()), // 0-23, his local time
-    linkedinUrl: v.optional(v.string()), // his profile, for apify.ts
-    stage: v.optional(v.union(v.literal("onboarding"), v.literal("active"))),
-    profile: v.optional(elderProfile), // filled by pipeline after onboarding
-    knownBackground: v.optional(v.string()), // apify.scrapeProfile output
-    // bookkeeping: schedule.ts / engagement.ts
     lastPreparedSlot: v.optional(v.string()), // "YYYY-MM-DDTHH" local slot already prepared
     lastCallSlot: v.optional(v.string()), // "YYYY-MM-DDTHH" local slot already called
     lastBankRefreshAt: v.optional(v.number()), // epoch ms, debounces question-bank refreshes
@@ -83,16 +84,22 @@ export default defineSchema({
     callSid: v.optional(v.string()), // v1 Twilio calls only
     elderId: v.id("elders"),
     questionId: v.optional(v.id("questions")),
-    status: v.string(), // queued | in-progress | completed | failed | ...
+    // v2: queued | in_progress | ended | done | no_conversation | failed |
+    //     poll_error | poll_timeout | process_failed
+    status: v.string(),
     transcript: v.array(v.object({ role: v.string(), text: v.string() })),
-    // ---- v2 (Data): all optional so v1 rows still validate ----
-    kind: v.optional(v.union(v.literal("onboarding"), v.literal("story"))),
-    cartesiaCallId: v.optional(v.string()), // Cartesia Managed Agents call id
+    // ---- v2 (onboarding slice, PR #7) ----
+    kind: v.optional(v.string()), // onboarding | story
+    cartesiaCallId: v.optional(v.string()),
+    summary: v.optional(v.string()),
+    endReason: v.optional(v.string()),
+    error: v.optional(v.string()),
+    pollAttempts: v.optional(v.number()),
+    lastPolledAt: v.optional(v.number()), // epoch ms
+    processingAt: v.optional(v.number()), // epoch ms; claim, stale after 15 min
+    processedAt: v.optional(v.number()), // epoch ms; set only on success
+    // ---- v2 (Brain) ----
     plan: v.optional(v.any()), // CallPlan from conversation.planNextCall, for debugging
-    summary: v.optional(v.string()), // from GET /agents/calls/{id}
-    endReason: v.optional(v.string()), // Cartesia end_reason
-    pollAttempts: v.optional(v.number()), // cartesia.pollCall bookkeeping
-    processedAt: v.optional(v.number()), // epoch ms; pipeline.processCall ran (idempotency)
   })
     .index("by_sid", ["callSid"])
     .index("by_cartesia", ["cartesiaCallId"])

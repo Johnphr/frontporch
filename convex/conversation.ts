@@ -8,12 +8,16 @@
 //                                     audience questions (Apify) and recent topics in
 //                                     his field (Claude web search), in parallel, then
 //                                     schedules a refresh with them.
-//   planNextCall({ elderId })         at call time (cartesia.startCall) ->
-//                                     { plan, dynamicVariables }: send dynamicVariables
-//                                     as Cartesia dynamic_variables, pick the agent by
-//                                     plan.kind. Fast: never waits on a refresh or a
-//                                     Claude call; reuses the saved feedback line.
-//   markPlanUsed({ elderId, bankId, callId })   cartesia.startCall, once the call is placed.
+//   planNextCall({ elderId })         at call time -> { plan, dynamicVariables }. The
+//                                     kind comes from PR #7's lib/onboarding.planNextCall
+//                                     (cartesia.reserveCall uses the same rule). Onboarding:
+//                                     PR #7's buildOnboardingVariables (first_name,
+//                                     known_background). Story: question bank + memories +
+//                                     avoid topics + saved feedback line, as Cartesia
+//                                     dynamic_variables for voice/prompts/story-call.md.
+//                                     Fast: never waits on a refresh or a Claude call.
+//                                     cartesia.startCall's story branch (slice 2) calls it.
+//   markPlanUsed({ elderId, bankId, callId })   cartesia.startCall, once a story call is placed.
 //
 // Ranking rules live in lib/planner.ts (pure, tested). Owner: Core: Brain.
 
@@ -36,8 +40,9 @@ import {
   type CallPlan,
   type Candidate,
   type CandidateSource,
-  type PromptVariables,
 } from "./lib/planner";
+import { templateVariables } from "./lib/cartesia";
+import { buildOnboardingVariables } from "./lib/onboarding";
 import { asElderV2, isOnboarding, type ElderV2 } from "./lib/v2Fields";
 
 const bankItemValidator = v.object({
@@ -192,10 +197,6 @@ export const markPlanUsed = internalMutation({
   },
 });
 
-export const saveKnownBackground = internalMutation({
-  args: { elderId: v.id("elders"), knownBackground: v.string() },
-  handler: async (ctx, { elderId, knownBackground }) => {
-    await ctx.db.patch(elderId, { knownBackground });
   },
 });
 
@@ -385,7 +386,7 @@ export const prepareCall = internalAction({
 });
 
 /** cartesia.startCall sends dynamicVariables as `dynamic_variables` on POST /agents/calls. */
-type PlanResult = { plan: CallPlan; dynamicVariables: PromptVariables };
+type PlanResult = { plan: CallPlan; dynamicVariables: Record<string, string> };
 
 export const planNextCall = internalAction({
   args: { elderId: v.id("elders") },
@@ -404,20 +405,11 @@ export const planNextCall = internalAction({
     }
 
     if (isOnboarding(elder)) {
-      let knownBackground = elder.knownBackground ?? "";
-      if (!knownBackground && elder.linkedinUrl) {
-        try {
-          const scraped = await ctx.runAction(internal.apify.scrapeProfile, { elderId });
-          knownBackground = scraped.knownBackground;
-          if (knownBackground) {
-            await ctx.runMutation(internal.conversation.saveKnownBackground, { elderId, knownBackground });
-          }
-        } catch {
-          // No background is fine: Pip just starts from scratch.
-        }
-      }
+      // Same variables cartesia.startCall sends today (it also scrapes and caches the
+      // LinkedIn background before the call, so we only read the cached value here).
+      const knownBackground = elder.knownBackground ?? "";
       const plan = buildCallPlan({ kind: "onboarding", knownBackground });
-      return { plan, dynamicVariables: toPromptVariables(plan, elder, { avoid: avoidMemories }) };
+      return { plan, dynamicVariables: buildOnboardingVariables(elder, knownBackground) };
     }
 
     if (context.queued.length === 0) {
@@ -446,6 +438,6 @@ export const planNextCall = internalAction({
     const feedbackLine = context.feedbackLine;
 
     const plan = buildCallPlan({ kind: "story", bank, memories, feedbackLine });
-    return { plan, dynamicVariables: toPromptVariables(plan, elder, { avoid: avoidMemories }) };
+    return { plan, dynamicVariables: templateVariables(toPromptVariables(plan, elder, { avoid: avoidMemories })) };
   },
 });

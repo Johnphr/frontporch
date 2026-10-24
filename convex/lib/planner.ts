@@ -6,8 +6,7 @@
 // ranking is predictable and easy to tune.
 
 import { formatMemoriesForPrompt } from "./memoryText.ts";
-
-export type Turn = { role: string; text: string };
+import type { Profile } from "./onboarding.ts";
 
 export type CandidateSource = "open_thread" | "reader" | "recent_topic" | "audience" | "memory" | "profile";
 
@@ -267,24 +266,8 @@ export function formatMemoriesBrief(memories: MemoryLike[], opts: { max?: number
   return formatMemoriesForPrompt(memories, { max: opts.max ?? 8 });
 }
 
-export type ElderProfile = {
-  industry: string;
-  specialty: string;
-  careerSummary: string;
-  /** what he can talk about */
-  topics: string[];
-  /** stories he mentioned, for later calls */
-  storySeeds: string[];
-  topicsToAvoid: string[];
-};
-
-/** Enough to run story calls: we know his field and his career arc. Otherwise onboard again. */
-export function isUsableProfile(profile: Partial<ElderProfile> | null | undefined): boolean {
-  return Boolean(profile?.industry?.trim() && profile?.careerSummary?.trim());
-}
-
 /** Profile text for prompts. `extraAvoid` (avoid memories from later calls) is always included. */
-export function formatProfile(profile: ElderProfile | undefined | null, extraAvoid: string[] = []): string {
+export function formatProfile(profile: Profile | undefined | null, extraAvoid: string[] = []): string {
   const avoid = mergeAvoid(profile?.topicsToAvoid ?? [], extraAvoid);
   const topics = (profile?.topics ?? []).filter((t) => t?.trim());
   const parts = [
@@ -313,7 +296,7 @@ export function mergeAvoid(...lists: string[][]): string[] {
   return out;
 }
 
-// ---------- call plan + Cartesia dynamic variables ----------
+// ---------- call plan + Cartesia dynamic variables (story call) ----------
 
 export type CallKind = "onboarding" | "story";
 
@@ -370,7 +353,10 @@ export function buildCallPlan(input: {
   };
 }
 
-/** The {{variables}} used by voice/prompts/onboarding.md and story-call.md (Cartesia dynamic_variables). */
+/**
+ * The {{variables}} in voice/prompts/story-call.md (Cartesia dynamic_variables).
+ * Onboarding variables are PR #7's: lib/onboarding.buildOnboardingVariables.
+ */
 export const PROMPT_VARIABLES = [
   "firstName",
   "language",
@@ -379,7 +365,6 @@ export const PROMPT_VARIABLES = [
   "feedback",
   "mainQuestion",
   "threads",
-  "knownBackground",
 ] as const;
 
 export type PromptVariables = Record<(typeof PROMPT_VARIABLES)[number], string>;
@@ -404,10 +389,10 @@ export function languageName(code: string | undefined): string {
   return LANGUAGE_NAMES[base] ?? (code || "English");
 }
 
-/** Every variable is always present (empty string when unused) so both agents get a full set. */
+/** Every story variable is always present (empty string when unused; cartesia's templateVariables turns "" into "none"). */
 export function toPromptVariables(
   plan: CallPlan,
-  elder: { name: string; language?: string; profile?: ElderProfile | null },
+  elder: { name: string; language?: string; profile?: Profile | null },
   opts: { avoid?: string[] } = {},
 ): PromptVariables {
   return {
@@ -418,53 +403,12 @@ export function toPromptVariables(
     feedback: plan.feedback ?? "",
     mainQuestion: plan.mainQuestion ?? "",
     threads: plan.threads.map((t) => `- ${t}`).join("\n"),
-    knownBackground: plan.knownBackground ?? "",
   };
 }
 
-// ---------- call checks + pipeline step runner ----------
-
-/** Fewer than `minWords` words from him: not enough to write anything from. */
-export function isNearSilentCall(turns: Turn[], minWords = 25): boolean {
-  let words = 0;
-  for (const t of turns ?? []) {
-    const role = (t.role ?? "").toLowerCase();
-    if (role !== "elder" && role !== "user" && role !== "customer") continue;
-    words += (t.text ?? "").split(/\s+/).filter(Boolean).length;
-    if (words >= minWords) return false;
-  }
-  return true;
-}
-
-/**
- * The call never became a conversation: voicemail, nobody picked up, busy, or the dial
- * failed. Cartesia `end_reason` values covered: voicemail_detected, dial_no_answer,
- * dial_busy, dial_failed, dial_timeout, concurrency_limit, config_error.
- * Hang-ups, silence/inactivity, max_duration and mid-call errors are NOT here: he may
- * have talked for 20 minutes first; isNearSilentCall decides whether there's enough.
- */
-export function isNoConversation(endReason: string | undefined): boolean {
-  return /voicemail|no[-_ ]?answer|did[-_ ]not[-_ ]answer|busy|failed[-_ ]to[-_ ]connect|dial[-_ ](failed|timeout)|concurrency[-_ ]limit|config[-_ ]error/i.test(
-    endReason ?? "",
-  );
-}
-
-export type ProcessDecision =
-  | { action: "process" }
-  | { action: "skip"; reason: "already processed" | "call not finished" | "not found" };
-
-/**
- * Should pipeline.processCall run for this calls row? Runs once per call: processedAt
- * is the claim (set in the same mutation), so a retry or a second trigger is a no-op.
- */
-export function processDecision(
-  call: { processedAt?: number; status?: string } | null | undefined,
-): ProcessDecision {
-  if (!call) return { action: "skip", reason: "not found" };
-  if (typeof call.processedAt === "number") return { action: "skip", reason: "already processed" };
-  if (call.status !== "completed" && call.status !== "failed") return { action: "skip", reason: "call not finished" };
-  return { action: "process" };
-}
+// ---------- pipeline step runner ----------
+// (No-conversation + claim checks are PR #7's: lib/cartesia.isNoConversation,
+// lib/onboarding.canClaimProcessing.)
 
 export type StepStatus = "ok" | "skipped" | "failed";
 export type StepReport = { step: string; status: StepStatus; detail?: string };

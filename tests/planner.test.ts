@@ -12,16 +12,12 @@ import {
   filterTopicsByUrls,
   formatMemoriesBrief,
   formatProfile,
-  isNearSilentCall,
-  isNoConversation,
-  isUsableProfile,
   languageName,
   normalizePlannedCandidates,
   normalizePostDraft,
   normalizeTopicKey,
   overlapsAvoid,
   overlapsTopic,
-  processDecision,
   rankCandidates,
   runSteps,
   startsWithHook,
@@ -187,12 +183,10 @@ test("buildCallPlan: empty bank falls back; onboarding carries background only",
   assert.deepEqual(onboarding, { kind: "onboarding", threads: [], memories: [], knownBackground: "30 years at Golden Crust" });
 });
 
-test("toPromptVariables covers exactly the {{variables}} in the agent prompts (Cartesia dynamic_variables)", () => {
+test("toPromptVariables covers exactly the {{variables}} in the story prompt (Cartesia dynamic_variables)", () => {
   const used = new Set<string>();
-  for (const file of ["onboarding.md", "story-call.md"]) {
-    const text = readFileSync(new URL(`../voice/prompts/${file}`, import.meta.url), "utf8");
-    for (const m of text.matchAll(/\{\{(\w+)\}\}/g)) used.add(m[1]);
-  }
+  const text = readFileSync(new URL("../voice/prompts/story-call.md", import.meta.url), "utf8");
+  for (const m of text.matchAll(/\{\{(\w+)\}\}/g)) used.add(m[1]);
   assert.deepEqual([...used].sort(), [...PROMPT_VARIABLES].sort());
 
   const plan = buildCallPlan({
@@ -217,7 +211,6 @@ test("toPromptVariables covers exactly the {{variables}} in the agent prompts (C
   assert.match(vars.profile, /Industry: Baking\./);
   assert.match(vars.profile, /Topics to avoid: the strike\./);
   assert.equal(vars.feedback, "");
-  assert.equal(vars.knownBackground, "");
 });
 
 test("languageName maps codes and keeps unknown ones", () => {
@@ -225,34 +218,6 @@ test("languageName maps codes and keeps unknown ones", () => {
   assert.equal(languageName("pt_BR"), "Portuguese");
   assert.equal(languageName("tl-PH"), "tl-PH");
   assert.equal(languageName(undefined), "English");
-});
-
-test("isNearSilentCall counts only his words", () => {
-  const story = fixture<{ turns: { role: string; text: string }[] }>("story_call.json");
-  assert.equal(isNearSilentCall(story.turns), false);
-  assert.equal(
-    isNearSilentCall([
-      { role: "pip", text: "Hello? ".repeat(40) },
-      { role: "elder", text: "Who is this?" },
-    ]),
-    true,
-  );
-  assert.equal(isNearSilentCall([]), true);
-});
-
-test("isNoConversation matches voicemail-like endings", () => {
-  assert.equal(isNoConversation("voicemail"), true);
-  assert.equal(isNoConversation("customer-did-not-answer"), true);
-  assert.equal(isNoConversation("no_answer"), true);
-  assert.equal(isNoConversation("customer-ended-call"), false);
-  assert.equal(isNoConversation(undefined), false);
-});
-
-test("a call that ended on silence still counts when he talked", () => {
-  const story = fixture<{ turns: { role: string; text: string }[] }>("story_call.json");
-  assert.equal(isNoConversation("silence-timed-out"), false);
-  assert.equal(isNoConversation("silence_timeout"), false);
-  assert.equal(isNearSilentCall(story.turns), false);
 });
 
 test("recently used topics are never repeated, even by readers or open threads", () => {
@@ -375,7 +340,7 @@ test("filterTopicsByUrls drops topics with invented links", () => {
   assert.deepEqual(kept.map((t) => t.title), ["a"]);
 });
 
-test("asElderV2 reads v1 and v2 rows; onboarding until a profile exists", () => {
+test("asElderV2 reads v1 and v2 rows; the call kind follows PR #7's rule", () => {
   const v1 = asElderV2({ _id: "e1", name: "Walter", phone: "+1", expertise: [], language: "en-US" })!;
   assert.equal(v1.profile, undefined);
   assert.equal(isOnboarding(v1), true);
@@ -386,36 +351,12 @@ test("asElderV2 reads v1 and v2 rows; onboarding until a profile exists", () => 
     profile: { industry: "Baking", specialty: "", careerSummary: "", topics: ["bread", ""], topicsToAvoid: ["x", 3] },
     knownBackground: "Golden Crust",
   })!;
-  assert.deepEqual(v2.profile, {
-    industry: "Baking",
-    specialty: "",
-    careerSummary: "",
-    topics: ["bread"],
-    storySeeds: [],
-    topicsToAvoid: ["x"],
-  });
-  assert.equal(isOnboarding(v2), false);
+  // normalizeProfile (PR #7) drops empty fields and non-strings
+  assert.deepEqual(v2.profile, { industry: "Baking", topics: ["bread"], topicsToAvoid: ["x"] });
+  assert.equal(isOnboarding(v2), false); // stage active + usable profile (industry or specialty)
   assert.equal(isOnboarding({ ...v2, stage: "onboarding" }), true);
+  assert.equal(isOnboarding({ ...v2, stage: undefined }), true); // missing stage = onboarding
   assert.equal(asElderV2(null), null);
-  // No stage: onboarding until the profile is usable (industry + career summary).
-  const noStage = asElderV2({ _id: "e3", name: "W", profile: { industry: "Baking", careerSummary: "" } })!;
-  assert.equal(isOnboarding(noStage), true);
-  const usable = asElderV2({ _id: "e4", name: "W", profile: { industry: "Baking", careerSummary: "Ran a bakery for 30 years." } })!;
-  assert.equal(isOnboarding(usable), false);
-});
-
-test("isUsableProfile needs his field and career arc", () => {
-  assert.equal(isUsableProfile(null), false);
-  assert.equal(isUsableProfile({ industry: "Baking", careerSummary: "  " }), false);
-  assert.equal(isUsableProfile({ industry: "Baking", careerSummary: "Ran a bakery." }), true);
-});
-
-test("processDecision: runs once per finished call", () => {
-  assert.deepEqual(processDecision(null), { action: "skip", reason: "not found" });
-  assert.deepEqual(processDecision({ status: "completed" }), { action: "process" });
-  assert.deepEqual(processDecision({ status: "failed" }), { action: "process" });
-  assert.deepEqual(processDecision({ status: "completed", processedAt: 123 }), { action: "skip", reason: "already processed" });
-  assert.deepEqual(processDecision({ status: "queued" }), { action: "skip", reason: "call not finished" });
 });
 
 test("formatProfile lists his topics and the avoid line", () => {
