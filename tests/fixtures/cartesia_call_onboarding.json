@@ -1,0 +1,24 @@
+{
+  "_note": "SYNTHETIC: shaped like GET /agents/calls/{id} in Cartesia's docs. Replace with a real (phone-redacted) call after the first test call.",
+  "id": "ac_test_onboarding_1",
+  "agent_id": "agent_test",
+  "status": "completed",
+  "start_time": "2026-10-24T17:00:00Z",
+  "end_time": "2026-10-24T17:12:30Z",
+  "transcript": [
+    { "role": "assistant", "text": "Hi Walter, this is Pip, an AI assistant from Front Porch.", "start_timestamp": 0.5, "end_timestamp": 4.1 },
+    { "role": "assistant", "text": "Tell me about your very first job.", "start_timestamp": 4.2, "end_timestamp": 6.0 },
+    { "role": "user", "text": "Well, I started at Boeing in 1968,", "start_timestamp": 7.0, "end_timestamp": 9.5 },
+    { "role": "user", "text": "riveting wing panels on the 747 line.", "start_timestamp": 9.6, "end_timestamp": 12.0 },
+    { "role": "assistant", "text": "", "start_timestamp": 12.5, "end_timestamp": 12.5, "tool_calls": [{ "name": "end_call", "arguments": {}, "id": "tc1", "result": "" }] },
+    { "role": "system", "text": "call transferred", "start_timestamp": 13.0, "end_timestamp": 13.0 },
+    { "role": "assistant", "text": "What did that teach you?", "start_timestamp": 13.1, "end_timestamp": 14.4 },
+    { "role": "user", "text": "  That you check your own work twice, because somebody's going to fly on it. My foreman, Eddie, would run his thumb over every rivet.  ", "start_timestamp": 15.0, "end_timestamp": 24.8 },
+    { "role": "moderator", "text": "unknown role, should be dropped", "start_timestamp": 25.0, "end_timestamp": 25.0 }
+  ],
+  "telephony_params": { "to": "+15555550123", "from": "+15555550100", "direction": "outbound" },
+  "telephony_account_type": "cartesia",
+  "summary": "Walter described starting at Boeing in 1968 on the 747 line and the lesson of checking your own work.",
+  "end_reason": "agent_hangup",
+  "dynamic_variables": { "first_name": "Walter" }
+}
