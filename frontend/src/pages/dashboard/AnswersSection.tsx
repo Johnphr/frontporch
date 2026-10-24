@@ -5,9 +5,14 @@ import { backend } from "../../backend";
 import { useBackendAction } from "../../useBackendAction";
 import Notice from "../../components/Notice";
 import { platformLabel } from "../../components/AnswerCard";
-import type { Answer, Publication, Reply } from "../../types";
+import { PLATFORM_LIMITS, postsApi } from "../../postsApi";
+import type { Answer, Publication, QualityCheck, Reply } from "../../types";
 
 const PLATFORMS = ["feed", "bluesky", "linkedin", "reddit", "quora", "discourse"];
+
+// "needs_review" reuses the yellow draft pill so no new CSS is needed.
+const pillClass = (status: string) =>
+  `pill pill-${status === "needs_review" ? "draft" : status}`;
 
 export default function AnswersSection() {
   const answers = useQuery(api.answers.listAll) as Answer[] | undefined;
@@ -48,6 +53,11 @@ function AnswerAdmin({ answer }: { answer: Answer }) {
       `Sent to ${platformLabel(platform)}.`,
     );
 
+  const publishAnyway = (platform: string) =>
+    run(`force-${platform}`, () => postsApi.publish(answer._id, [platform], true), () =>
+      `Sent to ${platformLabel(platform)} after review.`,
+    );
+
   return (
     <article className="answer-admin">
       <div className="answer-admin-head">
@@ -81,6 +91,8 @@ function AnswerAdmin({ answer }: { answer: Answer }) {
         <pre className="raw-transcript">{answer.transcript}</pre>
       </details>
 
+      <PostVersions answer={answer} />
+
       <Notice message={message} />
 
       {answer.publications.length > 0 && (
@@ -88,13 +100,22 @@ function AnswerAdmin({ answer }: { answer: Answer }) {
           {answer.publications.map((pub) => (
             <li key={pub.platform} className={`pub pub-${pub.status}`}>
               <span className="pub-name">{platformLabel(pub.platform)}</span>
-              <span className={`pill pill-${pub.status}`}>{pub.status}</span>
+              <span className={pillClass(pub.status)}>{pub.status.replace("_", " ")}</span>
               {pub.url && (
                 <a href={pub.url} target="_blank" rel="noreferrer" className="small">
                   View
                 </a>
               )}
-              {pub.status === "draft" && pub.draftText && (
+              {pub.status === "needs_review" && (
+                <button
+                  className="btn btn-small btn-danger"
+                  disabled={busy !== null}
+                  onClick={() => publishAnyway(pub.platform)}
+                >
+                  {busy === `force-${pub.platform}` ? "Sending…" : "Publish anyway"}
+                </button>
+              )}
+              {(pub.status === "draft" || pub.status === "needs_review") && pub.draftText && (
                 <>
                   <button className="btn btn-small" onClick={() => copy(pub)}>
                     {copied === pub.platform ? "Copied!" : "Copy text"}
@@ -222,6 +243,103 @@ function Replies({ answerId }: { answerId: string }) {
         </button>
       </form>
       <Notice message={message} />
+    </details>
+  );
+}
+
+/** Per-platform versions with character counts and the "nothing invented" check. */
+function PostVersions({ answer }: { answer: Answer }) {
+  const [active, setActive] = useState("bluesky");
+  const { busy, message, run } = useBackendAction();
+  const variants = answer.variants ?? {};
+  const hasVariants = Object.keys(variants).length > 0;
+  const text =
+    active === "feed" ? answer.body : variants[active as keyof typeof variants] ?? "";
+  const check: QualityCheck | undefined = answer.quality?.find((q) => q.platform === active);
+  const limit = PLATFORM_LIMITS[active];
+
+  return (
+    <details className="small post-versions" open={hasVariants}>
+      <summary>
+        Platform versions{" "}
+        {answer.quality && answer.quality.some((q) => !q.passed) && (
+          <span className="pill pill-failed">needs review</span>
+        )}
+      </summary>
+      {!hasVariants && (
+        <p className="muted">
+          Not written yet. They're created in the background after the call, or click
+          Regenerate.
+        </p>
+      )}
+      <div className="tabs" role="tablist">
+        {PLATFORMS.map((p) => {
+          const q = answer.quality?.find((c) => c.platform === p);
+          return (
+            <button
+              key={p}
+              role="tab"
+              aria-selected={active === p}
+              className={`tab ${active === p ? "tab-active" : ""}`}
+              onClick={() => setActive(p)}
+            >
+              {platformLabel(p)} {q ? (q.passed ? "✓" : "⚠") : ""}
+            </button>
+          );
+        })}
+      </div>
+      {text ? (
+        <pre className="raw-transcript">{text}</pre>
+      ) : (
+        <p className="muted">No version for this platform yet.</p>
+      )}
+      <p className="muted">
+        {text.length} characters
+        {limit ? ` / ${limit}${text.length > limit ? " (over the limit!)" : ""}` : ""}
+        {active === "bluesky" && text ? " + “Full answer” link" : ""}
+        {" · "}
+        {check ? (
+          <span className={check.passed ? "pill pill-published" : "pill pill-failed"}>
+            {check.passed ? "only uses what they said" : "possible invented details"}
+          </span>
+        ) : (
+          <span className="pill pill-draft">not checked</span>
+        )}
+      </p>
+      {check && !check.passed && check.issues.length > 0 && (
+        <ul className="small">
+          {check.issues.map((issue, i) => (
+            <li key={i}>{issue}</li>
+          ))}
+        </ul>
+      )}
+      <Notice message={message} />
+      <div className="actions wrap">
+        <button
+          className="btn btn-small"
+          disabled={busy !== null}
+          onClick={() =>
+            run("prepare", () => postsApi.prepare(answer._id), () =>
+              "Rewrote every version and re-ran the check.",
+            )
+          }
+        >
+          {busy === "prepare" ? "Writing…" : "Regenerate"}
+        </button>
+        {check && !check.passed && (
+          <button
+            className="btn btn-small btn-danger"
+            disabled={busy !== null}
+            onClick={() =>
+              run("force", () => postsApi.publish(answer._id, [active], true), () =>
+                `Sent to ${platformLabel(active)} after review.`,
+              )
+            }
+          >
+            {busy === "force" ? "Sending…" : `Publish anyway to ${platformLabel(active)}`}
+          </button>
+        )}
+      </div>
     </details>
   );
 }

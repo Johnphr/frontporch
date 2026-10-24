@@ -107,6 +107,16 @@ class Store:
             "answers:setPublication", {"answerId": answer_id, "publication": publication}
         )
 
+    async def set_posts(self, answer_id: str, variants: dict, quality: list[dict]) -> None:
+        """Save per-platform texts + the faithfulness check (services/post_writer.py)."""
+        allowed = {"bluesky", "linkedin", "reddit", "quora", "discourse"}
+        clean_variants = {k: v for k, v in variants.items() if k in allowed and v}
+        clean_quality = [{"platform": str(q["platform"]), "passed": bool(q["passed"]),
+                          "issues": [str(i) for i in q.get("issues") or []]} for q in quality]
+        await self._mutation("answers:setPosts", {"answerId": answer_id,
+                                                  "variants": clean_variants,
+                                                  "quality": clean_quality})
+
     # --- replies (thank-yous read back to the elder) ---
     async def add_reply(self, answer_id: str, platform: str, author: str, text: str) -> str:
         return await self._mutation(

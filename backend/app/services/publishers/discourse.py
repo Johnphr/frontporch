@@ -25,7 +25,7 @@ def topic_id(question: dict) -> int | None:
 
 async def publish(ctx: PublishContext) -> dict:
     s = ctx.settings
-    text = ctx.long_text()
+    text = ctx.text_for("discourse")
     tid = topic_id(ctx.question)
     if not (s.discourse_url and s.discourse_api_key and s.discourse_username and tid):
         return result("discourse", "draft", draftText=text, url=ctx.question.get("sourceUrl"))

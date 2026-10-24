@@ -2,7 +2,7 @@
 
 export type Publication = {
   platform: string;
-  status: "published" | "draft" | "failed" | "skipped";
+  status: "published" | "draft" | "failed" | "skipped" | "needs_review";
   url?: string;
   draftText?: string;
   error?: string;
@@ -43,6 +43,20 @@ export type PublishedAnswer = {
   questionTitle: string;
   questionUrl?: string;
   publications: Publication[];
+  variants?: PostVariants;
+  quality?: QualityCheck[];
+};
+
+/** Per-platform post texts (disclosure included), from backend post_writer.py. */
+export type PostVariants = Partial<
+  Record<"bluesky" | "linkedin" | "reddit" | "quora" | "discourse", string>
+>;
+
+/** Did this platform's text stick to what the elder actually said? */
+export type QualityCheck = {
+  platform: string; // feed | bluesky | linkedin | reddit | quora | discourse
+  passed: boolean;
+  issues: string[];
 };
 
 export type AnswerStatus = "draft" | "approved" | "published" | "rejected";

@@ -58,6 +58,29 @@ All state lives in **Convex**, so the dashboard updates live while a call is hap
 
 Drafts show up in the dashboard with **Copy text** and **Open question** buttons. Every post ends with a disclosure line: answered over a phone call, written up with AI from the person's own words.
 
+### A version per platform, and a check that nothing was invented
+
+After the base draft is saved, `backend/app/services/post_writer.py` writes a tailored version for each platform and then fact-checks every version against what the elder actually said:
+
+| Platform | Style | Limit (enforced by code) |
+|---|---|---|
+| Bluesky | Punchy first line, the core advice, at most 1 hashtag | 300 characters **including** the name line and the "Full answer" link |
+| LinkedIn | Opens with the question, short paragraphs, "lesson learned" | 100–280 words |
+| Reddit | Conversational comment to the asker, no title or links | 50–350 words |
+| Quora | Direct answer first, then the story | 80–330 words |
+| Forum (Discourse) | Friendly reply, markdown OK | 40–330 words |
+
+- If a version breaks its limit, Claude rewrites it once; if it still doesn't fit, code trims it on a word boundary.
+- The disclosure line is added **by code**, never left to the AI. Bluesky uses a short form: "— Rosa, told by phone · written up with AI".
+- **Quality check:** a second Claude call lists any claim, number, name or advice that isn't in the elder's words. A platform that fails gets status **needs review** and is **not posted**. The dashboard shows the issues, with **Regenerate** and **Publish anyway** (a person has checked it) buttons. If Claude isn't configured, the generic text is posted unchecked, as before.
+- API: `POST /api/answers/{id}/prepare` rewrites every version; `POST /api/answers/{id}/publish` takes `"force": true` for "Publish anyway".
+- Try it without posting anything (needs only `ANTHROPIC_API_KEY`):
+
+  ```bash
+  cd backend
+  python -m app.scripts.try_posts tests/fixtures/sample_call.json
+  ```
+
 ## Setup
 
 ### 1. Convex (database)

@@ -136,9 +136,18 @@ async def outbound_call(body: OutboundCallIn, services: Services = Depends(get_s
     return {"callSid": await asyncio.to_thread(_call)}
 
 
+class PublishWithForceIn(PublishIn):
+    # True = "Publish anyway": post even if the quality check flagged the text.
+    force: bool = False
+
+
 @router.post("/answers/{answer_id}/publish")
-async def publish(answer_id: str, body: PublishIn, services: Services = Depends(get_services)):
-    return {"publications": await _publish(services, answer_id, body.platforms)}
+async def publish(answer_id: str, body: PublishWithForceIn,
+                  services: Services = Depends(get_services)):
+    from ..services.publishing import publish_answer
+
+    return {"publications": await publish_answer(services, answer_id, body.platforms,
+                                                 force=body.force)}
 
 
 @router.post("/answers/{answer_id}/status")
@@ -151,3 +160,14 @@ async def set_status(answer_id: str, body: StatusIn, services: Services = Depend
 async def add_reply(answer_id: str, body: ReplyIn, services: Services = Depends(get_services)):
     reply_id = await services.store.add_reply(answer_id, body.platform, body.author, body.text)
     return {"id": reply_id}
+
+
+@router.post("/answers/{answer_id}/prepare")
+async def prepare_posts(answer_id: str, services: Services = Depends(get_services)):
+    """(Re)write every platform version and re-run the quality check."""
+    from ..services.post_writer import prepare_posts as _prepare
+
+    try:
+        return await _prepare(services, answer_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc

@@ -36,7 +36,7 @@ def _reply(ctx: PublishContext, text: str) -> str:
 
 
 async def publish(ctx: PublishContext) -> dict:
-    text = ctx.long_text()
+    text = ctx.text_for("reddit")
     source_url = ctx.question.get("sourceUrl") if ctx.question.get("source") == "reddit" else None
     if not _can_post(ctx):
         return result("reddit", "draft", draftText=text, url=source_url)

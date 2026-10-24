@@ -6,4 +6,4 @@ from .base import PublishContext, result
 
 async def publish(ctx: PublishContext) -> dict:
     url = ctx.question.get("sourceUrl") if ctx.question.get("source") == "quora" else None
-    return result("quora", "draft", draftText=ctx.long_text(), url=url)
+    return result("quora", "draft", draftText=ctx.text_for("quora"), url=url)

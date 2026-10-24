@@ -17,11 +17,30 @@ export const answerStatus = v.union(
 
 export const publication = v.object({
   platform: v.string(),
-  status: v.string(), // published | draft | failed | skipped
+  status: v.string(), // published | draft | failed | skipped | needs_review
   url: v.optional(v.string()),
   draftText: v.optional(v.string()),
   error: v.optional(v.string()),
 });
+
+// Per-platform post texts written by backend/app/services/post_writer.py
+// (disclosure line already included).
+export const postVariants = v.object({
+  bluesky: v.optional(v.string()),
+  linkedin: v.optional(v.string()),
+  reddit: v.optional(v.string()),
+  quora: v.optional(v.string()),
+  discourse: v.optional(v.string()),
+});
+
+// Faithfulness check: did each text stick to what the elder actually said?
+export const postQuality = v.array(
+  v.object({
+    platform: v.string(), // feed | bluesky | linkedin | reddit | quora | discourse
+    passed: v.boolean(),
+    issues: v.array(v.string()),
+  }),
+);
 
 export default defineSchema({
   elders: defineTable({
@@ -67,6 +86,8 @@ export default defineSchema({
     readback: v.optional(v.string()),
     status: answerStatus,
     publications: v.array(publication),
+    variants: v.optional(postVariants),
+    quality: v.optional(postQuality),
   })
     .index("by_status", ["status"])
     .index("by_elder", ["elderId"]),

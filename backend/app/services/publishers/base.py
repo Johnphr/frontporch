@@ -26,11 +26,40 @@ class PublishContext:
         return (f"— {self.first_name}, answered over a phone call with "
                 f"{self.settings.app_name} (written up with AI from their own words)")
 
+    @property
+    def short_disclosure(self) -> str:
+        # For tight limits (Bluesky): still says it was AI-written from their words.
+        return f"— {self.first_name}, told by phone · written up with AI"
+
     def long_text(self) -> str:
         a = self.answer
         points = "\n".join(f"• {p}" for p in a.get("keyPoints") or [])
         parts = [a.get("body", "").strip(), points, self.disclosure]
         return "\n\n".join(p for p in parts if p)
+
+    def text_for(self, platform: str) -> str:
+        """Final text to post on `platform` (disclosure included).
+
+        Uses the AI-written platform version saved by services/post_writer.py
+        when there is one, otherwise the generic long_text(). "linkedapi"
+        (posting through grandpa's own LinkedIn) uses the LinkedIn version.
+        For Bluesky the link label is added by the publisher.
+        """
+        key = VARIANT_ALIASES.get(platform, platform)
+        variant = (self.answer.get("variants") or {}).get(key)
+        return variant.strip() if variant and variant.strip() else self.long_text()
+
+    def check_for(self, platform: str) -> dict | None:
+        """The faithfulness check for `platform`, or None if it wasn't checked."""
+        key = VARIANT_ALIASES.get(platform, platform)
+        for check in self.answer.get("quality") or []:
+            if check.get("platform") == key:
+                return check
+        return None
+
+
+# Platforms that reuse another platform's AI-written version.
+VARIANT_ALIASES = {"linkedapi": "linkedin"}
 
 
 def result(platform: str, status: str, **extra: str | None) -> dict:

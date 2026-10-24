@@ -118,6 +118,7 @@ async def _draft(services: Services, session: CallSession) -> None:
             fields["callId"] = session.call_id
         session.answer_id = await services.store.create_answer(**fields)
         session.readback = draft.readback
+        _schedule_prepare(services, session, draft)
     except Exception as exc:
         log.exception("drafting failed")
         session.error = str(exc) or exc.__class__.__name__
@@ -128,6 +129,18 @@ async def _publish(services: Services, answer_id: str, platforms: list[str]):
     from ..services.publishing import publish_answer
 
     return await publish_answer(services, answer_id, platforms)
+
+
+def _schedule_prepare(services: Services, session: CallSession, draft) -> None:
+    """Write the per-platform versions + quality check in the background, so the
+    readback (which only needs the base draft) isn't slowed down."""
+    from ..services.post_writer import schedule_prepare
+
+    try:
+        schedule_prepare(services, session.answer_id, session.question, session.elder,
+                         list(session.turns), draft)
+    except Exception:
+        log.warning("couldn't schedule platform posts", exc_info=True)
 
 
 def _schedule_publish(services: Services, answer_id: str, platforms: list[str]) -> None:

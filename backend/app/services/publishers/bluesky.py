@@ -11,16 +11,29 @@ POST_LIMIT = 300
 LINK_LABEL = "Full answer"
 
 
-def build_post_text(ctx: PublishContext) -> tuple[str, str]:
-    """Return (body, link_label). body + "\n\n" + label fits in POST_LIMIT.
+def tail(ctx: PublishContext) -> str:
+    """Name + AI disclosure line that ends every Bluesky post (before the link)."""
+    return f"\n\n{ctx.short_disclosure}\n"
 
+
+def build_post_text(ctx: PublishContext) -> tuple[str, str]:
+    """Return (body, link_label). body + label fits in POST_LIMIT.
+
+    Uses the AI-written Bluesky version when there is one (it already ends with
+    the disclosure tail), otherwise trims the short version to fit.
     Uses len() (code points), which is never smaller than the grapheme count,
     so the result always fits.
     """
-    tail = f"\n\n— {ctx.first_name}\n"
-    budget = POST_LIMIT - len(tail) - len(LINK_LABEL)
-    body = truncate(ctx.answer.get("shortVersion") or ctx.answer.get("title", ""), budget)
-    return body + tail, LINK_LABEL
+    budget = POST_LIMIT - len(LINK_LABEL)
+    variant = ((ctx.answer.get("variants") or {}).get("bluesky") or "").strip("\n")
+    if variant:
+        if not variant.endswith("\n"):
+            variant += "\n"
+        if len(variant) <= budget:
+            return variant, LINK_LABEL
+    end = tail(ctx)
+    text = ctx.answer.get("shortVersion") or ctx.answer.get("title", "")
+    return truncate(text, budget - len(end)) + end, LINK_LABEL
 
 
 def _post(handle: str, password: str, body: str, label: str, url: str) -> str:

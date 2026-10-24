@@ -1,0 +1,27 @@
+{
+  "question": {
+    "_id": "q_sample",
+    "source": "reddit",
+    "title": "How do you keep a marriage going for 50 years?",
+    "body": "Getting married next spring. My parents divorced when I was 8 and I honestly don't know what a long marriage looks like day to day.",
+    "sourceUrl": "https://www.reddit.com/r/AskOldPeople/comments/example/"
+  },
+  "elder": {
+    "_id": "elder_sample",
+    "name": "Rosa Martinez",
+    "language": "en-US",
+    "expertise": ["marriage", "cooking", "raising kids"]
+  },
+  "turns": [
+    {"role": "pip", "text": "Someone asked: how do you keep a marriage going for 50 years? What would you tell them?"},
+    {"role": "elder", "text": "Oh, well, Tony and I have been married fifty two years this June. The first thing is you don't go to bed angry. People say that and it sounds like a greeting card but we really did it. Some nights we stayed up till two in the morning but we talked it out."},
+    {"role": "pip", "text": "That's lovely. Is there something you do day to day?"},
+    {"role": "elder", "text": "Every Sunday we cook together. Even when the kids were little and it was chaos. He chops, I season, and that's our time. And you have to laugh. When he backed the car into the mailbox in seventy nine I could have yelled, but I laughed and now it's our favorite story. Pick your fights. Most things aren't worth it."}
+  ],
+  "draft": {
+    "title": "Don't go to bed angry, and cook together on Sundays",
+    "body": "Tony and I have been married 52 years this June. The first thing: don't go to bed angry. It sounds like a greeting card, but we really did it, even when it meant talking until two in the morning. Second, have a ritual. Every Sunday we cook together, even when the kids were little and it was chaos. He chops, I season, and that's our time. And laugh. When he backed the car into the mailbox in '79, I could have yelled, but I laughed, and now it's our favorite story. Pick your fights. Most things aren't worth it.",
+    "shortVersion": "52 years married: don't go to bed angry, cook together every Sunday, laugh at the small stuff, and pick your fights.",
+    "keyPoints": ["Don't go to bed angry", "Have a weekly ritual together", "Laugh instead of yelling", "Pick your fights"]
+  }
+}

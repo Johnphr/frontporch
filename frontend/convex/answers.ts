@@ -2,7 +2,7 @@ import { query, mutation, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import { assertBackend, firstName } from "./lib/auth";
-import { answerStatus, publication } from "./schema";
+import { answerStatus, postQuality, postVariants, publication } from "./schema";
 
 // ---------- backend only (secret required) ----------
 
@@ -57,6 +57,22 @@ export const setPublication = mutation({
   },
 });
 
+/** Save per-platform post texts + the faithfulness check (backend post_writer.py). */
+export const setPosts = mutation({
+  args: {
+    secret: v.string(),
+    answerId: v.id("answers"),
+    variants: postVariants,
+    quality: postQuality,
+  },
+  handler: async (ctx, { secret, answerId, variants, quality }) => {
+    assertBackend(secret);
+    const answer = await ctx.db.get(answerId);
+    if (!answer) throw new Error("Answer not found");
+    await ctx.db.patch(answerId, { variants, quality });
+  },
+});
+
 // ---------- public (React app) ----------
 
 async function withContext(ctx: QueryCtx, answer: Doc<"answers">) {
@@ -78,6 +94,8 @@ async function toPublic(ctx: QueryCtx, answer: Doc<"answers">) {
     questionTitle: question?.title,
     questionUrl: question?.sourceUrl,
     publications: answer.publications,
+    variants: answer.variants,
+    quality: answer.quality,
   };
 }
 

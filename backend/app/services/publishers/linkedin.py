@@ -19,6 +19,10 @@ def escape_little_text(text: str) -> str:
 
 
 def build_commentary(ctx: PublishContext) -> str:
+    """Unescaped post text. Uses the AI-written LinkedIn version when present."""
+    variant = (ctx.answer.get("variants") or {}).get("linkedin")
+    if variant and variant.strip():
+        return f"{variant.strip()}\n\nRead more: {ctx.feed_url}"
     q = ctx.question.get("title", "")
     return (f"{ctx.answer.get('title', '')}\n\nQ: {q}\n\n{ctx.long_text()}\n\n"
             f"Read more: {ctx.feed_url}")
