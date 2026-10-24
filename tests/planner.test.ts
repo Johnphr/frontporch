@@ -243,7 +243,7 @@ test("avoid topics from later calls always reach the profile variable", () => {
   assert.match(text, /Topics to avoid: the strike; His brother's death\./);
   assert.equal(formatProfile(null, ["Health"]), "Topics to avoid: Health.");
   const vars = toPromptVariables(buildCallPlan({ kind: "story" }), { name: "Walter", profile: null }, { avoid: ["Health"] });
-  assert.match(vars.profile, /Topics to avoid: Health\./);
+  assert.match(vars.context, /<profile>\nTopics to avoid: Health\.\n<\/profile>/);
 });
 
 test("normalizePostDraft: skip, and the hook appears once despite spacing/punctuation", () => {
