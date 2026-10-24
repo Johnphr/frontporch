@@ -4,7 +4,8 @@ Goal: one good story, told in his own words, with concrete detail. The plan
 comes from `convex/conversation.ts`, built from his profile, memories and how
 readers reacted to his last posts. Rules: `../conversation-guide.md`.
 
-Variables (`assistantOverrides.variableValues`, set in `convex/vapi.ts`):
+Variables (Cartesia `dynamic_variables`, set in `convex/cartesia.ts`; check the
+template syntax against the onboarding prompt in `convex/lib/prompts/`):
 `{{firstName}}`, `{{language}}`, `{{profile}}`, `{{memories}}`,
 `{{feedback}}` (reader reactions/comments to share, may be empty),
 `{{mainQuestion}}`, `{{threads}}` (backup topics).

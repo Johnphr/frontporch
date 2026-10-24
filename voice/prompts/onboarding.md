@@ -4,7 +4,8 @@ Goal: get to know him. Industry, specialty, career arc, a few story seeds. No
 post comes from this call by default; it builds his profile and first memories.
 Rules: `../conversation-guide.md`.
 
-Variables (`assistantOverrides.variableValues`, set in `convex/vapi.ts`):
+Moving into code (`convex/lib/prompts/onboarding.ts`) with the onboarding slice.
+Variables (Cartesia `dynamic_variables`, set in `convex/cartesia.ts`):
 `{{firstName}}`, `{{language}}`, `{{knownBackground}}` (from a LinkedIn
 profile scrape, may be empty).
 

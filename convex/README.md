@@ -1,8 +1,8 @@
 # Convex
 
-All of Front Porch's backend: tables, vector memory, crons, the Vapi webhook,
-the question planner, the post writer, and the actions that call Claude,
-OpenAI, Vapi, LinkedAPI and Apify. See `../ARCHITECTURE.md` for the loop,
+All of Front Porch's backend: tables, vector memory, crons, the question
+planner, the post writer, and the actions that call Claude, OpenAI, Cartesia,
+LinkedAPI and Apify. See `../ARCHITECTURE.md` for the loop,
 contracts and who owns which file.
 
 ## Run
@@ -123,7 +123,7 @@ npx convex run schedule:tick '{"now": 1792944000000}'   # Sunday 2026-10-25 09:0
 
 ## Notes
 
-- The webhook is served at `https://<deployment>.convex.site/vapi/webhook` (see `http.ts`).
+- Calls run on Cartesia Managed Agents; transcripts are polled, so `http.ts` has no routes yet.
 - `http.ts` and `crons.ts` must keep their default exports, even when empty.
 - Vector search (`ctx.vectorSearch`) only works inside actions.
 - Files with `"use node"` at the top may only export actions.
