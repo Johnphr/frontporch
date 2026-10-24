@@ -90,6 +90,37 @@ npx convex run linkedapi:previewPost '{"postId":"<posts id>"}'
 
 Unit tests for the formatter and posting decisions (no Convex needed): `node --test "tests/**/*.test.ts"`.
 
+## Memory, engagement, scheduling (Core: Data)
+
+Env: `OPENAI_API_KEY` (embeddings for `memories.ts`; `addMany` and `search` throw a
+clear error without it).
+
+| Function | Called by | What it does |
+|---|---|---|
+| `memories.addMany({ elderId, callId?, items, resolveThreadIds? })` | `pipeline.processCall` | embed + store what he said; merges near-duplicates, resolves finished open threads |
+| `memories.search({ elderId, text, k, kinds? })` | `conversation.planNextCall` | memories closest to a text (e.g. the next question) |
+| `memories.listForElder({ elderId, kinds?, status?, limit? })` | planner | e.g. all active open threads |
+| `engagement.upsert(...)` | `apify.scrapeEngagement` | latest reactions + comments per post; schedules a question-bank refresh when something changed |
+| `engagement.recentFeedback({ elderId, sinceDays? })` | planner | posts with reactions + comments, newest first |
+| `schedule.tick` | hourly cron | `conversation.prepareCall` ~1h before his call, `vapi.startCall` at the call hour |
+
+Crons (`crons.ts`, UTC): hourly `schedule.tick`; daily 13:15 `schedule.dailyEngagement`
+(→ `apify.scrapeEngagement` per active elder with a `linkedinUrl`); weekly Monday 14:30
+`schedule.weeklyAudienceQuestions` (→ `apify.findAudienceQuestions`). `tick` only acts
+on elders with `stage`, `timezone`, `callDay` and `callHour` set, and skips a target
+that isn't deployed yet (it retries next hour).
+
+Set up a demo elder in the dashboard (Data → elders → edit): `stage: "active"`,
+`timezone: "America/Los_Angeles"`, `callDay: "sunday"`, `callHour: 10`,
+`linkedinUrl: "https://www.linkedin.com/in/<him>/"`. Then try:
+
+```bash
+npx convex env set OPENAI_API_KEY <key>
+npx convex run memories:addMany '{"elderId":"<id>","items":[{"kind":"person","name":"Maria","text":"his wife of 52 years"},{"kind":"open_thread","text":"the flood at the plant in 1978"}]}'
+npx convex run memories:search '{"elderId":"<id>","text":"his family","k":3}'
+npx convex run schedule:tick '{"now": 1792944000000}'   # Sunday 2026-10-25 09:00 PDT: prepares a 10:00 call
+```
+
 ## Notes
 
 - The webhook is served at `https://<deployment>.convex.site/vapi/webhook` (see `http.ts`).

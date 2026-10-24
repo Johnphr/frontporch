@@ -1,0 +1,52 @@
+// Rules for engagement.upsert: did readers react since the last scrape, and is
+// it time to refresh his question bank? No runtime imports: tested with Node.
+
+export type Comment = { author: string; text: string };
+export type Snapshot = { reactions: number; comments: Comment[] };
+
+/** Wait this long after the first changed post before refreshing the bank, so a
+ *  whole scrape run (one upsert per post) lands first. */
+export const BANK_REFRESH_DELAY_MS = 2 * 60 * 1000;
+
+/** At most one bank refresh per elder in this window. */
+export const BANK_REFRESH_DEBOUNCE_MS = 10 * 60 * 1000;
+
+function commentKey(c: Comment): string {
+  return `${c.author.trim().toLowerCase()}|${c.text.trim().toLowerCase().replace(/\s+/g, " ")}`;
+}
+
+/** Clean comments: trimmed, non-empty text, no exact repeats. */
+export function cleanComments(comments: Comment[]): Comment[] {
+  const seen = new Set<string>();
+  const out: Comment[] = [];
+  for (const c of comments ?? []) {
+    const text = (c?.text ?? "").trim();
+    if (!text) continue;
+    const comment = { author: (c?.author ?? "").trim() || "Someone", text };
+    const key = commentKey(comment);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(comment);
+  }
+  return out;
+}
+
+/** New post, a different reaction count, or any comment added/removed. */
+export function engagementChanged(prev: Snapshot | null | undefined, next: Snapshot): boolean {
+  if (!prev) return next.reactions > 0 || next.comments.length > 0;
+  if (prev.reactions !== next.reactions) return true;
+  const a = new Set(prev.comments.map(commentKey));
+  const b = new Set(next.comments.map(commentKey));
+  if (a.size !== b.size) return true;
+  for (const key of b) if (!a.has(key)) return true;
+  return false;
+}
+
+/** True if no bank refresh was scheduled for this elder in the debounce window. */
+export function shouldRefreshBank(
+  lastBankRefreshAt: number | undefined,
+  nowMs: number,
+  windowMs = BANK_REFRESH_DEBOUNCE_MS,
+): boolean {
+  return lastBankRefreshAt === undefined || nowMs - lastBankRefreshAt >= windowMs;
+}

@@ -23,6 +23,24 @@ export const publication = v.object({
   error: v.optional(v.string()),
 });
 
+// What we remember about him (memories.kind). Keep in sync with lib/memoryText.ts.
+export const memoryKind = v.union(
+  v.literal("fact"),
+  v.literal("story_seed"),
+  v.literal("open_thread"),
+  v.literal("person"),
+  v.literal("place"),
+  v.literal("topic_covered"),
+  v.literal("avoid"),
+);
+
+export const elderProfile = v.object({
+  industry: v.string(),
+  specialty: v.string(),
+  careerSummary: v.string(),
+  topicsToAvoid: v.array(v.string()),
+});
+
 export default defineSchema({
   elders: defineTable({
     name: v.string(),
@@ -30,6 +48,18 @@ export default defineSchema({
     expertise: v.array(v.string()),
     language: v.string(), // BCP-47, e.g. en-US, es-MX
     bio: v.optional(v.string()),
+    // ---- v2 (Data): all optional so v1 rows still validate ----
+    timezone: v.optional(v.string()), // IANA, e.g. America/Los_Angeles
+    callDay: v.optional(v.string()), // sunday..saturday, his local time
+    callHour: v.optional(v.number()), // 0-23, his local time
+    linkedinUrl: v.optional(v.string()), // his profile, for apify.ts
+    stage: v.optional(v.union(v.literal("onboarding"), v.literal("active"))),
+    profile: v.optional(elderProfile), // filled by pipeline after onboarding
+    knownBackground: v.optional(v.string()), // apify.scrapeProfile output
+    // bookkeeping: schedule.ts / engagement.ts
+    lastPreparedSlot: v.optional(v.string()), // "YYYY-MM-DDTHH" local slot already prepared
+    lastCallSlot: v.optional(v.string()), // "YYYY-MM-DDTHH" local slot already called
+    lastBankRefreshAt: v.optional(v.number()), // epoch ms, debounces question-bank refreshes
   }).index("by_phone", ["phone"]),
 
   questions: defineTable({
@@ -48,12 +78,64 @@ export default defineSchema({
     .index("by_external", ["externalId"]),
 
   calls: defineTable({
-    callSid: v.string(),
+    callSid: v.optional(v.string()), // v1 Twilio calls only
     elderId: v.id("elders"),
     questionId: v.optional(v.id("questions")),
-    status: v.string(), // in-progress | completed | failed | ...
+    status: v.string(), // queued | in-progress | completed | failed | ...
     transcript: v.array(v.object({ role: v.string(), text: v.string() })),
-  }).index("by_sid", ["callSid"]),
+    // ---- v2 (Data): all optional so v1 rows still validate ----
+    kind: v.optional(v.union(v.literal("onboarding"), v.literal("story"))),
+    vapiCallId: v.optional(v.string()),
+    plan: v.optional(v.any()), // CallPlan from conversation.planNextCall, for debugging
+    summary: v.optional(v.string()),
+    endedReason: v.optional(v.string()),
+  })
+    .index("by_sid", ["callSid"])
+    .index("by_vapi", ["vapiCallId"])
+    .index("by_elder", ["elderId"]),
+
+  // ---- Data: memory ----
+  // Everything he told us, one row per fact / story seed / open thread / person /
+  // place / covered topic / topic to avoid. One table so one vector search covers it.
+  // elderKind = `${elderId}|${kind}`: vector filters only support eq/or, so this
+  // field lets a search match "this elder AND these kinds".
+  memories: defineTable({
+    elderId: v.id("elders"),
+    callId: v.optional(v.id("calls")), // call where it was first heard
+    kind: memoryKind,
+    text: v.string(),
+    name: v.optional(v.string()), // people and places
+    status: v.union(v.literal("active"), v.literal("resolved")), // resolved = open thread he finished
+    mentionCount: v.number(),
+    lastMentionedAt: v.number(), // epoch ms
+    elderKind: v.string(),
+    embedding: v.array(v.float64()), // OpenAI text-embedding-3-small, 1536 dims
+  })
+    .index("by_elder_kind", ["elderId", "kind"])
+    .index("by_elder_status", ["elderId", "status"])
+    .index("by_elder_last", ["elderId", "lastMentionedAt"])
+    .vectorIndex("by_embedding", {
+      vectorField: "embedding",
+      dimensions: 1536,
+      filterFields: ["elderId", "kind", "elderKind"],
+    }),
+
+  // ---- Data: reader engagement on his LinkedIn posts ----
+  // One row per post (latest snapshot), written by apify.scrapeEngagement via
+  // engagement.upsert. linkedinUrl is canonical (lib/linkedinUrl.ts) so it matches
+  // posts.linkedinUrl with a plain equality check.
+  engagement: defineTable({
+    elderId: v.id("elders"),
+    postId: v.optional(v.id("posts")),
+    linkedinUrl: v.string(),
+    reactions: v.number(),
+    comments: v.array(v.object({ author: v.string(), text: v.string() })),
+    scrapedAt: v.number(), // epoch ms, last scrape
+    changedAt: v.optional(v.number()), // epoch ms, last time reactions/comments changed
+  })
+    .index("by_elder", ["elderId"])
+    .index("by_url", ["linkedinUrl"])
+    .index("by_elder_scraped", ["elderId", "scrapedAt"]),
 
   answers: defineTable({
     elderId: v.id("elders"),
