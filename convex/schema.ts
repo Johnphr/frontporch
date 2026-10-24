@@ -38,6 +38,8 @@ export const elderProfile = v.object({
   industry: v.string(),
   specialty: v.string(),
   careerSummary: v.string(),
+  topics: v.array(v.string()), // what he can talk about
+  storySeeds: v.array(v.string()), // stories he mentioned, for later calls
   topicsToAvoid: v.array(v.string()),
 });
 
@@ -85,13 +87,15 @@ export default defineSchema({
     transcript: v.array(v.object({ role: v.string(), text: v.string() })),
     // ---- v2 (Data): all optional so v1 rows still validate ----
     kind: v.optional(v.union(v.literal("onboarding"), v.literal("story"))),
-    vapiCallId: v.optional(v.string()),
+    cartesiaCallId: v.optional(v.string()), // Cartesia Managed Agents call id
     plan: v.optional(v.any()), // CallPlan from conversation.planNextCall, for debugging
-    summary: v.optional(v.string()),
-    endedReason: v.optional(v.string()),
+    summary: v.optional(v.string()), // from GET /agents/calls/{id}
+    endReason: v.optional(v.string()), // Cartesia end_reason
+    pollAttempts: v.optional(v.number()), // cartesia.pollCall bookkeeping
+    processedAt: v.optional(v.number()), // epoch ms; pipeline.processCall ran (idempotency)
   })
     .index("by_sid", ["callSid"])
-    .index("by_vapi", ["vapiCallId"])
+    .index("by_cartesia", ["cartesiaCallId"])
     .index("by_elder", ["elderId"]),
 
   // ---- Data: memory ----
@@ -114,6 +118,7 @@ export default defineSchema({
     .index("by_elder_kind", ["elderId", "kind"])
     .index("by_elder_status", ["elderId", "status"])
     .index("by_elder_last", ["elderId", "lastMentionedAt"])
+    .index("by_call", ["callId"])
     .vectorIndex("by_embedding", {
       vectorField: "embedding",
       dimensions: 1536,
@@ -135,7 +140,8 @@ export default defineSchema({
   })
     .index("by_elder", ["elderId"])
     .index("by_url", ["linkedinUrl"])
-    .index("by_elder_scraped", ["elderId", "scrapedAt"]),
+    .index("by_elder_scraped", ["elderId", "scrapedAt"])
+    .index("by_elder_changed", ["elderId", "changedAt"]),
 
   answers: defineTable({
     elderId: v.id("elders"),
@@ -212,7 +218,8 @@ export default defineSchema({
     maybePosted: v.optional(v.boolean()), // LinkedAPI didn't confirm the send: check before retrying
   })
     .index("by_elder", ["elderId"])
-    .index("by_url", ["linkedinUrl"]),
+    .index("by_url", ["linkedinUrl"])
+    .index("by_call", ["callId"]), // one post per call (pipeline idempotency)
 
   // ---- Brain: question bank (conversation.ts) ----
   // Ranked questions for his next calls, refreshed after every call, when new

@@ -46,17 +46,14 @@ Follow-ups (rule 3): "Tell me more about that." · "What happened next?" ·
 LinkedIn feedback (story calls, from `engagement.ts`):
 - "Your post about the bakery got a lot of love. A reader named Jane asked how you priced your bread back then. What would you tell her?"
 
-## Vapi settings that let him talk (Voice stream)
+## Cartesia settings that let him talk (Voice stream)
 
-Starting points to tune on real calls. Field names from Vapi's speech
-configuration docs; verify in the dashboard.
-
-| Setting | Default | Start with | Why |
-|---|---|---|---|
-| `startSpeakingPlan.waitSeconds` | 0.4 s | 1.0–1.5 s | Older speakers pause mid-thought; Vapi's own docs suggest >1 s for people who pause |
-| `startSpeakingPlan.smartEndpointingPlan` | off | on, with a long `waitFunction` (docs example: `200 + 8000 * x`) | Waits longer when he's likely mid-sentence |
-| `stopSpeakingPlan` (`numWords`, `voiceSeconds`, `backoffSeconds`) | — | low `numWords` / `voiceSeconds` | He can cut Pip off easily (rule 5) |
-| Silence / max-duration timeouts | — | generous (e.g. 30 s silence, 20–30 min call) | Rule 4: silence is thinking, not hanging up |
+Cartesia's agents handle turn-taking and interruptions themselves. Its speech-to-text
+turn detection has `end_timeout_ms` (max wait after he stops talking before Pip
+replies; default 5600 ms, range 640–11200) and `end_threshold`. **Verify** whether
+Managed Agents expose these in the agent config; if they do, keep the timeout on the
+long side (rule 4: silence is thinking). Otherwise lean on the prompt rules above and
+tune the prompt after real calls.
 
 ## Sources
 
@@ -65,4 +62,4 @@ configuration docs; verify in the dashboard.
 - Boston Public Library, *Conducting an Interview*: https://guides.bpl.org/OralHistory/interviewing
 - Duke University Libraries, *Oral History: The Interview*: https://guides.library.duke.edu/c.php?g=733290&p=5258643
 - StoryCorps, *Great Questions*: https://storycorps.org/participate/great-questions/
-- Vapi, *Speech configuration*: https://docs.vapi.ai/customization/speech-configuration
+- Cartesia, *Turn detection*: https://docs.cartesia.ai/use-the-api/stt/turns

@@ -16,8 +16,13 @@ export type MemoryKind = (typeof MEMORY_KINDS)[number];
 
 export type MemoryItem = { kind: string; text: string; name?: string };
 
-/** Similarity score at or above which a new memory merges into an existing one. */
-export const MERGE_THRESHOLD = 0.9;
+/**
+ * Cosine similarity (Convex vector `_score`, OpenAI text-embedding-3-small) at or
+ * above which a new memory merges into an existing one. Paraphrases of the same
+ * fact usually land around 0.75-0.9, so 0.85 merges close rewordings without
+ * gluing different facts together. TUNE on real pairs from his calls.
+ */
+export const MERGE_THRESHOLD = 0.85;
 
 export function isMemoryKind(kind: string): kind is MemoryKind {
   return (MEMORY_KINDS as readonly string[]).includes(kind);
@@ -60,9 +65,17 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   return na === 0 || nb === 0 ? 0 : dot / Math.sqrt(na * nb);
 }
 
+/** Both items carry a name and the names differ ("his brother Tom" vs "his brother Bill"). */
+export function differentNames(a: MemoryItem, b: MemoryItem): boolean {
+  const na = normalizeText(a.name);
+  const nb = normalizeText(b.name);
+  return Boolean(na && nb && na !== nb);
+}
+
 /**
- * Should `incoming` merge into `existing`? Kinds must match. People and places
- * with the same name always merge; everything else needs a high similarity score.
+ * Should `incoming` merge into `existing`? Kinds must match. When both have a
+ * name, only the same name merges (always, whatever the score); two different
+ * names never merge. Everything else needs a high similarity score.
  */
 export function shouldMerge(
   existing: MemoryItem,
@@ -71,11 +84,9 @@ export function shouldMerge(
   threshold = MERGE_THRESHOLD,
 ): boolean {
   if (existing.kind !== incoming.kind) return false;
-  if (existing.kind === "person" || existing.kind === "place") {
-    const a = normalizeText(existing.name);
-    const b = normalizeText(incoming.name);
-    if (a && b) return a === b || score >= threshold;
-  }
+  const a = normalizeText(existing.name);
+  const b = normalizeText(incoming.name);
+  if (a && b) return a === b;
   return score >= threshold;
 }
 
@@ -198,4 +209,31 @@ export function formatMemoriesForPrompt(memories: PromptMemory[], opts: { max?: 
     }
   }
   return lines.join("\n");
+}
+
+// ---------- OpenAI retry ----------
+
+/** Statuses worth one retry: rate limit and server errors. */
+export function isRetryableStatus(status: number): boolean {
+  return status === 429 || (status >= 500 && status <= 599);
+}
+
+/**
+ * How long to wait before the single retry. Honors Retry-After (seconds or an
+ * HTTP date) when present, capped so the action never stalls for long.
+ */
+export function retryDelayMs(
+  retryAfter: string | null | undefined,
+  nowMs = Date.now(),
+  fallbackMs = 1500,
+  capMs = 20_000,
+): number {
+  const value = (retryAfter ?? "").trim();
+  if (value) {
+    const seconds = Number(value);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(capMs, Math.round(seconds * 1000));
+    const date = Date.parse(value);
+    if (Number.isFinite(date)) return Math.min(capMs, Math.max(0, date - nowMs));
+  }
+  return fallbackMs;
 }

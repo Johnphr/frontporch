@@ -12,14 +12,14 @@ then...").
 Built at Cal Hacks 13.0.
 
 > **Status:** v2 structure only. See **[ARCHITECTURE.md](ARCHITECTURE.md)** for
-> the loop, contracts, data model, open decisions and who owns what.
+> the loop, contracts, data model, locked decisions and who owns what.
 
 ## Stack
 
 | Piece | Tech |
 |---|---|
-| Backend, database, vector memory, crons, webhook | Convex (`convex/`) |
-| Live call | Vapi (`vapi/`) on a Twilio number, Cartesia voice |
+| Backend, database, vector memory, crons | Convex (`convex/`) |
+| Live call (number, speech-to-text, in-call LLM, voice) | Cartesia Managed Agents (`voice/`, `convex/cartesia.ts`) |
 | Planning questions, writing posts, memory extraction | Claude (`claude-opus-5-5`) |
 | Embeddings | OpenAI `text-embedding-3-small` |
 | Posting | LinkedAPI (their own LinkedIn account) |
@@ -34,8 +34,8 @@ npx convex env set ANTHROPIC_API_KEY <value>   # repeat for each key
 ```
 
 Keys: [ARCHITECTURE.md → Env vars](ARCHITECTURE.md#env-vars-all-in-convex).
-Vapi + Twilio: [vapi/README.md](vapi/README.md). How Pip talks:
-[vapi/conversation-guide.md](vapi/conversation-guide.md).
+Cartesia setup: [voice/README.md](voice/README.md). How Pip talks:
+[voice/conversation-guide.md](voice/conversation-guide.md).
 Demo data (their phone, LinkedIn URL, call time) is added by hand in the Convex dashboard.
 
 ## Safety
@@ -43,8 +43,8 @@ Demo data (their phone, LinkedIn URL, call time) is added by hand in the Convex 
 - Posts use **only what the person said**; the prompt forbids adding facts or advice.
 - Pip doesn't give or ask for medical, legal or financial advice, and doesn't push on painful topics.
 - Every post says it was written up with AI from a phone call.
-- Posts go out automatically, without review, so speech-to-text mistakes can reach
-  LinkedIn. Check the account after each call (open decision 16).
+- Posts go out automatically after a fact-check against the call. A post that fails the
+  check is held as `needs_review` instead of posted; someone reviews held posts after each call.
 - LinkedAPI automates a personal account, which LinkedIn's terms don't allow. Use an
   account whose owner agrees and accepts that risk.
 

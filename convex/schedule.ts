@@ -2,7 +2,7 @@
 //
 //   tick                      hourly: for each elder whose weekly call is about an hour
 //                             away -> conversation.prepareCall; whose call hour has
-//                             started -> vapi.startCall. Each call slot is handled once.
+//                             started -> cartesia.startCall. Each call slot is handled once.
 //   dailyEngagement           daily: apify.scrapeEngagement for every active elder
 //                             with a linkedinUrl (staggered)
 //   weeklyAudienceQuestions   weekly: apify.findAudienceQuestions for every active elder
@@ -15,12 +15,12 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation } from "./_generated/server";
-import { dueActions } from "./lib/schedule";
+import { PREPARE_CALL_FN, START_CALL_FN, dueActions } from "./lib/schedule";
 
-// Implemented by Core: Brain (conversation.ts) and Voice (vapi.ts). Referenced by
-// name so this file doesn't depend on their generated types while all are in flight.
-const prepareCall = makeFunctionReference<"action">("conversation:prepareCall");
-const startCall = makeFunctionReference<"action">("vapi:startCall");
+// Implemented by Core: Brain (conversation.ts, cartesia.ts). Referenced by name so
+// this file doesn't depend on their generated types while all are in flight.
+const prepareCall = makeFunctionReference<"action">(PREPARE_CALL_FN);
+const startCall = makeFunctionReference<"action">(START_CALL_FN);
 
 /** Space out Apify runs so they don't all start at once. */
 const STAGGER_MS = 30 * 1000;
@@ -50,9 +50,10 @@ export const runTick = internalMutation({
         result.skipped.push({ elderId: elder._id, reason: due.skipReason });
         continue;
       }
-      // Schedule first, then record the slot: if a target function isn't deployed
-      // yet (Brain/Voice in flight), that one is skipped and retried next hour
-      // instead of failing the whole tick.
+      // Schedule first, then record the slot. If scheduling throws (e.g. the target
+      // function isn't deployed yet), only that elder's step is skipped and logged;
+      // the rest of the tick goes on. The next tick is past that hour, so a skipped
+      // slot is NOT retried: start that week's call by hand if needed.
       if (due.prepare) {
         try {
           await ctx.scheduler.runAfter(0, prepareCall, { elderId: elder._id });

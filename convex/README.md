@@ -1,8 +1,8 @@
 # Convex
 
-All of Front Porch's backend: tables, vector memory, crons, the Vapi webhook,
-the question planner, the post writer, and the actions that call Claude,
-OpenAI, Vapi, LinkedAPI and Apify. See `../ARCHITECTURE.md` for the loop,
+All of Front Porch's backend: tables, vector memory, crons, the question
+planner, the post writer, and the actions that call Claude, OpenAI, Cartesia,
+LinkedAPI and Apify. See `../ARCHITECTURE.md` for the loop,
 contracts and who owns which file.
 
 ## Run
@@ -102,7 +102,7 @@ clear error without it).
 | `memories.listForElder({ elderId, kinds?, status?, limit? })` | planner | e.g. all active open threads |
 | `engagement.upsert(...)` | `apify.scrapeEngagement` | latest reactions + comments per post; schedules a question-bank refresh when something changed |
 | `engagement.recentFeedback({ elderId, sinceDays? })` | planner | posts with reactions + comments, newest first |
-| `schedule.tick` | hourly cron | `conversation.prepareCall` ~1h before his call, `vapi.startCall` at the call hour |
+| `schedule.tick` | hourly cron | `conversation.prepareCall` ~1h before his call, `cartesia.startCall` at the call hour |
 
 Crons (`crons.ts`, UTC): hourly `schedule.tick`; daily 13:15 `schedule.dailyEngagement`
 (→ `apify.scrapeEngagement` per active elder with a `linkedinUrl`); weekly Monday 14:30
@@ -123,7 +123,7 @@ npx convex run schedule:tick '{"now": 1792944000000}'   # Sunday 2026-10-25 09:0
 
 ## Notes
 
-- The webhook is served at `https://<deployment>.convex.site/vapi/webhook` (see `http.ts`).
+- Calls run on Cartesia Managed Agents; transcripts are polled, so `http.ts` has no routes yet.
 - `http.ts` and `crons.ts` must keep their default exports, even when empty.
 - Vector search (`ctx.vectorSearch`) only works inside actions.
 - Files with `"use node"` at the top may only export actions.
