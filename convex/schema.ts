@@ -23,6 +23,27 @@ export const publication = v.object({
   error: v.optional(v.string()),
 });
 
+// What we remember about him (memories.kind). Keep in sync with lib/memoryText.ts.
+export const memoryKind = v.union(
+  v.literal("fact"),
+  v.literal("story_seed"),
+  v.literal("open_thread"),
+  v.literal("person"),
+  v.literal("place"),
+  v.literal("topic_covered"),
+  v.literal("avoid"),
+);
+
+export const elderProfile = v.object({
+  // Same shape as PR #7's elders.profile: every field optional (filled over onboarding calls).
+  industry: v.optional(v.string()),
+  specialty: v.optional(v.string()),
+  careerSummary: v.optional(v.string()),
+  topics: v.optional(v.array(v.string())), // what he can talk about
+  storySeeds: v.optional(v.array(v.string())), // stories he mentioned, for later calls
+  topicsToAvoid: v.optional(v.array(v.string())),
+});
+
 export default defineSchema({
   elders: defineTable({
     name: v.string(),
@@ -30,20 +51,18 @@ export default defineSchema({
     expertise: v.array(v.string()),
     language: v.string(), // BCP-47, e.g. en-US, es-MX
     bio: v.optional(v.string()),
-    // ---- v2 (onboarding slice; Data: review) ----
+    // ---- v2 (onboarding slice, PR #7) ----
     stage: v.optional(v.union(v.literal("onboarding"), v.literal("active"))), // missing = onboarding
     linkedinUrl: v.optional(v.string()),
     knownBackground: v.optional(v.string()), // cached apify.scrapeProfile result
-    profile: v.optional(
-      v.object({
-        industry: v.optional(v.string()),
-        specialty: v.optional(v.string()),
-        careerSummary: v.optional(v.string()),
-        topics: v.optional(v.array(v.string())),
-        storySeeds: v.optional(v.array(v.string())),
-        topicsToAvoid: v.optional(v.array(v.string())),
-      }),
-    ),
+    profile: v.optional(elderProfile),
+    // ---- v2 (Data): scheduling + bookkeeping, all optional ----
+    timezone: v.optional(v.string()), // IANA, e.g. America/Los_Angeles
+    callDay: v.optional(v.string()), // sunday..saturday, his local time
+    callHour: v.optional(v.number()), // 0-23, his local time
+    lastPreparedSlot: v.optional(v.string()), // "YYYY-MM-DDTHH" local slot already prepared
+    lastCallSlot: v.optional(v.string()), // "YYYY-MM-DDTHH" local slot already called
+    lastBankRefreshAt: v.optional(v.number()), // epoch ms, debounces question-bank refreshes
   }).index("by_phone", ["phone"]),
 
   questions: defineTable({
@@ -69,7 +88,7 @@ export default defineSchema({
     //     poll_error | poll_timeout | process_failed
     status: v.string(),
     transcript: v.array(v.object({ role: v.string(), text: v.string() })),
-    // ---- v2 (onboarding slice; Data: review) ----
+    // ---- v2 (onboarding slice, PR #7) ----
     kind: v.optional(v.string()), // onboarding | story
     cartesiaCallId: v.optional(v.string()),
     summary: v.optional(v.string()),
@@ -79,10 +98,57 @@ export default defineSchema({
     lastPolledAt: v.optional(v.number()), // epoch ms
     processingAt: v.optional(v.number()), // epoch ms; claim, stale after 15 min
     processedAt: v.optional(v.number()), // epoch ms; set only on success
+    // ---- v2 (Brain) ----
+    plan: v.optional(v.any()), // CallPlan from conversation.planNextCall, for debugging
   })
     .index("by_sid", ["callSid"])
     .index("by_cartesia", ["cartesiaCallId"])
     .index("by_elder", ["elderId"]),
+
+  // ---- Data: memory ----
+  // Everything he told us, one row per fact / story seed / open thread / person /
+  // place / covered topic / topic to avoid. One table so one vector search covers it.
+  // elderKind = `${elderId}|${kind}`: vector filters only support eq/or, so this
+  // field lets a search match "this elder AND these kinds".
+  memories: defineTable({
+    elderId: v.id("elders"),
+    callId: v.optional(v.id("calls")), // call where it was first heard
+    kind: memoryKind,
+    text: v.string(),
+    name: v.optional(v.string()), // people and places
+    status: v.union(v.literal("active"), v.literal("resolved")), // resolved = open thread he finished
+    mentionCount: v.number(),
+    lastMentionedAt: v.number(), // epoch ms
+    elderKind: v.string(),
+    embedding: v.array(v.float64()), // OpenAI text-embedding-3-small, 1536 dims
+  })
+    .index("by_elder_kind", ["elderId", "kind"])
+    .index("by_elder_status", ["elderId", "status"])
+    .index("by_elder_last", ["elderId", "lastMentionedAt"])
+    .index("by_call", ["callId"])
+    .vectorIndex("by_embedding", {
+      vectorField: "embedding",
+      dimensions: 1536,
+      filterFields: ["elderId", "kind", "elderKind"],
+    }),
+
+  // ---- Data: reader engagement on his LinkedIn posts ----
+  // One row per post (latest snapshot), written by apify.scrapeEngagement via
+  // engagement.upsert. linkedinUrl is canonical (lib/linkedinUrl.ts) so it matches
+  // posts.linkedinUrl with a plain equality check.
+  engagement: defineTable({
+    elderId: v.id("elders"),
+    postId: v.optional(v.id("posts")),
+    linkedinUrl: v.string(),
+    reactions: v.number(),
+    comments: v.array(v.object({ author: v.string(), text: v.string() })),
+    scrapedAt: v.number(), // epoch ms, last scrape
+    changedAt: v.optional(v.number()), // epoch ms, last time reactions/comments changed
+  })
+    .index("by_elder", ["elderId"])
+    .index("by_url", ["linkedinUrl"])
+    .index("by_elder_scraped", ["elderId", "scrapedAt"])
+    .index("by_elder_changed", ["elderId", "changedAt"]),
 
   answers: defineTable({
     elderId: v.id("elders"),
@@ -159,5 +225,6 @@ export default defineSchema({
     maybePosted: v.optional(v.boolean()), // LinkedAPI didn't confirm the send: check before retrying
   })
     .index("by_elder", ["elderId"])
-    .index("by_url", ["linkedinUrl"]),
+    .index("by_url", ["linkedinUrl"])
+    .index("by_call", ["callId"]), // one post per call (pipeline idempotency)
 });

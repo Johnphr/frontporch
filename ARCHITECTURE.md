@@ -133,7 +133,7 @@ type Turn = { role: "pip" | "elder"; text: string };   // calls.transcript, afte
 **Function names** (all `internal.*`):
 `cartesia.syncAgent` · `cartesia.startCall` · `cartesia.pollCall` · `conversation.planNextCall` ·
 `pipeline.processCall` · `llm.extractProfile` · `llm.writePost` · `llm.extractMemories` ·
-`llm.summarizeFeedback` · `llm.planQuestions` · `memories.add` · `memories.search` ·
+`llm.summarizeFeedback` · `llm.planQuestions` · `memories.addMany` · `memories.search` ·
 `engagement.upsert` · `engagement.recentFeedback` · `apify.scrapeEngagement` ·
 `apify.scrapeProfile` · `apify.findAudienceQuestions` · `apify.topAudienceQuestions` ·
 `linkedapi.createPost`
@@ -141,24 +141,69 @@ type Turn = { role: "pip" | "elder"; text: string };   // calls.transcript, afte
 Post guard: `postGuard.checkPost` · `linkedapi.approvePost` · `linkedapi.previewPost` ·
 `linkedapi.previewText` · `linkedapi.checkPostStatus`
 
-## Data model
+## Data model (in `schema.ts`)
 
-`posts` and `audienceQuestions` are in `schema.ts`. Slice 1 adds the optional `elders` and
-`calls` fields below. Everything else is still a draft.
+All v2 fields are **optional** (and `calls.callSid` became optional), so v1 rows
+still validate. Bookkeeping fields are written by code, never by hand.
 
 ```ts
-elders: + stage?: "onboarding" | "active"      // missing = onboarding
-        + linkedinUrl?, timezone?
-        + profile?: { industry, specialty, careerSummary, topics[], storySeeds[], topicsToAvoid[] }
-        (later: callDay, callHour)
+elders:   + stage?: "onboarding" | "active"       // missing = onboarding
+          + timezone (IANA), callDay ("sunday"), callHour (0-23 local), linkedinUrl,
+          + profile?: { industry?, specialty?, careerSummary?, topics?[], storySeeds?[], topicsToAvoid?[] }
+            (all optional, as PR #7 defines it; merged over onboarding calls),
+          + knownBackground
+          // bookkeeping: lastPreparedSlot, lastCallSlot ("YYYY-MM-DDTHH" local),
+          //              lastBankRefreshAt (debounces question-bank refreshes)
 
-calls:  callSid -> optional (v1 only)
-        + kind?, cartesiaCallId?, summary?, endReason?, pollAttempts?, processedAt?
-        index by_cartesia
+calls:    callSid -> optional (v1 only)
+          status: queued | in_progress | ended | done | no_conversation | failed |
+                  poll_error | poll_timeout | process_failed   (PR #7 lifecycle)
+          + kind? ("onboarding" | "story"), cartesiaCallId?, summary?, endReason?, error?,
+            pollAttempts?, lastPolledAt?, processingAt? (claim, stale after 15 min),
+            processedAt? (set only on success), plan? (CallPlan, Brain)
+          indexes by_cartesia, by_elder
 
-memories (slice 3): elderId, callId?, text, embedding (1536), vectorIndex by elderId
-engagement (slice 3): elderId, postId?, linkedinUrl, reactions, comments[], scrapedAt
+memories: elderId, callId?, kind, text, name?, status (active | resolved),
+          mentionCount, lastMentionedAt, elderKind (`${elderId}|${kind}`),
+          embedding (1536, OpenAI text-embedding-3-small)
+          kind: fact | story_seed | open_thread | person | place | topic_covered | avoid
+          vectorIndex by_embedding, filterFields [elderId, kind, elderKind]
+          (vector filters only do eq/or, so elderKind lets one search mean
+           "this elder AND these kinds"); indexes by_elder_kind, by_elder_status,
+           by_elder_last, by_call
+
+engagement: elderId, postId?, linkedinUrl (canonical, lib/linkedinUrl.ts), reactions,
+            comments [{ author, text }], scrapedAt, changedAt?
+            indexes by_elder, by_url, by_elder_scraped, by_elder_changed
+
+posts:    see the Integrations block in schema.ts; + index by_call (one post per call)
+audienceQuestions: see the Integrations block in schema.ts.
+questionBank: Core: Brain (conversation.ts).
 ```
+
+**Memory functions** (`memories.ts`, all internal):
+`addMany({ elderId, callId?, items: [{ kind, text, name? }], resolveThreadIds? })`
+→ `{ inserted, merged, resolved }`: embeds, merges near-duplicates (same kind and
+similarity ≥ 0.85, or same-named person/place; two different names never merge),
+bumps `mentionCount`, keeps the more specific text, marks finished open threads
+resolved. A repeat run for a `callId` that already has memories is skipped
+(the pipeline also guards with its `processingAt` / `processedAt` claim).
+`search({ elderId, text, k, kinds?, includeResolved? })` → `{ _id, kind, text, name?, status, score }[]`.
+`listForElder({ elderId, kinds?, status?, limit? })` (newest first, no embeddings).
+`resolveThreads({ elderId, ids })`. Prompt text: `formatMemoriesForPrompt` in `lib/memoryText.ts`.
+
+**Engagement** (`engagement.ts`): `upsert` (from `apify.scrapeEngagement`) keeps the
+latest snapshot, links `postId` by canonical URL, and when reactions/comments changed
+sets `changedAt` and schedules `conversation.refreshQuestionBank` (2 min later, at most
+once per elder per 10 min). `commentsKnown: false` (counts-only backup Actor) keeps the
+stored comments. `recentFeedback({ elderId, sinceDays? })` →
+`{ linkedinUrl, postText?, reactions, comments, scrapedAt, changedAt }[]`, posts whose
+reactions/comments changed in the window, most recently changed first.
+
+**Scheduling** (`schedule.ts` + `crons.ts`): hourly `schedule.tick` →
+`conversation.prepareCall` about 1 hour before his local call time and
+`cartesia.startCall` at the call hour (each local slot once, DST-safe, `lib/schedule.ts`);
+daily `apify.scrapeEngagement` and weekly `apify.findAudienceQuestions` for active elders.
 
 **v1 leftovers in `convex/`**: `questions.ts`, `answers.ts`, `replies.ts` (and their tables)
 belong to the old product; delete them. `elders.ts`, `calls.ts`, `lib/auth.ts` take a `secret`
