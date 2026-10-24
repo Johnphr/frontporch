@@ -149,7 +149,7 @@ test("buildOutboundCallBody: one call with variables", () => {
     {
       agent_id: "agent_1",
       from_number_id: "ap_1",
-      ringing_timeout_seconds: 30,
+      ringing_timeout_seconds: 60,
       outbound_calls: [{ to_number: "+15555550123", dynamic_variables: { first_name: "Walter" } }],
     },
   );
