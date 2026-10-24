@@ -1,7 +1,8 @@
 # Front Porch — Architecture (v2)
 
-> **Status:** posting (`linkedapi.ts` + `postGuard.ts`) and Apify scraping (`apify.ts`) are
-> built. The conversation side is being built in slices (see [Build order](#build-order)).
+> **Status:** posting (`linkedapi.ts` + `postGuard.ts`), Apify scraping (`apify.ts`), the
+> onboarding call (slice 1) and the story follow-up call (slice 2: story agent + `startCall` story
+> branch) are built; memory + feedback (slice 3) too. See [Build order](#build-order).
 > [Decisions](#decisions-locked) are locked; change them only by agreeing as a team.
 > [Team defaults](#team-defaults-owner-may-change) can be changed by their owner in a PR.
 
@@ -86,17 +87,20 @@ The phone number is already set up in Cartesia; Convex only needs its id (`CARTE
 ### ② Weekly story call (slice 2)
 1. Hourly cron finds elders whose local `callDay`/`callHour` match → `cartesia.startCall`
    (~1h earlier, `conversation.prepareCall` refreshes the question bank, see below).
-2. `cartesia.startCall` (story branch, slice 2; today `reserveCall` refuses story calls) →
+2. `cartesia.startCall` (story branch; `reserveCall` picks the kind and refuses if it changed) →
    `conversation.planNextCall` → `{ plan, dynamicVariables }` (kind from PR #7's
    `lib/onboarding.planNextCall`, the same rule `reserveCall` uses): top queued
    question as `mainQuestion`, the next 2–3 as `threads`, memories related to the main question
    (vector search) + people/places, topics to avoid, one `feedback` line saved by the last
    refresh. Fast by design: no Claude call, never waits on a refresh (empty bank → safe opening
    question + a refresh scheduled for next time).
-3. Story agent (draft prompt: `voice/prompts/story-call.md`) gets `dynamicVariables` as Cartesia
-   `dynamic_variables` on `POST /agents/calls`.
-4. Once a story call is placed, `cartesia.startCall` calls
+3. Story agent (`CARTESIA_STORY_AGENT_ID`, prompt in `convex/lib/prompts/story.ts`, pushed by
+   `cartesia:syncAgent`) gets `dynamicVariables` as Cartesia `dynamic_variables` on
+   `POST /agents/calls`. Planning fails → the queued row is marked `failed`, nothing rings.
+4. Once a story call is placed, `cartesia.startCall` saves `plan` on the calls row and calls
    `conversation.markPlanUsed({ elderId, bankId: plan.bankId, callId })`.
+5. After the call, the post is auto-posted unless `AUTO_POST=off` (tests: the `posts` row stays
+   `pending` for `linkedapi:previewPost`; post on purpose with `linkedapi:createPost`).
 
 **Question bank** (`questionBank`, `questionBankMeta`): his ranked next questions, rebuilt by
 `conversation.refreshQuestionBank` after every call, when new reader comments arrive, and by
@@ -165,9 +169,9 @@ type Turn = { role: "pip" | "elder"; text: string };   // calls.transcript, afte
 
 // conversation.planNextCall({ elderId }) -> { plan: CallPlan, dynamicVariables }
 // onboarding: dynamicVariables = lib/onboarding.buildOnboardingVariables (first_name, known_background)
-// story: every {{name}} in voice/prompts/story-call.md, via lib/cartesia.templateVariables
-// ("" -> "none"): firstName, language ("Spanish", not "es-MX"), profile (incl. "Topics to
-// avoid: ..."), memories ("- ..." lines), feedback, mainQuestion, threads ("- ..." lines).
+// story: every {{name}} in lib/prompts/story.ts (story agent), via lib/cartesia.templateVariables
+// ("" -> "none"): first_name, language ("Spanish", not "es-MX"), profile (incl. "Topics to
+// avoid: ..."), memories ("- ..." lines), feedback, main_question, threads ("- ..." lines).
 
 // pipeline.processCall({ callId }) -> { status: "done" | "no_conversation" | "process_failed" | "skipped", reason? }
 //   scheduled by cartesia.applyPoll once the call has ended (PR #7)
@@ -273,7 +277,7 @@ package.json                    Convex CLI + tests (npm run convex / deploy / te
 voice/                                                                  Voice
   README.md                     Cartesia setup
   conversation-guide.md         how Pip talks (research-backed rules)
-  prompts/story-call.md         slice-2 draft (onboarding prompt lives in code)
+  prompts/story-call.md         pointer: both prompts live in convex/lib/prompts/
 convex/
   schema.ts                     tables                                  Data
   cartesia.ts                   sync agent, start call, poll transcript Voice + Brain
@@ -308,8 +312,8 @@ tests/                          node --test + fixtures/
 
 | Var | Provided by |
 |---|---|
-| `CARTESIA_API_KEY`, `CARTESIA_ONBOARDING_AGENT_ID`, `CARTESIA_FROM_NUMBER_ID`, `CARTESIA_VOICE_ID` (optional), `CARTESIA_MODEL` (optional) | Voice |
-| `LINKEDAPI_TOKEN`, `LINKEDAPI_ID_TOKEN`, `APIFY_TOKEN`, `STACKEXCHANGE_KEY` (optional), `POST_GUARD_MODE` (optional, default `enforce`) | Integrations |
+| `CARTESIA_API_KEY`, `CARTESIA_ONBOARDING_AGENT_ID`, `CARTESIA_STORY_AGENT_ID`, `CARTESIA_FROM_NUMBER_ID`, `CARTESIA_VOICE_ID` (optional), `CARTESIA_MODEL` (optional) | Voice |
+| `LINKEDAPI_TOKEN`, `LINKEDAPI_ID_TOKEN`, `APIFY_TOKEN`, `STACKEXCHANGE_KEY` (optional), `POST_GUARD_MODE` (optional, default `enforce`), `AUTO_POST` (optional, default `on`; `off` = preview-only for tests) | Integrations |
 | `OPENAI_API_KEY` | Data |
 | `ANTHROPIC_API_KEY` | Brain |
 

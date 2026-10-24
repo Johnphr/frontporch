@@ -358,12 +358,12 @@ export function buildCallPlan(input: {
  * Onboarding variables are PR #7's: lib/onboarding.buildOnboardingVariables.
  */
 export const PROMPT_VARIABLES = [
-  "firstName",
+  "first_name",
   "language",
   "profile",
   "memories",
   "feedback",
-  "mainQuestion",
+  "main_question",
   "threads",
 ] as const;
 
@@ -396,12 +396,12 @@ export function toPromptVariables(
   opts: { avoid?: string[] } = {},
 ): PromptVariables {
   return {
-    firstName: (elder.name ?? "").trim().split(/\s+/)[0] ?? "",
+    first_name: (elder.name ?? "").trim().split(/\s+/)[0] ?? "",
     language: languageName(elder.language),
     profile: formatProfile(elder.profile, opts.avoid ?? []),
     memories: plan.memories.map((m) => `- ${m}`).join("\n"),
     feedback: plan.feedback ?? "",
-    mainQuestion: plan.mainQuestion ?? "",
+    main_question: plan.mainQuestion ?? "",
     threads: plan.threads.map((t) => `- ${t}`).join("\n"),
   };
 }

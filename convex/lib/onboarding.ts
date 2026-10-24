@@ -131,6 +131,34 @@ export function hasOpenCall(calls: { status: string; _creationTime: number }[], 
   return calls.some((c) => OPEN_STATUSES.has(c.status) && now - c._creationTime < OPEN_CALL_WINDOW_MS);
 }
 
+export type CallKind = CallPlan["kind"];
+
+/** Convex env var holding the Cartesia agent id for each kind of call. */
+export function agentEnvName(kind: CallKind): "CARTESIA_ONBOARDING_AGENT_ID" | "CARTESIA_STORY_AGENT_ID" {
+  return kind === "story" ? "CARTESIA_STORY_AGENT_ID" : "CARTESIA_ONBOARDING_AGENT_ID";
+}
+
+/**
+ * reserveCall's decision, in one transaction with the insert. `expectedKind` is what startCall
+ * checked its env for; if the elder's next call kind changed in between (e.g. onboarding just
+ * finished), refuse instead of calling him with the wrong agent.
+ */
+export function reserveDecision(
+  elder: { stage?: string; profile?: Profile },
+  recentCalls: { status: string; _creationTime: number }[],
+  now: number,
+  opts: { force: boolean; expectedKind?: CallKind },
+): { ok: true; kind: CallKind } | { ok: false; reason: string } {
+  const kind = planNextCall(elder).kind;
+  if (opts.expectedKind && opts.expectedKind !== kind) {
+    return { ok: false, reason: `His next call is now ${kind}, not ${opts.expectedKind}; run startCall again` };
+  }
+  if (!opts.force && hasOpenCall(recentCalls, now)) {
+    return { ok: false, reason: "A call to him is already open (pass force: true to call anyway)" };
+  }
+  return { ok: true, kind };
+}
+
 /**
  * calls patch when processing ends. Releases the claim; `processedAt` only when finished for
  * good. An error is written only when given, so Cartesia's own reason (e.g. busy) survives a

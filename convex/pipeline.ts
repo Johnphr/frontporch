@@ -13,6 +13,7 @@
 //                    finished; only thread ids we sent are passed back)
 //          post      llm.writePost (may decline: no post) -> one posts row per call
 //                    (posts.by_call) -> linkedapi.createPost, scheduled only for a new row
+//                    and only when AUTO_POST isn't "off" (off = preview-only, for tests)
 //          plan      conversation.refreshQuestionBank (scheduled)
 //     4. status `done` + processedAt; any error (or a failed story step) -> `process_failed`
 //        + error. A retry is safe: memories.addMany skips a callId it already has and the
@@ -29,6 +30,10 @@ import { clip, isNoConversation, type Turn } from "./lib/cartesia";
 import { memoriesAddMany, memoriesListForElder, type MemoryDoc } from "./lib/dataRefs";
 import { canClaimProcessing, finishPatch, isProfileUsable, mergeProfile, type Profile } from "./lib/onboarding";
 import { runSteps, type StepReport } from "./lib/planner";
+import { parseAutoPost } from "./lib/postFlow";
+
+// Convex exposes env vars on process.env (declared so we don't need @types/node).
+declare const process: { env: Record<string, string | undefined> };
 
 const PROCESSABLE = new Set(["ended", "process_failed"]);
 
@@ -176,6 +181,11 @@ async function runStoryCall(
           text: post.text,
         });
         if (!created) return `post ${postId} already exists`;
+        // AUTO_POST=off (tests): keep the row `pending`; preview with linkedapi:previewPost,
+        // post on purpose with linkedapi:createPost.
+        if (!parseAutoPost(process.env.AUTO_POST)) {
+          return `post ${postId} saved, preview only (AUTO_POST=off)`;
+        }
         // Posting runs on its own (guard + LinkedAPI + polling) so it can't hold up the rest.
         await ctx.scheduler.runAfter(0, internal.linkedapi.createPost, { postId });
         return `post ${postId} scheduled`;
