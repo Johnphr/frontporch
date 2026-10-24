@@ -41,6 +41,7 @@ import {
   type PollOutcome,
 } from "./lib/cartesia";
 import { cartesiaFetch, httpError, requireEnv } from "./lib/cartesiaHttp";
+import { callPath } from "./lib/inbound";
 import {
   agentEnvName,
   buildOnboardingVariables,
@@ -288,7 +289,7 @@ export const pollCall = internalAction({
     if (shouldGiveUp(seenAttempts)) {
       outcome = { kind: "timeout" };
     } else {
-      const res = await cartesiaFetch(`/agents/calls/${call.cartesiaCallId}`, { method: "GET" });
+      const res = await cartesiaFetch(callPath(call.cartesiaCallId), { method: "GET" });
       const http = classifyHttp(res.status);
       if (http === "fatal") {
         outcome = { kind: "fatal", error: httpError(res) };

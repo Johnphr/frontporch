@@ -27,7 +27,7 @@ http.route({
     }
     const body = await request.json().catch(() => null);
     const parsed = parseLookupRequest(body);
-    if (!parsed) return json({ error: "caller_id missing or invalid" }, 400);
+    if (!parsed) return json({ error: "caller_id or conversation_id missing or invalid" }, 400);
     try {
       const result = await ctx.runAction(internal.inbound.handleLookup, parsed);
       return json(result);

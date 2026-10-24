@@ -20,7 +20,12 @@ export const BACKSTOP_WINDOW_MS = 3 * 60 * 60_000;
 /** Max size of the JSON we send back (Cartesia passes at most 16 KiB of it to the model). */
 export const MAX_LOOKUP_BYTES = 15_000;
 
-const E164 = /^\+[1-9]\d{7,14}$/;
+/** The E.164 rule elders.seed enforces too (one place, same digit range: 7 to 15 digits). */
+export const E164 = /^\+[1-9]\d{6,14}$/;
+
+export function isE164(phone: string): boolean {
+  return E164.test(phone);
+}
 
 /**
  * A phone number as Cartesia or a person writes it -> E.164 ("+14155550123"), or "" if it
@@ -67,18 +72,65 @@ export function verifyBearer(header: string | null | undefined, secret: string |
   return diff === 0;
 }
 
-export type LookupRequest = { callerId: string; conversationId?: string };
+export type LookupRequest = { callerId: string; conversationId: string };
 
-/** The tool's JSON body -> validated fields (null when there's no usable caller number). */
+/** Printable, no spaces, at most 128 chars: Cartesia's id format isn't documented, so stay open. */
+const CALL_ID = /^[\x21-\x7E]{1,128}$/;
+
+/**
+ * The tool's JSON body -> validated fields. Both are required: the caller number to find him,
+ * and the conversation id so the call can be verified with Cartesia before any data goes out.
+ * The id is only ever used as an index value and in URL paths through encodeURIComponent.
+ */
 export function parseLookupRequest(body: unknown): LookupRequest | null {
   if (!body || typeof body !== "object" || Array.isArray(body)) return null;
   const b = body as Record<string, unknown>;
   const callerId = normalizePhone(b.caller_id);
   if (!callerId) return null;
   const conv = typeof b.conversation_id === "string" ? b.conversation_id.trim() : "";
-  // Cartesia call ids are short opaque tokens; refuse anything that could be abuse.
-  const conversationId = /^[A-Za-z0-9_-]{4,128}$/.test(conv) ? conv : undefined;
-  return conversationId ? { callerId, conversationId } : { callerId };
+  if (!CALL_ID.test(conv)) return null;
+  return { callerId, conversationId: conv };
+}
+
+/** `GET /agents/calls/{id}` path for any call id (never interpolated raw). */
+export function callPath(callId: string): string {
+  return `/agents/calls/${encodeURIComponent(callId)}`;
+}
+
+const LIVE = new Set(["created", "started"]);
+
+export type VerifyResult =
+  | { ok: true; callId: string }
+  | { ok: false; reason: "bad_response" | "agent_mismatch" | "not_live" | "caller_mismatch" };
+
+/**
+ * Is this Cartesia call (GET /agents/calls/{id} body: id, agent_id, status, telephony_params)
+ * a live call on OUR inbound agent from this caller? Fail closed on anything unexpected. This
+ * is what makes a leaked tool secret useless on its own: the caller must really be on the line.
+ */
+export function verifyLiveCall(call: unknown, want: { agentId: string; callerId: string }): VerifyResult {
+  if (!call || typeof call !== "object") return { ok: false, reason: "bad_response" };
+  const c = call as Record<string, unknown>;
+  const id = typeof c.id === "string" && c.id ? c.id : "";
+  if (!id) return { ok: false, reason: "bad_response" };
+  if (!want.agentId || c.agent_id !== want.agentId) return { ok: false, reason: "agent_mismatch" };
+  const status = typeof c.status === "string" ? c.status.toLowerCase() : "";
+  if (!LIVE.has(status)) return { ok: false, reason: "not_live" };
+  if (!callerCandidates(c.telephony_params).includes(want.callerId)) return { ok: false, reason: "caller_mismatch" };
+  return { ok: true, callId: id };
+}
+
+/**
+ * Fallback when GET by the conversation id fails (the docs don't say system__conversation_id is
+ * the call id): among calls listed on the inbound agent, the one live call from this caller.
+ * Ambiguous (two live calls from the same number) = no match.
+ */
+export function pickLiveCallForCaller(list: unknown, want: { agentId: string; callerId: string }): string | undefined {
+  if (!Array.isArray(list)) return undefined;
+  const hits = list
+    .map((c) => verifyLiveCall(c, want))
+    .filter((r): r is { ok: true; callId: string } => r.ok);
+  return hits.length === 1 ? hits[0].callId : undefined;
 }
 
 export type LookupResponse = Record<string, string>;
@@ -172,10 +224,72 @@ export function lookupUrl(siteUrl: string | undefined): string {
   return `${base}${LOOKUP_PATH}`;
 }
 
-/** Lookup-time row decision: Cartesia may retry the tool, so one row per conversation id. */
-export function inboundRowDecision(existing: { _id: string } | null): "insert" | "reuse" {
-  return existing ? "reuse" : "insert";
+/**
+ * Lookup-time row decision. Cartesia may retry the tool, or the model may call it twice, so:
+ * no row -> insert; a row that already answered a lookup -> send the SAME answer again (never
+ * re-plan mid-call: the question would change); a row without one (the backstop made it) -> reuse.
+ */
+export function lookupReuseDecision(
+  existing: { _id: string; inboundLookup?: unknown } | null,
+): { action: "insert" } | { action: "cached"; response: LookupResponse } | { action: "reuse" } {
+  if (!existing) return { action: "insert" };
+  const cached = existing.inboundLookup;
+  if (cached && typeof cached === "object" && !Array.isArray(cached)) {
+    const response: LookupResponse = {};
+    for (const [k, value] of Object.entries(cached as Record<string, unknown>)) response[k] = String(value);
+    return { action: "cached", response };
+  }
+  return { action: "reuse" };
 }
+
+/** Backstop: how close (ms) a lookup-made row must be to a listed call's start to be the same call. */
+export const ATTACH_WINDOW_MS = 10 * 60_000;
+
+export type OpenInboundRow = { _id: string; elderId: string; createdAt: number };
+
+/**
+ * Backstop row matching for a finished listed call. A row with this id (or conversation id):
+ * nothing to do. Else, if the same elder has exactly one open inbound row (no transcript yet)
+ * created near the call's start, it's the same call recorded under a different id: attach the
+ * listed id to it instead of inserting a duplicate. Else insert.
+ */
+export function matchBackstopRow(
+  listed: { id: string; startMs?: number; elderId: string },
+  ctx: { idHasRow: boolean; openInbound: OpenInboundRow[] },
+  windowMs = ATTACH_WINDOW_MS,
+): { kind: "has_row" } | { kind: "attach"; rowId: string } | { kind: "insert" } {
+  if (ctx.idHasRow) return { kind: "has_row" };
+  const near = ctx.openInbound.filter(
+    (r) =>
+      r.elderId === listed.elderId &&
+      (listed.startMs === undefined || Math.abs(r.createdAt - listed.startMs) <= windowMs),
+  );
+  return near.length === 1 ? { kind: "attach", rowId: near[0]._id } : { kind: "insert" };
+}
+
+/**
+ * Inbound calls mark their bank question used only once processing found a real conversation
+ * (not at lookup time: a timed-out lookup or a hang-up must not consume his best question).
+ * Outbound calls already marked it when the phone rang.
+ */
+export function inboundPlanToMark(call: { direction?: string; plan?: unknown } | null, status: string): string | null {
+  if (!call || call.direction !== "inbound") return null;
+  if (status !== "done" && status !== "process_failed") return null;
+  const bankId = (call.plan as { bankId?: unknown } | undefined)?.bankId;
+  return typeof bankId === "string" && bankId ? bankId : null;
+}
+
+/**
+ * syncAgent for the inbound pieces: create only when asked ('{"only":"inbound"}'); a plain sync
+ * updates only when BOTH ids are set (never creates a stray lookup tool), otherwise skips.
+ */
+export function inboundSyncMode(mayCreate: boolean, agentId?: string, toolId?: string): "create" | "update" | "skip" {
+  if (mayCreate) return "create";
+  return agentId && toolId ? "update" : "skip";
+}
+
+/** Short budget for the verification fetch: the whole lookup must fit Cartesia's 20 s tool wait. */
+export const VERIFY_TIMEOUT_MS = 5_000;
 
 const FINISHED = new Set(["completed", "failed"]);
 

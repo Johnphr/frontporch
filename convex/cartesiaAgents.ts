@@ -21,7 +21,7 @@ import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { buildAgentConfig, classifyHttp } from "./lib/cartesia";
 import { cartesiaFetch, httpError, requireEnv } from "./lib/cartesiaHttp";
-import { buildLookupTool, lookupUrl } from "./lib/inbound";
+import { buildLookupTool, inboundSyncMode, lookupUrl } from "./lib/inbound";
 import { agentEnvName, type CallKind } from "./lib/onboarding";
 import { inboundAgent } from "./lib/prompts/inbound";
 import { onboardingAgent } from "./lib/prompts/onboarding";
@@ -82,7 +82,12 @@ async function syncInbound(mayCreate: boolean, assignNumber: boolean): Promise<I
   const agentEnv = "CARTESIA_INBOUND_AGENT_ID";
   const existingTool = process.env[toolEnv];
   const existingAgent = process.env[agentEnv];
-  if (!mayCreate && !existingAgent) return null;
+  if (inboundSyncMode(mayCreate, existingAgent, existingTool) === "skip") {
+    if (existingAgent || existingTool) {
+      console.log("cartesiaAgents.syncAgent: inbound skipped (set both CARTESIA_INBOUND_AGENT_ID and CARTESIA_LOOKUP_TOOL_ID, or run {\"only\":\"inbound\"})");
+    }
+    return null;
+  }
   const { CARTESIA_TOOL_SECRET: secret } = requireEnv(["CARTESIA_TOOL_SECRET"]);
   const created: string[] = [];
 
@@ -92,7 +97,7 @@ async function syncInbound(mayCreate: boolean, assignNumber: boolean): Promise<I
     method: existingTool ? "PATCH" : "POST",
     body: existingTool ? { ...toolBody, type: undefined } : toolBody,
   });
-  if (classifyHttp(toolRes.status) !== "ok") throw new Error(`lookup tool: ${httpError(toolRes, true)}`);
+  if (classifyHttp(toolRes.status) !== "ok") throw new Error(`lookup tool: ${httpError(toolRes)}`); // no detail: the body holds the secret
   const toolId = existingTool ?? toolRes.json?.id ?? toolRes.json?.tool_id;
   if (!toolId) throw new Error("Cartesia created the lookup tool but returned no id; copy it from the dashboard");
   if (!existingTool) created.push(`npx convex env set ${toolEnv} ${toolId}`);

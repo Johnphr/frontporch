@@ -162,6 +162,12 @@ poll → `pipeline.processCall`. Unknown numbers get a polite goodbye and no row
 4. From a number that isn't an elder: polite goodbye, no row.
 5. Backstop by hand: `npx convex run inbound:syncInboundCalls`.
 
+Safety: every lookup is checked with Cartesia first (a live call on `CARTESIA_INBOUND_AGENT_ID`
+from that caller), so the tool secret alone gets nothing; a repeated lookup of the same call gets
+the same cached answer; phones typed in the dashboard in other formats still match (normalized
+comparison). A plain `syncAgent` only updates the inbound pieces when both
+`CARTESIA_INBOUND_AGENT_ID` and `CARTESIA_LOOKUP_TOOL_ID` are set.
+
 ## Apify scrapers (`apify.ts`, Integrations)
 
 Env: `APIFY_TOKEN` (required), `STACKEXCHANGE_KEY` (optional; raises the free

@@ -4,6 +4,7 @@
 
 import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
+import { isE164 } from "./lib/inbound";
 import { isProfileUsable, normalizeProfile } from "./lib/onboarding";
 import { localParts, normalizeDay } from "./lib/schedule";
 
@@ -27,7 +28,7 @@ export const seed = internalMutation({
     profile: v.optional(v.any()),
   },
   handler: async (ctx, { language, callDay, profile: rawProfile, ...fields }) => {
-    if (!/^\+[1-9]\d{6,14}$/.test(fields.phone)) throw new Error("phone must be E.164, e.g. +14155550123");
+    if (!isE164(fields.phone)) throw new Error("phone must be E.164, e.g. +14155550123");
     const day = callDay === undefined ? undefined : normalizeDay(callDay);
     if (callDay !== undefined && !day) throw new Error("callDay must be a weekday, e.g. sunday");
     if (fields.callHour !== undefined && !(Number.isInteger(fields.callHour) && fields.callHour >= 0 && fields.callHour <= 23)) {

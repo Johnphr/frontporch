@@ -9,15 +9,22 @@ import {
   backstopDecision,
   buildLookupTool,
   callerCandidates,
+  callPath,
   clampResponse,
-  inboundRowDecision,
+  inboundPlanToMark,
+  inboundSyncMode,
+  isE164,
   knownCallerResponse,
   lookupErrorResponse,
+  lookupReuseDecision,
   lookupUrl,
+  matchBackstopRow,
   normalizePhone,
   parseLookupRequest,
+  pickLiveCallForCaller,
   unknownCallerResponse,
   verifyBearer,
+  verifyLiveCall,
 } from "../convex/lib/inbound.ts";
 import { buildOnboardingVariables } from "../convex/lib/onboarding.ts";
 import { inboundAgent } from "../convex/lib/prompts/inbound.ts";
@@ -57,19 +64,81 @@ test("verifyBearer: only the exact secret passes", () => {
   assert.equal(verifyBearer("Bearer ", ""), false);
 });
 
-test("parseLookupRequest: needs a usable caller number; conversation id is optional and checked", () => {
+test("parseLookupRequest: needs a usable caller number AND a printable conversation id", () => {
   assert.deepEqual(parseLookupRequest({ caller_id: "+14155550123", conversation_id: "call_abc123" }), {
     callerId: "+14155550123",
     conversationId: "call_abc123",
   });
-  assert.deepEqual(parseLookupRequest({ caller_id: "4155550123" }), { callerId: "+14155550123" });
-  assert.deepEqual(parseLookupRequest({ caller_id: "+14155550123", conversation_id: "../../etc" }), {
+  // Cartesia's id format isn't documented: any printable, no-space id up to 128 chars is kept.
+  assert.deepEqual(parseLookupRequest({ caller_id: "4155550123", conversation_id: "conv:01HX.9-z" }), {
     callerId: "+14155550123",
+    conversationId: "conv:01HX.9-z",
   });
-  assert.equal(parseLookupRequest({ caller_id: "" }), null);
+  assert.equal(parseLookupRequest({ caller_id: "+14155550123" }), null); // can't be verified
+  assert.equal(parseLookupRequest({ caller_id: "+14155550123", conversation_id: "has space" }), null);
+  assert.equal(parseLookupRequest({ caller_id: "+14155550123", conversation_id: "x".repeat(129) }), null);
+  assert.equal(parseLookupRequest({ caller_id: "+14155550123", conversation_id: "ñ" }), null);
+  assert.equal(parseLookupRequest({ caller_id: "", conversation_id: "call_abc123" }), null);
   assert.equal(parseLookupRequest({ conversation_id: "call_abc123" }), null);
   assert.equal(parseLookupRequest(null), null);
   assert.equal(parseLookupRequest([]), null);
+});
+
+test("callPath encodes the id, so an odd id can't change the URL path", () => {
+  assert.equal(callPath("call_1"), "/agents/calls/call_1");
+  assert.equal(callPath("../../agents"), "/agents/calls/..%2F..%2Fagents");
+  assert.equal(callPath("a?b#c"), "/agents/calls/a%3Fb%23c");
+});
+
+test("isE164 is the same rule elders.seed enforces; normalizePhone matches dashboard formats", () => {
+  assert.equal(isE164("+14155550123"), true);
+  assert.equal(isE164("+1234567"), true); // 7 digits: the seed accepts it, so lookups must too
+  assert.equal(normalizePhone("+1234567"), "+1234567");
+  assert.equal(isE164("+123456"), false);
+  assert.equal(isE164("+1 415 555 0123"), false);
+  for (const typed of ["+1 (415) 555-0123", "+1-415-555-0123", "(415) 555-0123", "415.555.0123", " +14155550123 "]) {
+    assert.equal(normalizePhone(typed), "+14155550123", typed);
+  }
+});
+
+test("verifyLiveCall: only a live call on our inbound agent from this caller passes", () => {
+  const want = { agentId: "agent_in", callerId: "+14155550123" };
+  const call = {
+    id: "call_1",
+    agent_id: "agent_in",
+    status: "started",
+    telephony_params: { from: "+14155550123", to: "+15550009999", direction: "inbound" },
+  };
+  assert.deepEqual(verifyLiveCall(call, want), { ok: true, callId: "call_1" });
+  assert.deepEqual(verifyLiveCall({ ...call, telephony_params: { to: "+1 415 555 0123" } }, want), {
+    ok: true,
+    callId: "call_1",
+  }); // docs disagree on from/to: either side counts
+  assert.equal(verifyLiveCall({ ...call, agent_id: "agent_story" }, want).ok, false);
+  assert.deepEqual(verifyLiveCall({ ...call, agent_id: "agent_story" }, want), { ok: false, reason: "agent_mismatch" });
+  assert.deepEqual(verifyLiveCall({ ...call, status: "completed" }, want), { ok: false, reason: "not_live" });
+  assert.deepEqual(verifyLiveCall({ ...call, status: "failed" }, want), { ok: false, reason: "not_live" });
+  assert.deepEqual(verifyLiveCall({ ...call, telephony_params: { from: "+15550001111" } }, want), {
+    ok: false,
+    reason: "caller_mismatch",
+  });
+  assert.deepEqual(verifyLiveCall(null, want), { ok: false, reason: "bad_response" });
+  assert.deepEqual(verifyLiveCall({ ...call, id: "" }, want), { ok: false, reason: "bad_response" });
+  assert.equal(verifyLiveCall(call, { ...want, agentId: "" }).ok, false); // not configured = fail closed
+});
+
+test("pickLiveCallForCaller: the single live call from this caller, else nothing", () => {
+  const want = { agentId: "agent_in", callerId: "+14155550123" };
+  const live = (id: string, from = "+14155550123", status = "started") => ({
+    id,
+    agent_id: "agent_in",
+    status,
+    telephony_params: { from },
+  });
+  assert.equal(pickLiveCallForCaller([live("a", "+15550001111"), live("b")], want), "b");
+  assert.equal(pickLiveCallForCaller([live("a"), live("b")], want), undefined); // ambiguous
+  assert.equal(pickLiveCallForCaller([live("a", undefined, "completed")], want), undefined);
+  assert.equal(pickLiveCallForCaller(undefined, want), undefined);
 });
 
 test("unknown and error answers reveal nothing and share the known-caller field names", () => {
@@ -129,9 +198,53 @@ test("lookupUrl needs an HTTPS site URL", () => {
   assert.throws(() => lookupUrl("http://127.0.0.1:3211"), /HTTPS/);
 });
 
-test("inboundRowDecision: one row per Cartesia call id", () => {
-  assert.equal(inboundRowDecision(null), "insert");
-  assert.equal(inboundRowDecision({ _id: "calls:1" }), "reuse");
+test("lookupReuseDecision: a repeated lookup gets the first answer back, never a new plan", () => {
+  assert.deepEqual(lookupReuseDecision(null), { action: "insert" });
+  assert.deepEqual(lookupReuseDecision({ _id: "calls:1" }), { action: "reuse" }); // backstop-made row
+  const first = { caller_known: "yes", call_kind: "story", question: "Tell me about the oven." };
+  assert.deepEqual(lookupReuseDecision({ _id: "calls:1", inboundLookup: first }), { action: "cached", response: first });
+  assert.deepEqual(lookupReuseDecision({ _id: "calls:1", inboundLookup: ["x"] }), { action: "reuse" });
+});
+
+test("matchBackstopRow: id match, same-elder row near the start, no duplicates", () => {
+  const open = [{ _id: "calls:9", elderId: "e1", createdAt: 1_000_000 }];
+  assert.deepEqual(matchBackstopRow({ id: "c1", elderId: "e1", startMs: 1_000_000 }, { idHasRow: true, openInbound: open }), {
+    kind: "has_row",
+  });
+  assert.deepEqual(
+    matchBackstopRow({ id: "c1", elderId: "e1", startMs: 1_000_000 + 60_000 }, { idHasRow: false, openInbound: open }),
+    { kind: "attach", rowId: "calls:9" },
+  );
+  assert.deepEqual(
+    matchBackstopRow({ id: "c1", elderId: "e1", startMs: 1_000_000 + 60 * 60_000 }, { idHasRow: false, openInbound: open }),
+    { kind: "insert" },
+  ); // too far apart: a different call
+  assert.deepEqual(matchBackstopRow({ id: "c1", elderId: "e2", startMs: 1_000_000 }, { idHasRow: false, openInbound: open }), {
+    kind: "insert",
+  }); // another elder's row is never reused
+  const two = [...open, { _id: "calls:10", elderId: "e1", createdAt: 1_000_000 + 30_000 }];
+  assert.deepEqual(matchBackstopRow({ id: "c1", elderId: "e1", startMs: 1_000_000 }, { idHasRow: false, openInbound: two }), {
+    kind: "insert",
+  }); // ambiguous: don't guess
+});
+
+test("inboundPlanToMark: inbound question used only after a real conversation", () => {
+  const call = { direction: "inbound", plan: { bankId: "qb_1" } };
+  assert.equal(inboundPlanToMark(call, "done"), "qb_1");
+  assert.equal(inboundPlanToMark(call, "process_failed"), "qb_1"); // he did talk; a retry is fine
+  assert.equal(inboundPlanToMark(call, "no_conversation"), null); // hang-up / voicemail: keep it queued
+  assert.equal(inboundPlanToMark({ direction: "outbound", plan: { bankId: "qb_1" } }, "done"), null); // marked at ring time
+  assert.equal(inboundPlanToMark({ plan: { bankId: "qb_1" } }, "done"), null); // missing = outbound
+  assert.equal(inboundPlanToMark({ direction: "inbound" }, "done"), null);
+  assert.equal(inboundPlanToMark(null, "done"), null);
+});
+
+test("inboundSyncMode: plain sync never creates a lookup tool", () => {
+  assert.equal(inboundSyncMode(true), "create");
+  assert.equal(inboundSyncMode(false, "agent_1", "tool_1"), "update");
+  assert.equal(inboundSyncMode(false, "agent_1"), "skip"); // tool id missing: don't POST a new tool
+  assert.equal(inboundSyncMode(false, undefined, "tool_1"), "skip");
+  assert.equal(inboundSyncMode(false), "skip");
 });
 
 test("backstopDecision: only finished inbound calls from elders that have no row", () => {

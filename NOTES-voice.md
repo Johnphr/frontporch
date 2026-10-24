@@ -76,8 +76,17 @@ Build:
   10-minute backstop still records the call.
 - Which `telephony_params` field holds the caller: the API reference says `to`, the webhooks
   page says `from`. `callerCandidates` tries both; check a real call and drop one.
-- `system__conversation_id` equals the id `GET /agents/calls/{id}` takes (the docs call it the
-  call id); `pollCall` relies on it.
+- Whether `system__conversation_id` equals the id `GET /agents/calls/{id}` takes (undocumented).
+  The lookup verifies the call by GETting that id; on a 404 it lists the inbound agent's calls and
+  takes the single live one from this caller, and stores that id as `cartesiaCallId` (the other
+  as `cartesiaConversationId`). The backstop also attaches a listed id to a lookup row of the same
+  elder made near the call's start instead of inserting a duplicate. Check which path a real
+  call takes in the logs (`call not verified (...)` means it failed closed).
+- Lookup verification: every lookup GETs the call (5 s timeout) and needs `agent_id` =
+  `CARTESIA_INBOUND_AGENT_ID`, status `created`/`started`, and the caller in `telephony_params`.
+  A repeated lookup of the same call returns the cached answer (`calls.inboundLookup`).
+- Inbound story calls mark their bank question used in `pipeline.finishProcessing` (only when the
+  call was a real conversation), not when the lookup answers.
 - The tool id field in the create response (`id` assumed, `tool_id` tried) and that
   `config.tools: [{id}]` attaches it.
 - Spanish speech recognition on an `en` agent (Cartesia documents one primary language).

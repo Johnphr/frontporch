@@ -18,10 +18,10 @@ export function requireEnv(names: string[]): Record<string, string> {
 
 export async function cartesiaFetch(
   path: string,
-  init: { method: string; body?: unknown },
+  init: { method: string; body?: unknown; timeoutMs?: number },
 ): Promise<{ status: number; json: any; error?: string }> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? REQUEST_TIMEOUT_MS);
   try {
     const res = await fetch(`${CARTESIA_API}${path}`, {
       method: init.method,
