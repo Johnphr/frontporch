@@ -6,6 +6,8 @@ Millions of people ask online for advice that someone's grandparent could give i
 
 Built at Cal Hacks 13.0.
 
+> **v2 in progress:** weekly Vapi calls, family SMS, LinkedIn via LinkedAPI, no dashboard needed. See [ARCHITECTURE.md](ARCHITECTURE.md) for the plan, contracts and who owns what. Everything below describes the current (v1) flow, which still works.
+
 ## How it works
 
 ```
