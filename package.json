@@ -1,0 +1,16 @@
+{
+  "name": "frontporch",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "convex": "convex dev",
+    "deploy": "convex deploy"
+  },
+  "dependencies": {
+    "convex": "^1.48.0"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

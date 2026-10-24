@@ -23,4 +23,4 @@ Today's question:
 4. Thank them warmly, say their family will hear about it, and say goodbye.
 
 <!-- TODO (Voice + AI): tune tone, length, follow-up rules; align with
-     FOLLOW_UP_SYSTEM in backend/app/llm.py. -->
+     v1 FOLLOW_UP_SYSTEM: git show 9e67aab:backend/app/llm.py -->

@@ -1,216 +1,255 @@
-# Front Porch — Architecture (v2: Vapi + SMS)
+# Front Porch — Architecture (v2: Convex + Vapi + SMS)
 
-> Status: **structure only**. Nothing in this doc is built yet. Files marked
-> *stub* exist so each workstream has a home; they are not wired into the app.
-> Decisions in [Open decisions](#open-decisions) are deliberately unlocked —
-> each has a current leaning and an owner, change them in a PR to this file.
+> Status: **structure only**. Stub files mark where each piece goes; none of
+> the new logic is built yet. Decisions in [Open decisions](#open-decisions)
+> are deliberately unlocked: each has a current leaning and an owner. Change
+> them in a PR to this file.
 
 ## The idea in one line
 
 Every week Pip calls grandpa. He answers a question (from his family first,
-otherwise one found online). After the call, his answer is written up as a
-LinkedIn post on his own account, and the family gets a text with the link.
-Family members text questions in to the same number. **Nobody installs anything.**
+otherwise one found online). After the call, his answer becomes a LinkedIn
+post on his own account and the family gets a text with the link. Family
+members text questions to the same number. **Nobody installs anything.**
 
 ## Locked so far
 
 | Decision | Choice |
 |---|---|
-| Call topic | Family SMS questions first; if none queued, an online question found by Apify (existing code) |
-| Approval | **Auto-post.** No yes/no on the call or by SMS. Family is notified after, with the link |
-| Old code | Stays. Twilio `<Gather>` flow + React dashboard keep working as a fallback demo |
-| Memory | Vector memory in Convex, embeddings from OpenAI `text-embedding-3-small` (1536 dims) |
-| LLM for drafting | Claude (existing `backend/app/llm.py`, `claude-opus-5-5`) |
+| Backend | **Everything in Convex**: database, vector memory, crons, webhooks (HTTP actions), API calls (actions). No separate server, no tunnel |
+| UI | None. All interaction is phone calls + SMS. Setup is by hand in the Convex dashboard |
+| Call topic | Family SMS questions first; if none queued, an online question found by Apify |
+| Approval | **Auto-post.** No yes/no step. Family is notified after, with the link |
+| Memory | Convex vector index, embeddings from OpenAI `text-embedding-3-small` (1536 dims) |
+| LLM for drafting | Claude `claude-opus-5-5` |
 
 ## System
 
 ```
-                ┌──────────────────────────┐
-                │          Convex          │
-                │ DB, memory (vector),     │
-                │ cron scheduler           │
-                └──┬──────────────┬────────┘
-   weekly cron     │              │ triggers jobs (Apify refresh)
-        ┌──────────▼───┐   ┌──────▼──────────────┐
-        │     Vapi     │──►│      FastAPI        │  end-of-call-report
-        │ call control │   │ memory, posts,      │
-        └──┬───────┬───┘   │ Apify, LinkedAPI    │
-   ┌───────▼─┐ ┌───▼─────┐ └──┬──────┬───────┬───┘
-   │ Twilio  │ │Cartesia │    │      │       │
-   │  voice  │ │ voice   │  Apify LinkedAPI Twilio SMS
-   └────┬────┘ └─────────┘                    │
-     Grandpa                               Family
+                 ┌─────────────────────────────────────────────┐
+                 │                   Convex                    │
+                 │  tables + vector memory · crons · actions   │
+                 │  http.ts:  POST /vapi/webhook               │
+                 │            POST /sms/inbound                │
+                 └───┬───────────▲──────────────┬──────────────┘
+   weekly cron:      │           │ end-of-call  │ actions call out to:
+   start call        │           │ report       │ Claude · OpenAI · Apify
+              ┌──────▼───────────┴──┐           │ LinkedAPI · Twilio SMS
+              │        Vapi         │           │
+              │    call control     │           ▼
+              └───┬────────────┬────┘       Family phones (SMS in + out)
+           ┌──────▼───┐  ┌─────▼────┐
+           │  Twilio  │  │ Cartesia │
+           │  voice   │  │  voice   │
+           └────┬─────┘  └──────────┘
+             Grandpa
 ```
 
-| Piece | Job | Owner stream |
-|---|---|---|
-| **Vapi** | Runs the live call: speech-to-text (grandpa's language), in-call LLM, Cartesia TTS, turn-taking | Voice |
-| **Twilio** | Phone number. Voice is imported into Vapi; SMS webhook points at FastAPI | Voice + Integrations |
-| **Convex** | All state, vector memory, crons, starts the weekly Vapi call | Data |
-| **FastAPI** | Webhooks (Vapi, SMS), post-call pipeline, Claude, Apify, LinkedAPI, sending SMS | AI + Integrations |
-| **LinkedAPI** | Posts to grandpa's LinkedIn through his own account (`createPost` workflow) | Integrations |
-
-One Twilio number, two webhooks: **voice → Vapi**, **messaging → `POST /sms/inbound`**.
-The legacy Gather flow still works for *outbound* "Call now" from the dashboard,
-because that call passes `/twilio/voice` as its URL explicitly.
+| Piece | Job |
+|---|---|
+| **Convex** | All state + all backend logic. Webhooks live at `https://<deployment>.convex.site/...` |
+| **Vapi** | Runs the live call: speech-to-text in grandpa's language, in-call LLM, Cartesia voice, turn-taking |
+| **Twilio** | One number. Voice is imported into Vapi; the Messaging webhook points at Convex `/sms/inbound` |
+| **LinkedAPI** | Posts to grandpa's LinkedIn through his own account (`createPost` workflow) |
+| **Apify** | Finds online fallback questions |
 
 ## Flows
 
 ### 1. Weekly call (Convex → Vapi)
+1. `crons.ts` runs hourly and picks elders whose local call day and hour match.
+2. `vapi.startWeeklyCall(elderId)`: next question (family first) → top-k memories
+   → `POST https://api.vapi.ai/call` with `assistantOverrides.variableValues`
+   (`firstName`, `question`, `memories`, `language`) and `metadata` (`elderId`, `questionId`).
+3. Vapi calls grandpa with Pip's prompt from `vapi/pip-system-prompt.md`.
 
-1. `convex/crons.ts` (to create; see note in `convex/vapi.ts`) fires weekly per elder.
-2. `vapi.startWeeklyCall(elderId)` action:
-   - picks the next question: family question first, else Apify question (`questions.nextForElder`, family-first ordering to add)
-   - fetches top-k memories for that question (`memories.search`)
-   - `POST https://api.vapi.ai/call` with `assistantId`, `phoneNumberId`,
-     `customer.number`, and `assistantOverrides.variableValues`
-     (`firstName`, `question`, `memories`, `language`) + `metadata`
-     (`elderId`, `questionId`). *Verify field names against docs.vapi.ai/calls/outbound-calling.*
-3. Vapi calls grandpa. Pip's prompt lives in `vapi/pip-system-prompt.md`.
+### 2. After the call (Vapi → Convex)
+1. Vapi posts `end-of-call-report` to `/vapi/webhook` (`vapi.ts`). Return 200 fast.
+2. It schedules `pipeline.processCall(CallResult)`.
+3. Pipeline: save transcript → Claude drafts post → Claude extracts memories →
+   embed + store → LinkedAPI posts → SMS family "Grandpa talked about the bakery
+   today. Here's his post: <url>" → mark question answered.
 
-### 2. After the call (Vapi → FastAPI)
-
-1. Vapi sends `end-of-call-report` to `POST /vapi/webhook` (`backend/app/routes/vapi.py`, *stub*).
-2. Route turns it into a `CallResult` and hands it to `services/pipeline.py` (*stub*) as a background task.
-3. Pipeline, in order, each step independent so one failure doesn't stop the rest:
-   1. save transcript + summary to Convex (`calls`)
-   2. Claude: draft the post from **only what he said** (reuse `DRAFT_SYSTEM` rules) → `answers`
-   3. Claude: extract 1–5 memories → `memories.add` (Convex embeds + stores)
-   4. LinkedAPI `createPost` (`publishers/linkedapi.py`, *stub*) → publication on the answer
-   5. SMS every family member: "Grandpa talked about the bakery today. Here's his post: <url>"
-   6. mark question answered
-
-### 3. Family asks a question (SMS → FastAPI)
-
+### 3. Family asks a question (SMS → Convex)
 1. Grandkid texts the number: "Ask grandpa how he met grandma".
-2. Twilio → `POST /sms/inbound` (`backend/app/routes/sms.py`, *stub*), signature checked with existing `verify_twilio`.
-3. Look up sender in `familyMembers` by phone. Unknown number → ignore (no reply).
-4. Save as a question with `source: "family"` assigned to that elder.
-5. Reply: "Got it! Pip will ask Grandpa on Sunday's call."
+2. Twilio → `/sms/inbound` (`sms.ts`): check signature → look up sender in
+   `familyMembers` (unknown: ignore) → save question → reply "Got it!".
 
-### 4. Online questions (Convex → FastAPI → Apify)
+### 4. Online questions (Convex → Apify)
+Daily cron → `apify.findQuestions` → upsert into `questions` → Claude triage
+(skip unsafe, tag topics, assign elder).
 
-Existing `fetch_from_apify` + `route_new_questions`. New: a Convex cron hits
-`POST /jobs/find-questions` (`backend/app/routes/jobs.py`, *stub*) instead of a dashboard button.
+## Contracts (agree on these first, then work in parallel)
 
-## Contracts (agree on these, then work in parallel)
+**Vapi call metadata** (set at call start, read back in the webhook):
+`{ "elderId": "<convex id>", "questionId": "<convex id, optional>" }`
 
-**Vapi call metadata** (set when starting the call, read back in the webhook):
-```json
-{ "elderId": "<convex id>", "questionId": "<convex id or omitted>" }
+**`CallResult`**, handed from `vapi.ts` to `pipeline.ts`:
+```ts
+type CallResult = {
+  vapiCallId: string;
+  elderId: Id<"elders">;
+  questionId?: Id<"questions">;
+  turns: { role: "pip" | "elder"; text: string }[];
+  summary?: string;      // Vapi analysis summary
+  endedReason: string;   // "customer-ended-call", "voicemail", ...
+};
 ```
 
-**`CallResult`** — what the Vapi route gives the pipeline (`services/pipeline.py`):
-```python
-@dataclass
-class CallResult:
-    vapi_call_id: str
-    elder_id: str
-    question_id: str | None
-    turns: list[dict]      # [{"role": "pip" | "elder", "text": str}], same shape as today
-    summary: str | None    # Vapi analysis summary, if enabled
-    ended_reason: str      # e.g. "customer-ended-call", "voicemail"
-```
+**Function names** (all `internal.*`, called only from other Convex functions):
+`vapi.startWeeklyCall` · `pipeline.processCall` · `llm.draftStoryPost` ·
+`llm.extractMemories` · `llm.triageQuestions` · `memories.add` · `memories.search` ·
+`family.getMemberByPhone` · `family.listForElder` · `family.addQuestion` ·
+`sms.sendSms` · `sms.notifyFamily` · `linkedapi.createPost` · `apify.findQuestions`
 
-**New Claude jobs** (go in `backend/app/llm.py`, same `_parse` pattern):
-`draft_story_post(question, elder, turns) -> DraftAnswer` · `extract_memories(elder, turns) -> list[str]`
+**Webhook auth**: `/vapi/webhook` checks the Vapi secret header against
+`VAPI_WEBHOOK_SECRET`. `/sms/inbound` checks `X-Twilio-Signature` (`lib/twilio.ts`).
 
-**Webhook auth**
-- `/vapi/webhook`: Vapi server secret header, checked against `VAPI_WEBHOOK_SECRET`.
-- `/sms/inbound`: existing Twilio signature check (`deps.verify_twilio`).
-- `/jobs/*`: `X-Backend-Secret` header = `CONVEX_BACKEND_SECRET` (Convex already knows it).
-
-## Data model (draft — not in `schema.ts` yet)
-
-Reuses existing tables wherever possible. Data stream owns the real edit.
+## Data model (draft, not in `schema.ts` yet)
 
 ```ts
 // NEW
 familyMembers: defineTable({
-  elderId: v.id("elders"),
-  name: v.string(),
-  phone: v.string(),            // E.164
+  elderId: v.id("elders"), name: v.string(),
+  phone: v.string(),                       // E.164
   relation: v.optional(v.string()),
 }).index("by_phone", ["phone"]).index("by_elder", ["elderId"]),
 
 memories: defineTable({
-  elderId: v.id("elders"),
-  callId: v.optional(v.id("calls")),
-  text: v.string(),             // "Ran a bakery on 5th street in the 60s"
+  elderId: v.id("elders"), callId: v.optional(v.id("calls")),
+  text: v.string(),                        // "Ran a bakery on 5th street in the 60s"
   embedding: v.array(v.float64()),
 }).vectorIndex("by_embedding", {
   vectorField: "embedding", dimensions: 1536, filterFields: ["elderId"],
 }),
 
-// CHANGED (all optional so the legacy flow keeps working)
-elders:    + timezone?: string, + callDay?: string, + linkedapiAccount?: string
+// CHANGED
+elders:    + timezone, callDay, callHour
 questions: + askedByMemberId?: v.id("familyMembers")   // source: "family"
-calls:     + vapiCallId?: string, + summary?: string, + provider?: "twilio" | "vapi"
+calls:     callSid -> vapiCallId, + summary, + endedReason
+answers:   reused as "posts"; publications[] holds the LinkedAPI result
+replies:   v1 thank-you feature, probably drop (open decision 12)
 ```
 
-LinkedAPI credentials go in env vars for the demo (one grandpa), not in a table.
+**Existing Convex files** (`answers.ts`, `calls.ts`, `elders.ts`, `questions.ts`,
+`replies.ts`, `lib/auth.ts`) were written for the old Python server: every
+function takes a `secret` argument checked by `assertBackend`, and some public
+queries only fed the deleted dashboard. Core: Data converts the ones we keep
+to `internalQuery`/`internalMutation` and deletes the rest.
 
-## Repo layout (new pieces marked ✚)
+## Repo layout
 
 ```
-ARCHITECTURE.md                ✚ this file
-vapi/                          ✚ Vapi assistant config, owned by Voice
-  README.md                    ✚ dashboard setup checklist
-  pip-system-prompt.md         ✚ Pip's in-call prompt (uses {{variables}})
-backend/app/
-  routes/vapi.py               ✚ stub: Vapi server events
-  routes/sms.py                ✚ stub: inbound family SMS
-  routes/jobs.py               ✚ stub: Convex-triggered jobs
-  services/pipeline.py         ✚ stub: post-call pipeline + CallResult
-  services/sms.py              ✚ stub: send SMS, family lookups
-  services/publishers/linkedapi.py ✚ stub
-  routes/twilio.py             legacy Gather flow (unchanged)
-frontend/
-  convex/vapi.ts               ✚ stub: start weekly call (+ crons note)
-  convex/memories.ts           ✚ stub: add (embed) + vector search
-  convex/family.ts             ✚ stub: family members + family questions
-  src/                         legacy dashboard (unchanged)
+ARCHITECTURE.md          this file
+package.json             Convex CLI only (npm run convex / npm run deploy)
+vapi/                    Vapi assistant setup + Pip's prompt          Voice
+convex/
+  schema.ts              tables (draft changes above)                 Data
+  http.ts                webhook router (empty)                       Pipeline
+  crons.ts               schedules (empty)                            Data
+  vapi.ts                start call + Vapi webhook          (stub)    Voice
+  pipeline.ts            post-call pipeline                 (stub)    Pipeline
+  llm.ts                 Claude jobs                        (stub)    Pipeline
+  sms.ts                 SMS in + out                       (stub)    Pipeline
+  lib/twilio.ts          Twilio signature check             (stub)    Pipeline
+  memories.ts            embed + vector search              (stub)    Data
+  family.ts              family members + their questions   (stub)    Data
+  linkedapi.ts           LinkedIn post                      (stub)    Integrations
+  apify.ts               find online questions              (stub)    Integrations
+  answers.ts calls.ts elders.ts questions.ts replies.ts lib/auth.ts   v1, Data refactors
 ```
 
-New stubs are **not** imported by `main.py` or `publishers/__init__.py`. Wire
-them up in the PR that implements them.
+## Team
 
-## Workstreams
+| # | Stream | Accounts they own | Files |
+|---|---|---|---|
+| 1 | **Voice** | Vapi, Twilio, Cartesia | `vapi/`, `convex/vapi.ts` |
+| 2 | **Integrations** | LinkedAPI + grandpa's LinkedIn, Apify | `convex/linkedapi.ts`, `convex/apify.ts` |
+| 3 | **Core: Data** | Convex project (admin), OpenAI | `schema.ts`, `family.ts`, `memories.ts`, `crons.ts`, v1 table files |
+| 4 | **Core: Pipeline + live** | Anthropic | `http.ts`, `pipeline.ts`, `llm.ts`, `sms.ts`, `lib/twilio.ts`, production deploy |
 
-| Stream | Owns | First milestone |
-|---|---|---|
-| **Voice** | `vapi/`, Vapi dashboard, Twilio number import, `convex/vapi.ts` | Vapi calls a phone with a hard-coded question and Pip's voice |
-| **AI** | `llm.py` new jobs, `services/pipeline.py`, `convex/memories.ts` | Paste a transcript → get a post + memories back |
-| **Integrations** | `routes/sms.py`, `services/sms.py`, `publishers/linkedapi.py`, Apify cron | Text the number → question shows up in Convex; LinkedAPI posts "hello" |
-| **Data** | `convex/schema.ts`, `convex/family.ts`, crons, seed script | Schema merged, demo grandpa + family seeded |
+### 1 · Voice (Vapi, Twilio, Cartesia)
+- Buy the Twilio number (Voice + SMS). On a trial account, verify every teammate's phone.
+- Import it into Vapi. Set Twilio Messaging webhook → `<convex.site>/sms/inbound`.
+- Build the Pip assistant (see `vapi/README.md`): Cartesia voice, transcriber language, model.
+- Write `vapi/pip-system-prompt.md`; set server URL → `<convex.site>/vapi/webhook` + secret.
+- Implement `vapi.startWeeklyCall` + `vapi.webhook`.
+- **Hand-off:** commit one real `end-of-call-report` JSON to `fixtures/` (repo root) early, so Pipeline can build against it.
+- **Milestone:** Vapi calls your phone with a hard-coded question in Pip's voice.
 
-Merge order that avoids blocking: **Data schema → everyone else in parallel → `routes/vapi.py` wires pipeline last.**
+### 2 · Integrations (LinkedIn, Apify)
+- Start the LinkedAPI trial only when ready to build (it lasts 7 days). Connect grandpa's LinkedIn.
+- Implement `linkedapi.createPost` (createPost workflow, wait for result, return URL).
+- Pick Apify Actors, port the source config, implement `apify.findQuestions`.
+- **Milestone:** a test action posts "hello" through LinkedAPI; Apify puts 10 fresh questions in Convex.
+
+### 3 · Core: Data (Convex)
+- **Merge schema changes first.** That unblocks everyone.
+- Convert v1 table files to internal functions; make `questions.nextForElder` family-first.
+- Implement `family.ts`, `memories.ts` (OpenAI embeddings + vector search), `crons.ts`.
+- Seed demo grandpa + family (dashboard or a seed function).
+- **Milestone:** seeded data; `memories.search` returns the right memory for a test sentence.
+
+### 4 · Core: Pipeline + going live
+- Implement `http.ts` routes, `lib/twilio.ts`, `sms.ts`.
+- Implement `llm.ts` (port prompts) and `pipeline.processCall` against Voice's fixture.
+- Own the production deployment and its env vars (below), and the end-to-end demo run.
+- **Milestone:** run `processCall` on the fixture → post saved in Convex + SMS on your phone.
+
+**Order:** Data schema → everyone in parallel → Pipeline wires the pieces → go live.
+
+## Going live
+
+1. `npm run deploy` (`npx convex deploy`) creates/updates the **production** deployment.
+   Its database and env vars are separate from dev.
+2. Set every env var below on production (`npx convex env set` with `--prod`).
+3. Point Vapi server URL and Twilio Messaging webhook at the **production**
+   `.convex.site` URL. Seed production grandpa + family.
+4. Full test call → post → SMS. Record a backup video of a full run.
+
+**During development:** every teammate gets their own dev deployment from
+`npx convex dev`, but the Twilio number and Vapi can only point at one URL.
+Use one shared dev deployment for webhook testing (open decision 10).
+
+## Env vars (all in Convex)
+
+| Var | Provided by |
+|---|---|
+| `VAPI_API_KEY`, `VAPI_ASSISTANT_ID`, `VAPI_PHONE_NUMBER_ID`, `VAPI_WEBHOOK_SECRET` | Voice |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER` | Voice |
+| `LINKEDAPI_TOKEN`, `LINKEDAPI_ID_TOKEN`, `APIFY_TOKEN` | Integrations |
+| `OPENAI_API_KEY` | Data |
+| `ANTHROPIC_API_KEY` | Pipeline |
+
+Cartesia's key goes in the Vapi dashboard (Provider Keys), not Convex.
+Share keys through a password manager, never in the repo or chat.
 
 ## Open decisions
 
 | # | Question | Leaning | Owner |
 |---|---|---|---|
-| 1 | Who starts the call: Convex action → Vapi, or Convex → FastAPI → Vapi? | Convex action (matches diagram, no extra hop) | Voice |
-| 2 | Memories: prefetch at call start (`variableValues`) or a mid-call `recall_memory` tool? | Prefetch. Simpler, no latency mid-call | AI |
-| 3 | Where embeddings run: Convex action or FastAPI? | Convex action, so add + search share one code path | AI + Data |
-| 4 | In-call LLM inside Vapi: which model? | Fastest Claude Vapi offers (latency > quality on a call) | Voice |
-| 5 | STT provider + language per elder | Override `transcriber.language` from `elders.language` at call start | Voice |
-| 6 | Family questions: reuse `questions` (`source: "family"`) or a new table? | Reuse | Data |
-| 7 | Cron cadence + timezone (Convex crons are UTC) | Hourly cron that calls elders whose local `callDay`/hour matches | Data |
-| 8 | Post format: length, disclosure line, hashtags | Reuse `PublishContext.disclosure` wording | AI |
-| 9 | Grandpa calling *in* (not just outbound) | Same Vapi assistant on inbound, no question → free chat | Voice |
-| 10 | Auto-post mistakes: undo path? | Later: family texts "DELETE" → remove post. Not in v1 | Integrations |
-| 11 | Voicemail / no answer | Vapi voicemail detection → no post, retry next day once | Voice |
-| 12 | Legacy dashboard: show Vapi calls too? | Optional, read-only, only if time | — |
+| 1 | Memories: prefetch at call start, or a mid-call `recall_memory` tool? | Prefetch (simpler, no mid-call latency) | Data + Pipeline |
+| 2 | In-call LLM inside Vapi | Fastest Claude model Vapi offers | Voice |
+| 3 | Speech-to-text provider + per-elder language | Override `transcriber.language` from `elders.language` | Voice |
+| 4 | Family questions: reuse `questions` or new table? | Reuse with `source: "family"` | Data |
+| 5 | Cron cadence + timezone | Hourly cron, match elder's local `callDay`/`callHour` | Data |
+| 6 | Post format: length, disclosure line, hashtags | Port v1 disclosure line | Pipeline + Integrations |
+| 7 | Grandpa calling in (inbound) | Same assistant, no question → free chat | Voice |
+| 8 | Undo for auto-posted mistakes | Later: family texts "DELETE". Not in v1 | Pipeline |
+| 9 | Voicemail / no answer | No post; retry next day once | Voice + Pipeline |
+| 10 | Which deployment webhooks hit during dev | One shared dev deployment (Pipeline's) | Pipeline |
+| 11 | Anthropic SDK or raw `fetch` in Convex | SDK; add `"use node"` if it needs Node | Pipeline |
+| 12 | Keep `replies` table (v1 thank-yous)? | Drop | Data |
+| 13 | LinkedAPI result: wait inside the action or a scheduled follow-up? | Scheduled follow-up | Integrations |
 
-## Env vars to add (when implementing)
+## Port from v1
 
-| Var | Where | Used by |
+The v1 Python backend and React dashboard were deleted, but a few pieces are
+worth porting. View any file with `git show 9e67aab:<path>`.
+
+| What | v1 path | Goes to |
 |---|---|---|
-| `VAPI_API_KEY`, `VAPI_ASSISTANT_ID`, `VAPI_PHONE_NUMBER_ID` | Convex env | `convex/vapi.ts` |
-| `VAPI_WEBHOOK_SECRET` | backend `.env` | `routes/vapi.py` |
-| `OPENAI_API_KEY` | Convex env | `convex/memories.ts` |
-| `LINKEDAPI_TOKEN`, `LINKEDAPI_ID_TOKEN` | backend `.env` | `publishers/linkedapi.py` |
-| `BACKEND_URL` | Convex env | crons calling `/jobs/*` |
-
-Twilio, Claude, Apify, Convex vars already exist in `backend/.env.example`.
+| Claude prompts + safety rules (triage, follow-up, drafting) | `backend/app/llm.py` | `convex/llm.ts`, `vapi/pip-system-prompt.md` |
+| Apify sources + field mapping | `backend/question_sources.json`, `backend/app/services/questions.py` | `convex/apify.ts` |
+| Disclosure line + `truncate` | `backend/app/services/publishers/base.py` | `convex/linkedapi.ts` |
+| Twilio signature check (reference) | `backend/app/deps.py` | `convex/lib/twilio.ts` |
+| Call pacing lessons (silence retries, "still writing") | `backend/app/routes/twilio.py` | Vapi config |
