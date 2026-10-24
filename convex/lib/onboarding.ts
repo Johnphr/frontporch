@@ -85,7 +85,7 @@ function compact(profile: Profile): Profile {
   return out;
 }
 
-/** Claude's output (or anything else) -> a profile with only valid, bounded fields. */
+/** The LLM's output (or anything else) -> a profile with only valid, bounded fields. */
 export function normalizeProfile(raw: unknown): Profile {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
   const r = raw as Record<string, unknown>;

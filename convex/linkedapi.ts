@@ -29,7 +29,7 @@
 //   npx convex run linkedapi:previewText '{"text": "...", "turns": [{"role":"elder","text":"..."}]}'
 //   npx convex run linkedapi:previewPost '{"postId": "<posts id>"}'
 //
-// Env: LINKEDAPI_TOKEN, LINKEDAPI_ID_TOKEN (+ ANTHROPIC_API_KEY, POST_GUARD_MODE for the guard)
+// Env: LINKEDAPI_TOKEN, LINKEDAPI_ID_TOKEN (+ OPENAI_API_KEY, POST_GUARD_MODE for the guard)
 // Owner: Integrations.
 
 import { v } from "convex/values";

@@ -44,7 +44,7 @@ No family, no SMS, no UI. Only phone calls in and LinkedIn posts out.
 | Posting | Auto-post via LinkedAPI. The post guard fact-checks first; a failing post is held as `needs_review` (`POST_GUARD_MODE=enforce`) until someone runs `linkedapi:approvePost` |
 | Feedback | Apify scrapes his posts' reactions + comments |
 | Memory | OpenAI `text-embedding-3-small` + Convex vector index (built in slice 3) |
-| LLM | Claude `claude-opus-5-5` for planning, profile extraction, writing, fact-checking. The in-call model runs inside Cartesia |
+| LLM | OpenAI `gpt-6-luna` (Responses API, `OPENAI_MODEL` to change: `gpt-6.1-sol` / `gpt-6-astra` write better) for planning, profile extraction, writing, fact-checking. One key with the embeddings. The in-call model runs inside Cartesia |
 | Build order | Progressive: onboarding first; each slice gives later calls more of the past |
 
 ## System
@@ -55,7 +55,7 @@ No family, no SMS, no UI. Only phone calls in and LinkedIn posts out.
              │ tables · crons · actions · planner · writer      │
              └──┬──────────────▲────────────────┬───────────────┘
    start call   │              │ poll transcript │ actions call out to:
-   + per-call   │              │ after the call  │ Claude · OpenAI embeddings
+   + per-call   │              │ after the call  │ OpenAI LLM + embeddings
    variables    │              │                 │ LinkedAPI (post)
              ┌──▼──────────────┴──┐              │ Apify (engagement, profile,
              │ Cartesia Managed   │              │        audience questions)
@@ -92,7 +92,7 @@ The phone number is already set up in Cartesia; Convex only needs its id (`CARTE
    `lib/onboarding.planNextCall`, the same rule `reserveCall` uses): top queued
    question as `mainQuestion`, the next 2–3 as `threads`, memories related to the main question
    (vector search) + people/places, topics to avoid, one `feedback` line saved by the last
-   refresh. Fast by design: no Claude call, never waits on a refresh (empty bank → safe opening
+   refresh. Fast by design: no LLM call, never waits on a refresh (empty bank → safe opening
    question + a refresh scheduled for next time).
 3. Story agent (`CARTESIA_STORY_AGENT_ID`, prompt in `convex/lib/prompts/story.ts`, pushed by
    `cartesia:syncAgent`) gets `dynamicVariables` as Cartesia `dynamic_variables` on
@@ -282,7 +282,7 @@ convex/
   schema.ts                     tables                                  Data
   cartesia.ts                   sync agent, start call, poll transcript Voice + Brain
   conversation.ts               plan next call                          Brain
-  llm.ts                        Claude jobs                             Brain
+  llm.ts                        LLM jobs (OpenAI, lib/openai.ts)        Brain
   pipeline.ts                   after-call steps                        Brain
   linkedapi.ts postGuard.ts     post to LinkedIn + fact-check (built)   Integrations
   apify.ts                      scraping (built)                        Integrations
@@ -299,7 +299,7 @@ tests/                          node --test + fixtures/
 | 1 | **Voice** | Cartesia (agent, number, voice) | `voice/`, agent settings in `convex/lib/cartesia.ts` + `lib/prompts/` |
 | 2 | **Integrations** | LinkedAPI + grandpa's LinkedIn, Apify | `linkedapi.ts`, `postGuard.ts`, `apify.ts` |
 | 3 | **Core: Data** | Convex project (admin), OpenAI | `schema.ts`, `memories.ts`, `engagement.ts`, `crons.ts`, v1 cleanup |
-| 4 | **Core: Brain + live** | Anthropic | `cartesia.ts`, `conversation.ts`, `llm.ts`, `pipeline.ts`, production deploy |
+| 4 | **Core: Brain + live** | OpenAI | `cartesia.ts`, `conversation.ts`, `llm.ts`, `pipeline.ts`, production deploy |
 
 ## Going live
 
@@ -315,7 +315,8 @@ tests/                          node --test + fixtures/
 | `CARTESIA_API_KEY`, `CARTESIA_ONBOARDING_AGENT_ID`, `CARTESIA_STORY_AGENT_ID`, `CARTESIA_FROM_NUMBER_ID`, `CARTESIA_VOICE_ID` (optional), `CARTESIA_MODEL` (optional) | Voice |
 | `LINKEDAPI_TOKEN`, `LINKEDAPI_ID_TOKEN`, `APIFY_TOKEN`, `STACKEXCHANGE_KEY` (optional), `POST_GUARD_MODE` (optional, default `enforce`), `AUTO_POST` (optional, default `on`; `off` = preview-only for tests) | Integrations |
 | `OPENAI_API_KEY` | Data |
-| `ANTHROPIC_API_KEY` | Brain |
+| `OPENAI_API_KEY` | Brain (LLM + embeddings), Integrations (post guard) |
+| `OPENAI_MODEL` | optional, default `gpt-6-luna` |
 
 Share keys through a password manager, never the repo or chat.
 
@@ -337,7 +338,7 @@ Share keys through a password manager, never the repo or chat.
 | 12 | Language | English first; agent language from `elders.language` later | Voice |
 | 13 | Voicemail / no answer | No profile or post; retry by hand (later: next day once) | Voice + Brain |
 | 14 | Apify Actor + frequency | `harvestapi/linkedin-profile-posts`, daily, backup Actor | Integrations |
-| 15 | Anthropic SDK | `@anthropic-ai/sdk` in `"use node"` files (pattern: `postGuard.ts`) | Brain |
+| 15 | LLM client | plain `fetch` to OpenAI's Responses API, `convex/lib/openai.ts` (shared by `llm.ts`, `postGuard.ts`) | Brain |
 | 16 | Held posts | Someone checks `needs_review` rows after each call; "delete last post" later | Brain |
 
 ## Port from v1

@@ -20,7 +20,7 @@ Built at Cal Hacks 13.0.
 |---|---|
 | Backend, database, vector memory, crons | Convex (`convex/`) |
 | Live call (number, speech-to-text, in-call LLM, voice) | Cartesia Managed Agents (`voice/`, `convex/cartesia.ts`) |
-| Planning questions, writing posts, memory extraction | Claude (`claude-opus-5-5`) |
+| Planning questions, writing posts, memory extraction | OpenAI `gpt-6-luna` (`OPENAI_MODEL`) |
 | Embeddings | OpenAI `text-embedding-3-small` |
 | Posting | LinkedAPI (their own LinkedIn account) |
 | Reader feedback (reactions, comments) + profile prefill | Apify |
@@ -30,7 +30,7 @@ Built at Cal Hacks 13.0.
 ```bash
 npm install
 npx convex dev          # log in, pick the team project; keep it running
-npx convex env set ANTHROPIC_API_KEY <value>   # repeat for each key
+npx convex env set OPENAI_API_KEY <value>   # repeat for each key
 ```
 
 Keys: [ARCHITECTURE.md → Env vars](ARCHITECTURE.md#env-vars-all-in-convex).

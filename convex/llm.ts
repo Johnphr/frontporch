@@ -1,7 +1,7 @@
 "use node";
 
-// Claude jobs. Same calling pattern as postGuard.ts (SDK, fallback beta, JSON-schema
-// output, refusal handling, timeout + one retry).
+// LLM jobs (OpenAI Responses API via lib/openai.ts: strict JSON-schema output, refusal
+// handling, timeout + one retry; same client as postGuard.ts).
 //
 //   extractProfile     onboarding call -> his profile + story seeds              (slice 1, PR #7)
 //   extractKnowledge   story call -> memories (facts, story seeds, open threads,
@@ -13,13 +13,13 @@
 // Shared rules: use ONLY what he said, keep his voice, fix only speech-to-text errors,
 // no medical / legal / financial advice.
 //
-// Env: ANTHROPIC_API_KEY. Owner: Core: Brain.
+// Env: OPENAI_API_KEY, OPENAI_MODEL (optional, default gpt-6-luna). Owner: Core: Brain.
 
-import Anthropic from "@anthropic-ai/sdk";
 import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { labelledTranscript } from "./lib/linkedinPost";
 import { normalizeProfile, type Profile } from "./lib/onboarding";
+import { structuredOutput, webResearch, type Effort } from "./lib/openai";
 import {
   filterTopicsByUrls,
   formatProfile,
@@ -29,13 +29,6 @@ import {
   type PostDraft,
 } from "./lib/planner";
 import { elderProfile as profileValidator } from "./schema";
-
-// Convex exposes env vars on process.env (declared so we don't need @types/node).
-declare const process: { env: Record<string, string | undefined> };
-
-const MODEL = "claude-opus-5-5";
-// If a safety classifier declines, Anthropic re-runs the request on its fallback model.
-const FALLBACK_BETA = "server-side-fallback-2026-07-01";
 
 const PROFILE_SYSTEM = `You build a short profile of an older professional from the transcript of a phone interview. The profile steers future interviews and helps find questions people in their field ask.
 
@@ -85,8 +78,6 @@ export const extractProfile = internalAction({
     existingProfile: v.optional(v.any()),
   },
   handler: async (_ctx, { turns, knownBackground, existingProfile }): Promise<Profile> => {
-    if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is not set in Convex");
-
     const sections = [`<transcript>\n${neutralizeTags(labelledTranscript(turns))}\n</transcript>`];
     if (knownBackground?.trim()) {
       sections.push(`<background>\n${neutralizeTags(knownBackground.trim())}\n</background>`);
@@ -95,35 +86,15 @@ export const extractProfile = internalAction({
       sections.push(`<existing_profile>\n${neutralizeTags(JSON.stringify(existingProfile))}\n</existing_profile>`);
     }
 
-    // 2-minute timeout, one retry: a hung request must not stall the pipeline.
-    const client = new Anthropic({ timeout: 120_000, maxRetries: 1 });
-    const response = await client.beta.messages.create({
-      model: MODEL,
-      max_tokens: 16000,
-      betas: [FALLBACK_BETA],
-      fallbacks: "default",
+    // Errors end up on the calls row: lib/openai only throws fixed messages, never the
+    // model's text or his words.
+    const parsed = await structuredOutput<unknown>({
+      name: "profile",
       system: PROFILE_SYSTEM,
-      output_config: {
-        effort: "medium",
-        format: { type: "json_schema", schema: PROFILE_SCHEMA },
-      },
-      messages: [{ role: "user", content: sections.join("\n\n") }],
+      user: sections.join("\n\n"),
+      schema: PROFILE_SCHEMA,
+      effort: "medium",
     });
-
-    // Errors below end up on the calls row: fixed messages only, never the model's text
-    // (a JSON.parse error quotes the input, which would leak his words).
-    if (response.stop_reason === "refusal") {
-      throw new Error(`Claude declined to build the profile (category: ${response.stop_details?.category ?? "unknown"})`);
-    }
-    if (response.stop_reason !== "end_turn") throw new Error(`Claude stopped early (${response.stop_reason})`);
-    const textBlock = response.content.find((b) => b.type === "text");
-    if (!textBlock || textBlock.type !== "text") throw new Error("Claude returned no text");
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(textBlock.text);
-    } catch {
-      throw new Error("Claude returned invalid JSON");
-    }
     return normalizeProfile(parsed);
   },
 });
@@ -137,12 +108,6 @@ const DATA_NOTE =
 
 // ---------- shared (story-call jobs) ----------
 
-function anthropic(opts: { timeout?: number; maxRetries?: number } = {}): Anthropic {
-  if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is not set in Convex");
-  // Default: 2-minute timeout, one retry, so a hung request never runs into Convex's action limit.
-  return new Anthropic({ timeout: opts.timeout ?? 120_000, maxRetries: opts.maxRetries ?? 1 });
-}
-
 /** Keep tag-like text in the data from closing our tags early. */
 function neutralize(text: string): string {
   return text.replace(/<\/?(transcript|background|posts|inputs|research)\b[^>]*>/gi, (m) =>
@@ -154,29 +119,8 @@ function tagged(tag: string, body: string): string {
   return `<${tag}>\n${neutralize(body)}\n</${tag}>`;
 }
 
-async function structured<T>(opts: {
-  system: string;
-  user: string;
-  schema: Record<string, unknown>;
-  effort: "low" | "medium" | "high";
-  maxTokens?: number;
-}): Promise<T> {
-  const response = await anthropic().beta.messages.create({
-    model: MODEL,
-    max_tokens: opts.maxTokens ?? 16000,
-    betas: [FALLBACK_BETA],
-    fallbacks: "default",
-    system: `${opts.system}\n\n${DATA_NOTE}`,
-    output_config: { effort: opts.effort, format: { type: "json_schema", schema: opts.schema } },
-    messages: [{ role: "user", content: opts.user }],
-  });
-  if (response.stop_reason === "refusal") {
-    throw new Error(`Claude declined this request (category: ${response.stop_details?.category ?? "unknown"})`);
-  }
-  if (response.stop_reason === "max_tokens") throw new Error("Claude's answer was cut off (max_tokens)");
-  const block = response.content.find((b) => b.type === "text");
-  const raw = block && block.type === "text" ? block.text : "";
-  return JSON.parse(raw) as T;
+function structured<T>(opts: { name: string; system: string; user: string; schema: Record<string, unknown>; effort: Effort }): Promise<T> {
+  return structuredOutput<T>({ ...opts, system: `${opts.system}\n\n${DATA_NOTE}` });
 }
 
 const str = { type: "string" } as const;
@@ -236,6 +180,7 @@ export const extractKnowledge = internalAction({
       ),
     );
     const raw = await structured<{ items: { kind: MemoryKind; text: string; name: string }[]; resolvedThreadIds: string[]; summary: string }>({
+      name: "knowledge",
       system: KNOWLEDGE_SYSTEM,
       user: parts.join("\n\n"),
       schema: KNOWLEDGE_SCHEMA,
@@ -269,7 +214,8 @@ Shape:
 Rules:
 - Use ONLY what he said (or what Pip said and he clearly confirmed). Never add facts, numbers, names, dates, places or lessons he didn't give.
 - Keep his voice and his phrases; fix only grammar and obvious speech-to-text errors.
-- Plain text, short paragraphs, no markdown, at most 2 hashtags, 120-250 words.
+- Plain text, short paragraphs, no markdown, no bullet lists, at most 2 hashtags, 120-250 words.
+- Plain language in his register. No filler or stock phrases ("delve", "it's worth noting", "Bottom line:", "This isn't about X. It's about Y.").
 - No medical, legal, tax or investment advice. No private details about other people.
 - Do NOT add a line saying it was written with AI: that is added later.
 - "text" is the full post and starts with the hook line.
@@ -289,6 +235,7 @@ export const writePost = internalAction({
       .join("\n");
     if (background) parts.push(tagged("background", background));
     const raw = await structured<{ skip: boolean; reason: string; hook: string; text: string }>({
+      name: "post",
       system: POST_SYSTEM,
       user: parts.join("\n\n"),
       schema: obj({ skip: { type: "boolean" }, reason: str, hook: str, text: str }),
@@ -331,6 +278,7 @@ export const summarizeFeedback = internalAction({
       })
       .join("\n\n");
     const raw = await structured<{ resonated: string; readerQuestions: string[]; line: string }>({
+      name: "feedback",
       system: FEEDBACK_SYSTEM,
       user: tagged("posts", body),
       schema: obj({ resonated: str, readerQuestions: strArray, line: str }),
@@ -396,6 +344,7 @@ export const planQuestions = internalAction({
       `recent_topics:\n${a.recentTopics.length ? a.recentTopics.map((t) => `- [${t.url}] ${t.title}: ${t.summary}`).join("\n") : "(none)"}`,
     ].join("\n\n");
     const raw = await structured<unknown>({
+      name: "plan",
       system: PLAN_SYSTEM,
       user: tagged("inputs", inputs),
       schema: PLAN_SCHEMA,
@@ -415,76 +364,25 @@ ${DATA_NOTE}`;
 
 const TOPICS_SYSTEM = `Turn the research notes into topics for an AI interviewer. For each topic: title (short), summary (one sentence), url (copied exactly from the notes' sources), question (one short open question asking HIM about his own experience with it, e.g. "When demand for X collapsed in your day, what did you do?"). Only include topics backed by a URL from the notes. 0-6 topics.`;
 
-type BlockLike = { type: string; text?: string; content?: unknown; citations?: unknown };
-
-function collectUrls(blocks: BlockLike[]): string[] {
-  const urls: string[] = [];
-  for (const b of blocks) {
-    if (b.type === "web_search_tool_result" && Array.isArray(b.content)) {
-      for (const r of b.content as { type?: string; url?: unknown }[]) {
-        if (typeof r?.url === "string") urls.push(r.url);
-      }
-    }
-    if (b.type === "text" && Array.isArray(b.citations)) {
-      for (const c of b.citations as { url?: unknown }[]) if (typeof c?.url === "string") urls.push(c.url);
-    }
-  }
-  return urls;
-}
-
 export const findRecentTopics = internalAction({
   args: { profile: v.optional(profileValidator) },
   handler: async (_ctx, { profile }): Promise<{ topics: RecentTopic[] }> => {
     if (!profile || !(profile.industry || profile.specialty)) return { topics: [] };
-    // Own client: web search turns run long, and a retry would double the worst case.
-    const client = anthropic({ timeout: 180_000, maxRetries: 0 });
-
-    // Step 1: research with the web search server tool. Structured output can't be
-    // combined with the citations web search returns, so this step is free text.
-    type MessageParam = Anthropic.Beta.BetaMessageParam;
-    const messages: MessageParam[] = [
-      {
-        role: "user",
-        content: tagged(
-          "background",
-          `His field: ${profile.industry}. Specialty: ${profile.specialty}.\n${profile.careerSummary}`,
-        ),
-      },
-    ];
-    const allBlocks: BlockLike[] = [];
-    let finalText = "";
-    for (let round = 0; round < 3; round++) {
-      const response = await client.beta.messages.create({
-        model: MODEL,
-        max_tokens: 16000,
-        betas: [FALLBACK_BETA],
-        fallbacks: "default",
-        system: RESEARCH_SYSTEM,
-        output_config: { effort: "low" },
-        tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 4 }],
-        messages,
-      });
-      if (response.stop_reason === "refusal") return { topics: [] };
-      const blocks = response.content as unknown as BlockLike[];
-      allBlocks.push(...blocks);
-      finalText = blocks
-        .filter((b) => b.type === "text" && typeof b.text === "string")
-        .map((b) => b.text)
-        .join("");
-      // pause_turn: the server-side search loop hit its iteration limit. Send the
-      // paused assistant turn back unchanged and the server resumes.
-      if (response.stop_reason !== "pause_turn") break;
-      messages.push({ role: "assistant", content: response.content } as unknown as MessageParam);
-    }
-
-    const urls = [...new Set(collectUrls(allBlocks))];
-    if (!finalText.trim() || urls.length === 0) return { topics: [] };
+    // Step 1: research with the web_search tool (free text, so the citations survive).
+    const research = await webResearch({
+      system: RESEARCH_SYSTEM,
+      user: tagged("background", `His field: ${profile.industry}. Specialty: ${profile.specialty}.\n${profile.careerSummary}`),
+      effort: "low",
+    });
+    const urls = research.urls;
+    if (!research.text.trim() || urls.length === 0) return { topics: [] };
 
     // Step 2: structured extraction over the notes, then drop any topic whose URL
     // didn't come back from search.
     const raw = await structured<{ topics: RecentTopic[] }>({
+      name: "recent_topics",
       system: TOPICS_SYSTEM,
-      user: `${tagged("research", finalText)}\n\nSources:\n${urls.map((u) => `- ${u}`).join("\n")}`,
+      user: `${tagged("research", research.text)}\n\nSources:\n${urls.map((u) => `- ${u}`).join("\n")}`,
       schema: obj({ topics: { type: "array", items: obj({ title: str, summary: str, url: str, question: str }) } }),
       effort: "low",
     });

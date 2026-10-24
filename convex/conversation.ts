@@ -6,7 +6,7 @@
 //                                     reader feedback, audience + recent topics.
 //   prepareCall({ elderId })          ~1h before his call (schedule.tick): fresh
 //                                     audience questions (Apify) and recent topics in
-//                                     his field (Claude web search), in parallel, then
+//                                     his field (LLM web search), in parallel, then
 //                                     schedules a refresh with them.
 //   planNextCall({ elderId })         at call time -> { plan, dynamicVariables }. The
 //                                     kind comes from PR #7's lib/onboarding.planNextCall
@@ -15,7 +15,7 @@
 //                                     known_background). Story: question bank + memories +
 //                                     avoid topics + saved feedback line, as Cartesia
 //                                     dynamic_variables for voice/prompts/story-call.md.
-//                                     Fast: never waits on a refresh or a Claude call.
+//                                     Fast: never waits on a refresh or an LLM call.
 //                                     cartesia.startCall's story branch (slice 2) calls it.
 //   markPlanUsed({ elderId, bankId, callId })   cartesia.startCall, once a story call is placed.
 //
@@ -25,13 +25,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
-import {
-  engagementRecentFeedback,
-  memoriesListForElder,
-  memoriesSearch,
-  type MemoryDoc,
-  type MemoryHit,
-} from "./lib/dataRefs";
+import type { MemoryDoc, MemoryHit } from "./lib/dataRefs";
 import {
   buildCallPlan,
   fallbackCandidates,
@@ -199,7 +193,7 @@ export const markPlanUsed = internalMutation({
 
 // ---------- actions ----------
 
-type RefreshResult = { queued: number; usedClaude: boolean; errors: string[] };
+type RefreshResult = { queued: number; usedLlm: boolean; errors: string[] };
 
 /** Best effort: a missing Data function (or any failure) just means "no input from it". */
 async function attempt<T>(errors: string[], label: string, fn: () => Promise<T>, fallback: T): Promise<T> {
@@ -228,7 +222,7 @@ export const refreshQuestionBank = internalAction({
     const memories: MemoryDoc[] = await attempt(
       errors,
       "memories",
-      () => ctx.runQuery(memoriesListForElder, { elderId: args.elderId, limit: 200 }),
+      () => ctx.runQuery(internal.memories.listForElder, { elderId: args.elderId, limit: 200 }),
       [],
     );
     const openThreads = memories
@@ -253,7 +247,7 @@ export const refreshQuestionBank = internalAction({
     const feedbackPosts = await attempt(
       errors,
       "engagement",
-      () => ctx.runQuery(engagementRecentFeedback, { elderId: args.elderId, sinceDays: 14 }),
+      () => ctx.runQuery(internal.engagement.recentFeedback, { elderId: args.elderId, sinceDays: 14 }),
       [],
     );
     const feedback = feedbackPosts.length
@@ -285,7 +279,7 @@ export const refreshQuestionBank = internalAction({
     ].filter((q, i, all) => all.findIndex((x) => x.id === q.id) === i);
     const recentTopics: RecentTopic[] = args.recentTopics ?? [];
 
-    let usedClaude = true;
+    let usedLlm = true;
     let candidates: Candidate[] = await attempt(
       errors,
       "planQuestions",
@@ -306,7 +300,7 @@ export const refreshQuestionBank = internalAction({
       [],
     );
     if (candidates.length === 0) {
-      usedClaude = false;
+      usedLlm = false;
       candidates = fallbackCandidates({
         openThreads,
         readerQuestions: feedback.readerQuestions,
@@ -346,7 +340,7 @@ export const refreshQuestionBank = internalAction({
         firstSeenAt: r.firstSeenAt,
       })),
     });
-    return { queued: ranked.length, usedClaude, errors };
+    return { queued: ranked.length, usedLlm, errors };
   },
 });
 
@@ -395,7 +389,7 @@ export const planNextCall = internalAction({
     // Topics he doesn't want to discuss always reach Pip (outside the memories budget).
     let avoidMemories: string[] = [];
     try {
-      const rows: MemoryDoc[] = await ctx.runQuery(memoriesListForElder, { elderId, kinds: ["avoid"], limit: 10 });
+      const rows: MemoryDoc[] = await ctx.runQuery(internal.memories.listForElder, { elderId, kinds: ["avoid"], limit: 10 });
       avoidMemories = rows.map((m) => m.text);
     } catch {
       // memories not available: the profile's topicsToAvoid still go through.
@@ -421,10 +415,10 @@ export const planNextCall = internalAction({
     let memories: { kind: string; text: string; name?: string }[] = [];
     try {
       const hits: MemoryHit[] = mainQuestion
-        ? await ctx.runAction(memoriesSearch, { elderId, text: mainQuestion, k: 5 })
+        ? await ctx.runAction(internal.memories.search, { elderId, text: mainQuestion, k: 5 })
         : [];
       const people: MemoryHit[] = mainQuestion
-        ? await ctx.runAction(memoriesSearch, { elderId, text: mainQuestion, k: 3, kinds: ["person", "place"] })
+        ? await ctx.runAction(internal.memories.search, { elderId, text: mainQuestion, k: 3, kinds: ["person", "place"] })
         : [];
       memories = [...people, ...hits].filter((m) => m.status !== "resolved");
     } catch {

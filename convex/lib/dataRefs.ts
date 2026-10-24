@@ -1,8 +1,6 @@
-// References to the Data stream's functions (memories.ts, engagement.ts), typed
-// from the generated API so argument mismatches fail the typecheck.
-
-import { internal } from "../_generated/api";
-import type { Id } from "../_generated/dataModel";
+// Shapes returned by the Data stream's functions (memories.ts, engagement.ts).
+// Call them as internal.memories.* / internal.engagement.* directly: re-exporting the
+// refs from here made the generated api type circular (this file is part of it).
 
 export type MemoryKind = "fact" | "story_seed" | "open_thread" | "person" | "place" | "topic_covered" | "avoid";
 
@@ -28,7 +26,3 @@ export type FeedbackPost = {
   scrapedAt: number;
 };
 
-export const memoriesAddMany = internal.memories.addMany;
-export const memoriesSearch = internal.memories.search;
-export const memoriesListForElder = internal.memories.listForElder;
-export const engagementRecentFeedback = internal.engagement.recentFeedback;

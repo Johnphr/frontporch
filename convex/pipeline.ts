@@ -27,7 +27,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery, type ActionCtx } from "./_generated/server";
 import { clip, isNoConversation, type Turn } from "./lib/cartesia";
-import { memoriesAddMany, memoriesListForElder, type MemoryDoc } from "./lib/dataRefs";
+import type { MemoryDoc } from "./lib/dataRefs";
 import { canClaimProcessing, finishPatch, isProfileUsable, mergeProfile, type Profile } from "./lib/onboarding";
 import { runSteps, type StepReport } from "./lib/planner";
 import { parseAutoPost } from "./lib/postFlow";
@@ -131,7 +131,7 @@ async function runStoryCall(
       run: async () => {
         let open: MemoryDoc[] = [];
         try {
-          open = await ctx.runQuery(memoriesListForElder, {
+          open = await ctx.runQuery(internal.memories.listForElder, {
             elderId: elder._id,
             kinds: ["open_thread"],
             status: "active",
@@ -152,7 +152,7 @@ async function runStoryCall(
           .map((id) => openIds.get(id))
           .filter((id): id is Id<"memories"> => id !== undefined);
         if (knowledge.items.length === 0 && resolveThreadIds.length === 0) return "nothing new";
-        const saved = await ctx.runAction(memoriesAddMany, {
+        const saved = await ctx.runAction(internal.memories.addMany, {
           elderId: elder._id,
           callId,
           items: knowledge.items,

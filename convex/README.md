@@ -1,7 +1,7 @@
 # Convex
 
 All of Front Porch's backend: tables, vector memory, crons, the question
-planner, the post writer, and the actions that call Claude, OpenAI, Cartesia,
+planner, the post writer, and the actions that call OpenAI, Cartesia,
 LinkedAPI and Apify. See `../ARCHITECTURE.md` for the loop,
 contracts and who owns which file.
 
@@ -18,12 +18,12 @@ The first run generates `convex/_generated/`. Keys go in Convex env, never in
 the repo:
 
 ```bash
-npx convex env set ANTHROPIC_API_KEY <value>
+npx convex env set OPENAI_API_KEY <value>
 ```
 
 ## Onboarding call (`cartesia.ts`, `pipeline.ts`, `llm.ts`; slice 1)
 
-Cartesia runs the call; Convex starts it, polls for the transcript, and has Claude build
+Cartesia runs the call; Convex starts it, polls for the transcript, and has the LLM build
 his profile + story seeds. Setup: `../voice/README.md`.
 
 ```bash
@@ -49,7 +49,7 @@ Local backend + `"use node"` files need Node 20–24: `npx -p node@24 -c 'npx co
 | `CARTESIA_ONBOARDING_AGENT_ID` | printed by the first `syncAgent` run |
 | `CARTESIA_STORY_AGENT_ID` | story agent (slice 2), printed by the first `syncAgent` run that creates it |
 | `CARTESIA_VOICE_ID`, `CARTESIA_MODEL` | optional voice + in-call model (default `claude-haiku-4.5`) |
-| `ANTHROPIC_API_KEY` | profile extraction |
+| `OPENAI_API_KEY` | LLM jobs (profile, memories, post, planner) + memory embeddings; `OPENAI_MODEL` optional (default `gpt-6-luna`) |
 | `APIFY_TOKEN` | optional: prefill his LinkedIn background (needs `linkedinUrl` on the elder) |
 | `AUTO_POST` | optional, default `on`. `off` = story posts are saved but not sent to LinkedIn (preview only, for tests) |
 
@@ -66,12 +66,12 @@ For an elder who already did the onboarding call (his row has `stage: "active"` 
    npx convex env set AUTO_POST off                       # posts stay `pending`, nothing goes to LinkedIn
    ```
 
-   Also needed: `ANTHROPIC_API_KEY` (planning, memories, post) and `OPENAI_API_KEY` (memory search).
+   Also needed: `OPENAI_API_KEY` (planning, memories, post, memory search).
 
 2. Optional, give the plan fresh material (each takes a minute or two):
 
    ```bash
-   npx convex run conversation:prepareCall '{"elderId":"<id>"}'        # audience questions + recent news in his field (APIFY_TOKEN + ANTHROPIC_API_KEY); schedules a bank refresh
+   npx convex run conversation:prepareCall '{"elderId":"<id>"}'        # audience questions + recent news in his field (APIFY_TOKEN + OPENAI_API_KEY); schedules a bank refresh
    npx convex run conversation:refreshQuestionBank '{"elderId":"<id>"}' # or just rebuild the question bank from what he's told us
    ```
 
@@ -165,7 +165,7 @@ npx convex run linkedapi:checkPostStatus '{"postId":"<posts id>"}'  # resume sta
 | Env var | Purpose |
 |---|---|
 | `LINKEDAPI_TOKEN`, `LINKEDAPI_ID_TOKEN` | LinkedAPI account + grandpa's connected LinkedIn |
-| `ANTHROPIC_API_KEY` | Shared with Brain; the guard calls Claude |
+| `OPENAI_API_KEY` | Shared with Brain; the guard calls the LLM (`lib/openai.ts`) |
 | `POST_GUARD_MODE` | `enforce` (default: failing posts become `needs_review`, not posted) · `warn` (post anyway, keep issues) · `off` |
 
 Try it without posting anything:

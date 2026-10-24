@@ -2,7 +2,7 @@
 // CallPlan, turning it into the Cartesia dynamic variables, and small call checks.
 // Only imports other pure lib files, so `npm test` runs it directly in Node.
 //
-// Claude writes the questions and the "why"; this file decides the order, so the
+// The LLM writes the questions and the "why"; this file decides the order, so the
 // ranking is predictable and easy to tune.
 
 import { formatMemoriesForPrompt } from "./memoryText.ts";
@@ -151,7 +151,7 @@ export type RankOptions = {
 };
 
 /**
- * Filter, dedupe and order candidates. Input order is Claude's own preference and
+ * Filter, dedupe and order candidates. Input order is the LLM's own preference and
  * breaks ties (earlier = small bonus).
  */
 export function rankCandidates(candidates: Candidate[], opts: RankOptions): RankedCandidate[] {
@@ -198,7 +198,7 @@ export function rankCandidates(candidates: Candidate[], opts: RankOptions): Rank
   return [...byKey.values()].sort((a, b) => b.priority - a.priority).slice(0, limit);
 }
 
-/** Clean Claude's planQuestions output: valid sources, trimmed text, a topicKey on every item. */
+/** Clean the LLM's planQuestions output: valid sources, trimmed text, a topicKey on every item. */
 export function normalizePlannedCandidates(raw: unknown): Candidate[] {
   const list = raw && typeof raw === "object" && Array.isArray((raw as { candidates?: unknown }).candidates)
     ? ((raw as { candidates: unknown[] }).candidates)
@@ -222,7 +222,7 @@ export function normalizePlannedCandidates(raw: unknown): Candidate[] {
   return out;
 }
 
-/** Questions we can still ask when Claude is unavailable: no invention, just the inputs. */
+/** Questions we can still ask when the LLM is unavailable: no invention, just the inputs. */
 export function fallbackCandidates(input: {
   openThreads: { id: string; text: string }[];
   readerQuestions: string[];
