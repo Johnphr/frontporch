@@ -1,26 +1,13 @@
-// The question planner: decides what Pip talks about next (stub, nothing exported yet).
+// The story-call planner: decides what Pip talks about next (stub, slice 2).
 //
-// Planned: planNextCall = internalAction({ elderId }) -> CallPlan
-//   onboarding (elder.stage === "onboarding"):
-//     knownBackground from the LinkedIn profile scrape (apify.scrapeProfile), if any.
-//   story call:
-//     1. profile                       elders.profile
-//     2. memories                      internal.memories.search(elderId, recent topics, k = 5)
-//     3. feedback                      internal.engagement.recentFeedback(elderId)
-//                                      -> internal.llm.summarizeFeedback (what resonated,
-//                                         reader questions worth answering)
-//     4. internal.llm.planQuestions    -> mainQuestion + 2-3 backup threads, following
-//                                         vapi/conversation-guide.md; avoid topics already
-//                                         covered (memories) unless a reader asked
+// Slice 1 picks the call kind in lib/onboarding.planNextCall (onboarding until his
+// profile is usable); cartesia.startCall uses it directly.
 //
-//   type CallPlan = {
-//     kind: "onboarding" | "story";
-//     mainQuestion?: string;
-//     threads: string[];
-//     memories: string[];
-//     feedback?: string;          // one short line Pip can read out
-//     knownBackground?: string;   // onboarding only
-//   };
+// Planned for slice 2+: planStoryCall = internalAction({ elderId }) -> story plan
+//   slice 2: profile + storySeeds + recent call summaries -> internal.llm.planQuestions
+//            (mainQuestion + 2-3 backup threads, following voice/conversation-guide.md)
+//   slice 3: + internal.memories.search, internal.engagement.recentFeedback ->
+//            internal.llm.summarizeFeedback, apify.topAudienceQuestions (reader comments first)
 //
 // Owner: Core: Brain.
 

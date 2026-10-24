@@ -30,6 +30,20 @@ export default defineSchema({
     expertise: v.array(v.string()),
     language: v.string(), // BCP-47, e.g. en-US, es-MX
     bio: v.optional(v.string()),
+    // ---- v2 (onboarding slice; Data: review) ----
+    stage: v.optional(v.union(v.literal("onboarding"), v.literal("active"))), // missing = onboarding
+    linkedinUrl: v.optional(v.string()),
+    knownBackground: v.optional(v.string()), // cached apify.scrapeProfile result
+    profile: v.optional(
+      v.object({
+        industry: v.optional(v.string()),
+        specialty: v.optional(v.string()),
+        careerSummary: v.optional(v.string()),
+        topics: v.optional(v.array(v.string())),
+        storySeeds: v.optional(v.array(v.string())),
+        topicsToAvoid: v.optional(v.array(v.string())),
+      }),
+    ),
   }).index("by_phone", ["phone"]),
 
   questions: defineTable({
@@ -48,12 +62,27 @@ export default defineSchema({
     .index("by_external", ["externalId"]),
 
   calls: defineTable({
-    callSid: v.string(),
+    callSid: v.optional(v.string()), // v1 Twilio calls only
     elderId: v.id("elders"),
     questionId: v.optional(v.id("questions")),
-    status: v.string(), // in-progress | completed | failed | ...
+    // v2: queued | in_progress | ended | done | no_conversation | failed |
+    //     poll_error | poll_timeout | process_failed
+    status: v.string(),
     transcript: v.array(v.object({ role: v.string(), text: v.string() })),
-  }).index("by_sid", ["callSid"]),
+    // ---- v2 (onboarding slice; Data: review) ----
+    kind: v.optional(v.string()), // onboarding | story
+    cartesiaCallId: v.optional(v.string()),
+    summary: v.optional(v.string()),
+    endReason: v.optional(v.string()),
+    error: v.optional(v.string()),
+    pollAttempts: v.optional(v.number()),
+    lastPolledAt: v.optional(v.number()), // epoch ms
+    processingAt: v.optional(v.number()), // epoch ms; claim, stale after 15 min
+    processedAt: v.optional(v.number()), // epoch ms; set only on success
+  })
+    .index("by_sid", ["callSid"])
+    .index("by_cartesia", ["cartesiaCallId"])
+    .index("by_elder", ["elderId"]),
 
   answers: defineTable({
     elderId: v.id("elders"),
