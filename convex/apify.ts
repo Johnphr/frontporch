@@ -142,6 +142,8 @@ export const scrapeEngagement = internalAction({
           linkedinUrl: post.linkedinUrl,
           reactions: post.reactions,
           comments: post.comments,
+          // The backup Actor has counts only: don't let it wipe stored comments.
+          ...(actor === POSTS_BACKUP_ACTOR ? { commentsKnown: false } : {}),
         });
         upserted += 1;
       } catch (error) {

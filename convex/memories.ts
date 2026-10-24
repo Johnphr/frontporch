@@ -19,10 +19,13 @@ import {
   MERGE_THRESHOLD,
   cosineSimilarity,
   dedupeBatch,
+  differentNames,
   embeddingText,
   isMemoryKind,
+  isRetryableStatus,
   mergeText,
   normalizeText,
+  retryDelayMs,
   shouldMerge,
 } from "./lib/memoryText";
 import { memoryKind } from "./schema";
@@ -57,11 +60,18 @@ async function embed(texts: string[]): Promise<number[][]> {
   const out: number[][] = [];
   for (let start = 0; start < texts.length; start += EMBED_BATCH) {
     const batch = texts.slice(start, start + EMBED_BATCH);
-    const response = await fetch("https://api.openai.com/v1/embeddings", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: EMBEDDING_MODEL, input: batch }),
-    });
+    const send = () =>
+      fetch("https://api.openai.com/v1/embeddings", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: EMBEDDING_MODEL, input: batch }),
+      });
+    let response = await send();
+    if (!response.ok && isRetryableStatus(response.status)) {
+      // One retry on 429 / 5xx so a blip doesn't lose every memory from the call.
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs(response.headers.get("retry-after"))));
+      response = await send();
+    }
     if (!response.ok) {
       const detail = (await response.text()).slice(0, 300);
       throw new Error(`memories: OpenAI embeddings failed (HTTP ${response.status}): ${detail}`);
@@ -86,7 +96,15 @@ const itemValidator = v.object({ kind: memoryKind, text: v.string(), name: v.opt
 // ---------- write ----------
 
 type Insert = { kind: Kind; text: string; name?: string; embedding: number[] };
-type Merge = { id: Id<"memories">; text: string; name?: string; mentions: number; reopen: boolean };
+type Merge = {
+  id: Id<"memories">;
+  text: string;
+  name?: string;
+  mentions: number;
+  reopen: boolean;
+  /** Set when the merged text is the incoming wording: re-embed with it. */
+  embedding?: number[];
+};
 
 export const addMany = internalAction({
   args: {
@@ -98,9 +116,15 @@ export const addMany = internalAction({
   handler: async (ctx, args): Promise<{ inserted: number; merged: number; resolved: number }> => {
     const items = dedupeBatch(args.items);
     const resolveIds = args.resolveThreadIds ?? [];
+    // Idempotency: memories already stored for this call means it was processed
+    // before (e.g. the pipeline re-ran). applyChanges re-checks inside its
+    // transaction; pipeline.processCall also guards with calls.processedAt.
+    if (args.callId && (await ctx.runQuery(internal.memories.hasCallMemories, { callId: args.callId }))) {
+      return { inserted: 0, merged: 0, resolved: 0 };
+    }
     if (items.length === 0) {
       const resolved: number = resolveIds.length
-        ? await ctx.runMutation(internal.memories.resolveThreads, { ids: resolveIds })
+        ? await ctx.runMutation(internal.memories.resolveThreads, { ids: resolveIds, elderId: args.elderId })
         : 0;
       return { inserted: 0, merged: 0, resolved };
     }
@@ -110,14 +134,19 @@ export const addMany = internalAction({
 
     const inserts: Insert[] = [];
     const merges = new Map<string, Merge>();
-    const addMerge = (target: MemoryView, item: { text: string; name?: string; kind: string }) => {
+    const addMerge = (target: MemoryView, item: { text: string; name?: string; kind: string }, vector: number[]) => {
       const prev = merges.get(target._id);
+      const base = prev?.text ?? target.text;
+      const text = mergeText(base, item.text);
+      const tookIncoming = text !== base.trim() && text === item.text.trim();
+      const embedding = tookIncoming ? vector : prev?.embedding;
       merges.set(target._id, {
         id: target._id,
-        text: mergeText(prev?.text ?? target.text, item.text),
+        text,
         ...((target.name ?? item.name) ? { name: target.name ?? item.name } : {}),
         mentions: (prev?.mentions ?? 0) + 1,
         reopen: (prev?.reopen ?? false) || item.kind === "open_thread",
+        ...(embedding ? { embedding } : {}),
       });
     };
 
@@ -131,7 +160,7 @@ export const addMany = internalAction({
           (m) => m.kind === item.kind && m.name && normalizeText(m.name) === normalizeText(item.name),
         );
         if (sameName) {
-          addMerge(sameName, item);
+          addMerge(sameName, item, vector);
           continue;
         }
       }
@@ -142,21 +171,33 @@ export const addMany = internalAction({
         limit: 3,
         filter: (q) => q.eq("elderKind", elderKindKey(args.elderId, item.kind)),
       });
-      const top = hits[0];
-      if (top && top._score >= MERGE_THRESHOLD) {
-        const [doc]: MemoryView[] = await ctx.runQuery(internal.memories.getMany, { ids: [top._id] });
-        if (doc && shouldMerge(doc, item, top._score)) {
-          addMerge(doc, item);
-          continue;
+      const close = hits.filter((h) => h._score >= MERGE_THRESHOLD);
+      let mergedIntoStored = false;
+      if (close.length > 0) {
+        const docs: MemoryView[] = await ctx.runQuery(internal.memories.getMany, { ids: close.map((h) => h._id) });
+        for (const hit of close) {
+          const doc = docs.find((d) => d._id === hit._id);
+          if (doc && shouldMerge(doc, item, hit._score)) {
+            addMerge(doc, item, vector);
+            mergedIntoStored = true;
+            break;
+          }
         }
       }
+      if (mergedIntoStored) continue;
 
-      // 3. A very similar item earlier in this same batch.
+      // 3. A very similar item earlier in this same batch (never across two different names).
       const twin = inserts.find(
-        (ins) => ins.kind === item.kind && cosineSimilarity(ins.embedding, vector) >= MERGE_THRESHOLD,
+        (ins) =>
+          ins.kind === item.kind &&
+          !differentNames(ins, item) &&
+          cosineSimilarity(ins.embedding, vector) >= MERGE_THRESHOLD,
       );
       if (twin) {
-        twin.text = mergeText(twin.text, item.text);
+        const text = mergeText(twin.text, item.text);
+        if (text !== twin.text.trim() && text === item.text.trim()) twin.embedding = vector;
+        twin.text = text;
+        if (!twin.name && item.name) twin.name = item.name;
         continue;
       }
 
@@ -192,18 +233,32 @@ export const applyChanges = internalMutation({
         name: v.optional(v.string()),
         mentions: v.number(),
         reopen: v.boolean(),
+        embedding: v.optional(v.array(v.float64())),
       }),
     ),
     resolveIds: v.array(v.id("memories")),
   },
   handler: async (ctx, args): Promise<{ inserted: number; merged: number; resolved: number }> => {
+    // Same idempotency check as addMany, inside the transaction: two concurrent
+    // runs for one call conflict here and the retry sees the first run's rows.
+    if (args.callId) {
+      const callId = args.callId;
+      const already = await ctx.db
+        .query("memories")
+        .withIndex("by_call", (q) => q.eq("callId", callId))
+        .first();
+      if (already) return { inserted: 0, merged: 0, resolved: 0 };
+    }
     const now = Date.now();
     let merged = 0;
     for (const m of args.merges) {
       const doc = await ctx.db.get(m.id);
       if (!doc || doc.elderId !== args.elderId) continue;
+      const text = mergeText(doc.text, m.text);
+      const reembed = Boolean(m.embedding) && text !== doc.text.trim() && text === m.text.trim();
       await ctx.db.patch(m.id, {
-        text: mergeText(doc.text, m.text),
+        text,
+        ...(reembed && m.embedding ? { embedding: m.embedding } : {}),
         ...(doc.name === undefined && m.name ? { name: m.name } : {}),
         mentionCount: doc.mentionCount + Math.max(1, Math.floor(m.mentions)),
         lastMentionedAt: now,
@@ -248,8 +303,19 @@ async function resolveOpenThreads(
 }
 
 export const resolveThreads = internalMutation({
-  args: { ids: v.array(v.id("memories")) },
-  handler: async (ctx, { ids }): Promise<number> => resolveOpenThreads(ctx, ids),
+  // elderId is optional for backwards compatibility: when given, only that elder's threads.
+  args: { ids: v.array(v.id("memories")), elderId: v.optional(v.id("elders")) },
+  handler: async (ctx, { ids, elderId }): Promise<number> => resolveOpenThreads(ctx, ids, elderId),
+});
+
+/** True if memories were already inserted for this call (addMany idempotency). */
+export const hasCallMemories = internalQuery({
+  args: { callId: v.id("calls") },
+  handler: async (ctx, { callId }): Promise<boolean> =>
+    (await ctx.db
+      .query("memories")
+      .withIndex("by_call", (q) => q.eq("callId", callId))
+      .first()) !== null,
 });
 
 // ---------- read ----------

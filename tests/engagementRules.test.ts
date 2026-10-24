@@ -4,6 +4,8 @@ import {
   BANK_REFRESH_DEBOUNCE_MS,
   cleanComments,
   engagementChanged,
+  feedbackWindowStart,
+  nextSnapshot,
   shouldRefreshBank,
 } from "../convex/lib/engagementRules.ts";
 import { canonicalLinkedInPostUrl } from "../convex/lib/linkedinUrl.ts";
@@ -49,4 +51,32 @@ test("engagement and posts rows meet on the canonical URL", () => {
   const scraped = "https://www.linkedin.com/posts/walter_bakery-activity-7380000000000000001-AbCd?utm_source=x";
   const published = "https://www.linkedin.com/feed/update/urn:li:activity:7380000000000000001/";
   assert.equal(canonicalLinkedInPostUrl(scraped), canonicalLinkedInPostUrl(published));
+});
+
+test("nextSnapshot: counts-only source keeps stored comments and compares reactions only", () => {
+  const prev = { reactions: 12, comments: [{ author: "Ana", text: "How did you price bread?" }] };
+  // backup Actor: no comments, same reactions -> nothing changed, comments kept
+  assert.deepEqual(nextSnapshot(prev, { reactions: 12, comments: [] }, false), { comments: prev.comments, changed: false });
+  // backup Actor: reactions moved -> changed, comments still kept
+  assert.deepEqual(nextSnapshot(prev, { reactions: 15, comments: [] }, false), { comments: prev.comments, changed: true });
+  // new post from the backup: changed only if it has reactions
+  assert.deepEqual(nextSnapshot(null, { reactions: 0, comments: [] }, false), { comments: [], changed: false });
+  assert.deepEqual(nextSnapshot(null, { reactions: 3, comments: [] }, false), { comments: [], changed: true });
+});
+
+test("nextSnapshot: full source replaces comments and uses the normal change rule", () => {
+  const prev = { reactions: 12, comments: [{ author: "Ana", text: "How did you price bread?" }] };
+  const next = { reactions: 12, comments: [] };
+  assert.deepEqual(nextSnapshot(prev, next), { comments: [], changed: true });
+  assert.deepEqual(nextSnapshot(prev, prev, true), { comments: prev.comments, changed: false });
+});
+
+test("feedbackWindowStart: days back from now, 14 by default", () => {
+  const now = Date.parse("2026-10-25T00:00:00Z");
+  const day = 24 * 60 * 60 * 1000;
+  assert.equal(feedbackWindowStart(now, 7), now - 7 * day);
+  assert.equal(feedbackWindowStart(now), now - 14 * day);
+  assert.equal(feedbackWindowStart(now, -3), now - 14 * day);
+  assert.equal(feedbackWindowStart(now, Number.NaN), now - 14 * day);
+  assert.equal(feedbackWindowStart(now, 0), now);
 });

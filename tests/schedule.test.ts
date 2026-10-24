@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { dueActions, localParts, normalizeDay } from "../convex/lib/schedule.ts";
+import { PREPARE_CALL_FN, START_CALL_FN, dueActions, localParts, normalizeDay } from "../convex/lib/schedule.ts";
 
 const LA = "America/Los_Angeles";
 const at = (iso: string) => Date.parse(iso);
@@ -84,4 +84,9 @@ test("skips elders that aren't set up or aren't in a calling stage", () => {
   assert.match(dueActions({ ...base, callHour: 9.5 }, now).skipReason ?? "", /0-23/);
   assert.match(dueActions({ ...base, timezone: "Mars/Olympus" }, now).skipReason ?? "", /bad timezone/);
   assert.deepEqual(dueActions({ ...base, stage: "onboarding" }, now), { call: { slot: "2026-10-25T10" } });
+});
+
+test("tick targets Cartesia for calls and the planner for prep", () => {
+  assert.equal(START_CALL_FN, "cartesia:startCall");
+  assert.equal(PREPARE_CALL_FN, "conversation:prepareCall");
 });

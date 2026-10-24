@@ -4,7 +4,7 @@
 // Each elder has timezone (IANA, e.g. "America/Los_Angeles"), callDay ("sunday")
 // and callHour (0-23, his local time). The hourly cron asks dueActions():
 //   prepare  -> his call starts in about an hour   (conversation.prepareCall)
-//   call     -> his call hour has started          (vapi.startCall)
+//   call     -> his call hour has started          (cartesia.startCall)
 // Both return a "slot" key (his local date + hour of the call). schedule.ts stores
 // the last slot handled, so a repeated hour (DST fall-back) or a second cron run in
 // the same hour never schedules twice. A local hour that doesn't exist that day
@@ -94,3 +94,7 @@ export function dueActions(elder: SchedulableElder, nowMs: number): DueActions {
   }
   return out;
 }
+
+/** Functions tick schedules (referenced by name; see schedule.ts). */
+export const PREPARE_CALL_FN = "conversation:prepareCall";
+export const START_CALL_FN = "cartesia:startCall";

@@ -50,3 +50,25 @@ export function shouldRefreshBank(
 ): boolean {
   return lastBankRefreshAt === undefined || nowMs - lastBankRefreshAt >= windowMs;
 }
+
+/**
+ * Snapshot to store for this scrape. `commentsKnown: false` means the source only
+ * had counts (the backup Actor): keep the comments we already have and compare
+ * reactions only, so a backup run never wipes comments or fakes a change.
+ */
+export function nextSnapshot(
+  prev: Snapshot | null | undefined,
+  next: Snapshot,
+  commentsKnown = true,
+): { comments: Comment[]; changed: boolean } {
+  if (commentsKnown) return { comments: next.comments, changed: engagementChanged(prev, next) };
+  const comments = prev?.comments ?? [];
+  const changed = prev ? prev.reactions !== next.reactions : next.reactions > 0;
+  return { comments, changed };
+}
+
+/** Start of the recentFeedback window (epoch ms). Bad or negative values mean 14 days. */
+export function feedbackWindowStart(nowMs: number, sinceDays?: number): number {
+  const days = typeof sinceDays === "number" && Number.isFinite(sinceDays) && sinceDays >= 0 ? sinceDays : 14;
+  return nowMs - days * 24 * 60 * 60 * 1000;
+}

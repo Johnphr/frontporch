@@ -5,7 +5,7 @@
 //                   something changed schedules conversation.refreshQuestionBank
 //                   (debounced: at most once per elder every 10 minutes, 2 minutes
 //                   after the first change so the whole scrape run lands first)
-//   recentFeedback  posts with reactions + comments scraped recently, for the planner
+//   recentFeedback  posts whose reactions/comments changed recently, for the planner
 //
 // Owner: Core: Data.
 
@@ -16,7 +16,8 @@ import { internalMutation, internalQuery } from "./_generated/server";
 import {
   BANK_REFRESH_DELAY_MS,
   cleanComments,
-  engagementChanged,
+  feedbackWindowStart,
+  nextSnapshot,
   shouldRefreshBank,
 } from "./lib/engagementRules";
 import { canonicalLinkedInPostUrl } from "./lib/linkedinUrl";
@@ -33,6 +34,8 @@ export const upsert = internalMutation({
     linkedinUrl: v.string(),
     reactions: v.number(),
     comments: v.array(commentValidator),
+    // false when the source only had counts (apify's backup Actor): keep stored comments.
+    commentsKnown: v.optional(v.boolean()),
   },
   handler: async (
     ctx,
@@ -42,7 +45,7 @@ export const upsert = internalMutation({
     if (!linkedinUrl) throw new Error("engagement.upsert: empty linkedinUrl");
     const now = Date.now();
     const reactions = Number.isFinite(args.reactions) ? Math.max(0, args.reactions) : 0;
-    const comments = cleanComments(args.comments);
+    const scraped = cleanComments(args.comments);
 
     const existing = (
       await ctx.db
@@ -58,7 +61,11 @@ export const upsert = internalMutation({
         .collect()
     ).find((row) => row.elderId === args.elderId);
 
-    const changed = engagementChanged(existing ?? null, { reactions, comments });
+    const { comments, changed } = nextSnapshot(
+      existing ?? null,
+      { reactions, comments: scraped },
+      args.commentsKnown ?? true,
+    );
 
     let engagementId: Id<"engagement">;
     if (existing) {
@@ -107,16 +114,18 @@ export type Feedback = {
   reactions: number;
   comments: { author: string; text: string }[];
   scrapedAt: number;
+  changedAt: number;
 };
 
 export const recentFeedback = internalQuery({
   args: { elderId: v.id("elders"), sinceDays: v.optional(v.number()) },
   handler: async (ctx, args): Promise<Feedback[]> => {
-    const days = Number.isFinite(args.sinceDays) ? Math.max(0, args.sinceDays as number) : 14;
-    const since = Date.now() - days * 24 * 60 * 60 * 1000;
+    // Filter on changedAt, not scrapedAt: the daily scrape re-touches scrapedAt on
+    // every recent post, so old comments would look fresh every week.
+    const since = feedbackWindowStart(Date.now(), args.sinceDays);
     const rows = await ctx.db
       .query("engagement")
-      .withIndex("by_elder_scraped", (q) => q.eq("elderId", args.elderId).gte("scrapedAt", since))
+      .withIndex("by_elder_changed", (q) => q.eq("elderId", args.elderId).gte("changedAt", since))
       .order("desc")
       .take(50);
     return await Promise.all(
@@ -128,6 +137,7 @@ export const recentFeedback = internalQuery({
           reactions: row.reactions,
           comments: row.comments,
           scrapedAt: row.scrapedAt,
+          changedAt: row.changedAt ?? row.scrapedAt,
         };
       }),
     );

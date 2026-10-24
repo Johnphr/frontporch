@@ -4,9 +4,12 @@ import {
   MERGE_THRESHOLD,
   cosineSimilarity,
   dedupeBatch,
+  differentNames,
   embeddingText,
   formatMemoriesForPrompt,
+  isRetryableStatus,
   mergeText,
+  retryDelayMs,
   shouldMerge,
   similarityKey,
 } from "../convex/lib/memoryText.ts";
@@ -108,4 +111,44 @@ test("formatMemoriesForPrompt respects max (by priority) and handles empty input
   assert.ok(!text.includes("fact one"));
   assert.equal(formatMemoriesForPrompt([]), "");
   assert.equal(formatMemoriesForPrompt([{ kind: "fact", text: "   " }]), "");
+});
+
+test("MERGE_THRESHOLD is 0.85: close rewordings merge, looser matches don't", () => {
+  assert.equal(MERGE_THRESHOLD, 0.85);
+  const fact = { kind: "fact", text: "Worked 30 years at Boeing" };
+  assert.equal(shouldMerge(fact, { kind: "fact", text: "Spent three decades at Boeing" }, 0.86), true);
+  assert.equal(shouldMerge(fact, { kind: "fact", text: "Worked at a plane factory" }, 0.84), false);
+});
+
+test("shouldMerge: two different names never merge, whatever the score", () => {
+  const tom = { kind: "person", name: "Tom", text: "his brother, a machinist" };
+  const bill = { kind: "person", name: "Bill", text: "his brother, a machinist" };
+  assert.equal(shouldMerge(tom, bill, 0.99), false);
+  // same name merges even with a low score (different detail about the same person)
+  assert.equal(shouldMerge(tom, { kind: "person", name: " tom ", text: "taught him to weld" }, 0.3), true);
+  // the rule applies to any kind that carries a name
+  assert.equal(shouldMerge({ kind: "place", name: "Fresno", text: "plant" }, { kind: "place", name: "Everett", text: "plant" }, 0.97), false);
+  // one side without a name falls back to the score
+  assert.equal(shouldMerge(tom, { kind: "person", text: "his brother, a machinist" }, 0.9), true);
+});
+
+test("differentNames only when both names exist and differ", () => {
+  assert.equal(differentNames({ kind: "person", text: "", name: "Tom" }, { kind: "person", text: "", name: "Bill" }), true);
+  assert.equal(differentNames({ kind: "person", text: "", name: "María" }, { kind: "person", text: "", name: "maria" }), false);
+  assert.equal(differentNames({ kind: "person", text: "", name: "Tom" }, { kind: "person", text: "" }), false);
+});
+
+test("OpenAI retry: retryable statuses and Retry-After handling", () => {
+  assert.equal(isRetryableStatus(429), true);
+  assert.equal(isRetryableStatus(503), true);
+  assert.equal(isRetryableStatus(400), false);
+  assert.equal(isRetryableStatus(401), false);
+  assert.equal(retryDelayMs("2"), 2000);
+  assert.equal(retryDelayMs("0.5"), 500);
+  assert.equal(retryDelayMs(null), 1500);
+  assert.equal(retryDelayMs("not a date"), 1500);
+  assert.equal(retryDelayMs("120"), 20_000); // capped
+  const now = Date.parse("2026-10-25T10:00:00Z");
+  assert.equal(retryDelayMs("Sun, 25 Oct 2026 10:00:03 GMT", now), 3000);
+  assert.equal(retryDelayMs("Sun, 25 Oct 2026 09:59:00 GMT", now), 0); // date in the past
 });

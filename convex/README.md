@@ -102,7 +102,7 @@ clear error without it).
 | `memories.listForElder({ elderId, kinds?, status?, limit? })` | planner | e.g. all active open threads |
 | `engagement.upsert(...)` | `apify.scrapeEngagement` | latest reactions + comments per post; schedules a question-bank refresh when something changed |
 | `engagement.recentFeedback({ elderId, sinceDays? })` | planner | posts with reactions + comments, newest first |
-| `schedule.tick` | hourly cron | `conversation.prepareCall` ~1h before his call, `vapi.startCall` at the call hour |
+| `schedule.tick` | hourly cron | `conversation.prepareCall` ~1h before his call, `cartesia.startCall` at the call hour |
 
 Crons (`crons.ts`, UTC): hourly `schedule.tick`; daily 13:15 `schedule.dailyEngagement`
 (→ `apify.scrapeEngagement` per active elder with a `linkedinUrl`); weekly Monday 14:30
