@@ -1,0 +1,10 @@
+{
+  "turns": [
+    { "role": "pip", "text": "Last time you mentioned your first job at the bakery. What was a normal morning like?" },
+    { "role": "elder", "text": "Oh, we started at four. My father had me kneading dough before school, every day, even in winter." },
+    { "role": "pip", "text": "What did that teach you?" },
+    { "role": "elder", "text": "That showing up matters more than talent. The bread doesn't care how you feel. You get there, you do the work." },
+    { "role": "elder", "text": "Later when I ran my own team at the plant, I told the young engineers the same thing." }
+  ],
+  "post": "**The bread doesn't care how you feel.**\n\nAt four every morning, my father had me kneading dough before school. Every day, even in winter.\n\nIt taught me that showing up matters more than talent.\n\n- You get there.\n- You do the work.\n\nYears later, running my own team at the plant, I told the young engineers the same thing.\n\nWhat's a lesson you learned before you were old enough to know it was one?\n\n#leadership #work #career #bakery #lessons\n\nWritten with the help of AI."
+}

@@ -85,6 +85,11 @@ Vapi, not Convex.
 Vapi `end-of-call-report` → `/vapi/webhook` → `pipeline.processCall`:
 save transcript → extract memories → `llm.writePost` → `posts` row →
 `linkedapi.createPost` → post URL saved on the row.
+Inside `linkedapi.createPost`: claim the row (no double posting) → format for LinkedIn
+(`lib/linkedinPost.ts`) → `postGuard.checkPost` fact-checks the post against the whole call
+(his words + what Pip said that he confirmed) and his profile/memories → fail: row becomes
+`needs_review`, nothing is posted (`POST_GUARD_MODE=enforce`; a human can `linkedapi.approvePost`)
+→ pass: LinkedAPI `st.createPost` → poll → canonical post URL (`lib/linkedinUrl.ts`) saved.
 
 ### ④ Feedback loop
 Daily cron → `apify.scrapeEngagement` (his recent posts with reactions + comments) →
@@ -122,6 +127,8 @@ type CallResult = {                // vapi.webhook -> pipeline.processCall
 `llm.planQuestions` · `memories.add` · `memories.search` · `engagement.upsert` ·
 `engagement.recentFeedback` · `apify.scrapeEngagement` · `apify.scrapeProfile` ·
 `linkedapi.createPost`
+
+Post guard: `postGuard.checkPost` · `linkedapi.approvePost` · `linkedapi.previewPost` · `linkedapi.previewText` · `linkedapi.checkPostStatus`
 
 ## Data model (draft, not in `schema.ts` yet)
 

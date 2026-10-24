@@ -81,4 +81,30 @@ export default defineSchema({
   })
     .index("by_elder_unread", ["elderId", "readToElder"])
     .index("by_answer", ["answerId"]),
+
+  // ---- Integrations: posts (Data: review/replace) ----
+  // ARCHITECTURE.md draft, plus optional fields used by linkedapi.ts / postGuard.ts.
+  // status: pending (written, or sent to LinkedAPI when workflowId is set)
+  //       | posting (claimed by a run, about to be sent) | needs_review (post guard
+  //       failed, not posted) | published | failed | needs_attention (sent, but
+  //       status checks stopped; see error)
+  // linkedinUrl is canonical (lib/linkedinUrl.ts) so engagement rows match it.
+  posts: defineTable({
+    elderId: v.id("elders"),
+    callId: v.id("calls"),
+    text: v.string(),
+    status: v.string(),
+    linkedinUrl: v.optional(v.string()),
+    error: v.optional(v.string()),
+    workflowId: v.optional(v.string()), // LinkedAPI workflow
+    guardIssues: v.optional(v.array(v.string())),
+    guardSummary: v.optional(v.string()),
+    pollAttempts: v.optional(v.number()),
+    claimedAt: v.optional(v.number()), // epoch ms; stale claims (>15 min) can be retaken
+    approvedAt: v.optional(v.number()), // epoch ms; posted via approvePost (guard skipped)
+    lastPolledAt: v.optional(v.number()), // epoch ms; stale polling is restarted by createPost
+    maybePosted: v.optional(v.boolean()), // LinkedAPI didn't confirm the send: check before retrying
+  })
+    .index("by_elder", ["elderId"])
+    .index("by_url", ["linkedinUrl"]),
 });
