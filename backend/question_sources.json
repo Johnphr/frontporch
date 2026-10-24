@@ -1,0 +1,34 @@
+[
+  {
+    "name": "reddit-askoldpeople",
+    "source": "reddit",
+    "enabled": true,
+    "actor": "trudax/reddit-scraper-lite",
+    "maxQuestions": 15,
+    "input": {
+      "startUrls": [{ "url": "https://www.reddit.com/r/AskOldPeople/new/" }],
+      "maxItems": 40,
+      "skipComments": true
+    },
+    "fields": {
+      "title": ["title"],
+      "body": ["body", "selftext", "text"],
+      "url": ["url", "link"],
+      "id": ["id", "parsedId"]
+    }
+  },
+  {
+    "name": "quora-life-advice",
+    "source": "quora",
+    "enabled": false,
+    "actor": "REPLACE_WITH_A_QUORA_ACTOR_FROM_THE_APIFY_STORE",
+    "maxQuestions": 10,
+    "input": {},
+    "fields": {
+      "title": ["question", "title"],
+      "body": ["details", "description"],
+      "url": ["url", "questionUrl"],
+      "id": ["id", "url"]
+    }
+  }
+]

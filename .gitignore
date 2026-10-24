@@ -1,0 +1,25 @@
+# secrets
+.env
+.env.local
+*.env.local
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# generated call audio (Cartesia MP3s)
+backend/static/audio/*.mp3
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
