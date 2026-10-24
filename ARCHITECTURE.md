@@ -86,14 +86,16 @@ The phone number is already set up in Cartesia; Convex only needs its id (`CARTE
 ### ② Weekly story call (slice 2)
 1. Hourly cron finds elders whose local `callDay`/`callHour` match → `cartesia.startCall`
    (~1h earlier, `conversation.prepareCall` refreshes the question bank, see below).
-2. `cartesia.startCall` → `conversation.planNextCall` → `{ plan, dynamicVariables }`: top queued
+2. `cartesia.startCall` (story branch, slice 2; today `reserveCall` refuses story calls) →
+   `conversation.planNextCall` → `{ plan, dynamicVariables }` (kind from PR #7's
+   `lib/onboarding.planNextCall`, the same rule `reserveCall` uses): top queued
    question as `mainQuestion`, the next 2–3 as `threads`, memories related to the main question
    (vector search) + people/places, topics to avoid, one `feedback` line saved by the last
    refresh. Fast by design: no Claude call, never waits on a refresh (empty bank → safe opening
    question + a refresh scheduled for next time).
 3. Story agent (draft prompt: `voice/prompts/story-call.md`) gets `dynamicVariables` as Cartesia
    `dynamic_variables` on `POST /agents/calls`.
-4. Once the call is placed, `cartesia.startCall` calls
+4. Once a story call is placed, `cartesia.startCall` calls
    `conversation.markPlanUsed({ elderId, bankId: plan.bankId, callId })`.
 
 **Question bank** (`questionBank`, `questionBankMeta`): his ranked next questions, rebuilt by
@@ -107,18 +109,22 @@ asked in recent calls are always skipped; covered topics only for open threads /
 dedupes; ages out).
 
 ### ③ After the call
-`cartesia.pollCall` → `pipeline.recordCallResult` (transcript normalized with
-`lib/cartesiaTranscript.ts`, saved on the `calls` row) → `pipeline.processCall({ callId })`.
-`processCall` claims the call first (`processedAt`), so a second run is a no-op; a deliberate
-re-run goes through `pipeline.reprocessCall({ callId })`. Steps, each isolated:
-1. `llm.extractKnowledge` → `memories.addMany`: facts, story seeds, open threads, people,
-   places, topics covered, topics to avoid; open threads he finished are resolved
-2. onboarding: `llm.extractProfile` → `elders.profile` (+ topics, story seeds); `stage: "active"`
-   only once the profile is usable · story: `llm.writePost` (may decline: no post) →
-   `posts` row (one per call, `by_call`) → `linkedapi.createPost` (scheduled)
-3. `conversation.refreshQuestionBank` (scheduled)
+`cartesia.pollCall` → `cartesia.applyPoll` saves the normalized transcript
+(`lib/cartesia.normalizeTranscript`), summary and `end_reason`, sets `status: "ended"` and
+schedules `pipeline.processCall({ callId })`. `processCall` (PR #7) claims the call
+(`processingAt`, retaken after 15 min), skips no-conversation calls
+(`lib/cartesia.isNoConversation`: voicemail / no answer / busy, or under 30 words from him →
+`no_conversation`), then:
+- onboarding: `llm.extractProfile` (merged with earlier calls) → `elders.profile`;
+  `stage: "active"` once usable · then a question-bank refresh is scheduled (best effort)
+- story (each step isolated): `llm.extractKnowledge` → `memories.addMany` (facts, story seeds,
+  open threads, people, places, topics covered / to avoid; finished open threads resolved) ·
+  `llm.writePost` (may decline: no post) → one `posts` row per call (`by_call`) →
+  `linkedapi.createPost` (scheduled, new row only) · `conversation.refreshQuestionBank` (scheduled)
 
-Steps are skipped on voicemail / no answer / failed calls or when he barely spoke.
+Ends with `status: "done"` + `processedAt`, or `process_failed` + error (claim released, retry
+by hand with `pipeline:processCall`; safe: `memories.addMany` skips a callId it already has and
+the post row is reused, so no second LinkedIn post).
 Inside `linkedapi.createPost`: claim the row (no double posting) → format for LinkedIn
 (`lib/linkedinPost.ts`) → `postGuard.checkPost` fact-checks the post against the whole call
 and his profile/memories → fail: `needs_review`, nothing posted → pass: LinkedAPI
@@ -158,12 +164,13 @@ type CallPlan = {                  // conversation.planNextCall -> cartesia.star
 type Turn = { role: "pip" | "elder"; text: string };   // calls.transcript, after normalizing Cartesia roles
 
 // conversation.planNextCall({ elderId }) -> { plan: CallPlan, dynamicVariables }
-// dynamicVariables: every {{name}} in the agent prompts, as strings (empty when unused):
-// firstName, language ("Spanish", not "es-MX"), profile (incl. "Topics to avoid: ..."),
-// memories ("- ..." lines), feedback, mainQuestion, threads ("- ..." lines), knownBackground.
+// onboarding: dynamicVariables = lib/onboarding.buildOnboardingVariables (first_name, known_background)
+// story: every {{name}} in voice/prompts/story-call.md, via lib/cartesia.templateVariables
+// ("" -> "none"): firstName, language ("Spanish", not "es-MX"), profile (incl. "Topics to
+// avoid: ..."), memories ("- ..." lines), feedback, mainQuestion, threads ("- ..." lines).
 
-// pipeline.recordCallResult({ cartesiaCallId, elderId, kind, turns, summary?, endReason }) -> callId
-// pipeline.processCall({ callId }) -> { callId, steps } | { callId, skipped: "already processed" }
+// pipeline.processCall({ callId }) -> { status: "done" | "no_conversation" | "process_failed" | "skipped", reason? }
+//   scheduled by cartesia.applyPoll once the call has ended (PR #7)
 ```
 
 **Function names** (all `internal.*`):
@@ -177,12 +184,13 @@ type Turn = { role: "pip" | "elder"; text: string };   // calls.transcript, afte
 Post guard: `postGuard.checkPost` · `linkedapi.approvePost` · `linkedapi.previewPost` ·
 `linkedapi.previewText` · `linkedapi.checkPostStatus`
 
-Brain (memory + planning): `pipeline.recordCallResult` · `pipeline.reprocessCall` ·
-`llm.extractKnowledge` (replaces `llm.extractMemories`) · `llm.findRecentTopics` ·
+Brain (memory + planning): `pipeline.insertPost` / `pipeline.findPostForCall` (one post per
+call) · `llm.extractKnowledge` (replaces `llm.extractMemories`) · `llm.findRecentTopics` ·
 `conversation.refreshQuestionBank` · `conversation.prepareCall` · `conversation.markPlanUsed` ·
 `conversation.getSavedFeedback` · `memories.addMany` / `memories.search` / `memories.listForElder`
-(Data). Pure logic: `lib/planner.ts` (ranking, CallPlan, dynamic variables, call checks),
-`lib/cartesiaTranscript.ts` (Cartesia transcript -> Turn[]).
+(Data). Pure logic: `lib/planner.ts` (ranking, CallPlan, story variables, post draft, step
+runner); transcript, no-conversation and claim rules are PR #7's (`lib/cartesia.ts`,
+`lib/onboarding.ts`).
 
 ## Data model (in `schema.ts`)
 

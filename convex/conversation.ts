@@ -197,9 +197,6 @@ export const markPlanUsed = internalMutation({
   },
 });
 
-  },
-});
-
 // ---------- actions ----------
 
 type RefreshResult = { queued: number; usedClaude: boolean; errors: string[] };
