@@ -328,6 +328,7 @@ tests/                          node --test + fixtures/
 | `LINKEDAPI_TOKEN`, `LINKEDAPI_ID_TOKEN`, `APIFY_TOKEN`, `STACKEXCHANGE_KEY` (optional), `POST_GUARD_MODE` (optional, default `enforce`), `AUTO_POST` (optional, default `on`; `off` = preview-only for tests) | Integrations |
 | `OPENAI_API_KEY` | Data (embeddings), Brain (LLM), Integrations (post guard) |
 | `OPENAI_MODEL` | optional, default `gpt-6-luna` |
+| `PUBLIC_CALLS` | optional, default off; `on` lets the sign-up page start calls |
 
 Share keys through a password manager, never the repo or chat.
 

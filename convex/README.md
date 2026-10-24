@@ -52,6 +52,7 @@ Local backend + `"use node"` files need Node 20–24: `npx -p node@24 -c 'npx co
 | `OPENAI_API_KEY` | LLM jobs (profile, memories, post, planner) + memory embeddings; `OPENAI_MODEL` optional (default `gpt-6-luna`) |
 | `APIFY_TOKEN` | optional: prefill his LinkedIn background (needs `linkedinUrl` on the elder) |
 | `AUTO_POST` | optional, default `on`. `off` = story posts are saved but not sent to LinkedIn (preview only, for tests) |
+| `PUBLIC_CALLS` | optional, default off. `on` = the sign-up page can start his first call (`signup:requestCall`; max 3 a day, 10 min apart) |
 
 Agent ids are not env vars: `syncAgent` saves one row per character in the `characterAgents`
 table (`characterId`, `agentId`, `syncedAt`), and `startCall` reads it. If his character has no
@@ -237,9 +238,10 @@ npx convex run schedule:tick '{"now": 1792944000000}'   # Sunday 2026-10-25 09:0
 - `http.ts` and `crons.ts` must keep their default exports, even when empty.
 - Vector search (`ctx.vectorSearch`) only works inside actions.
 - Files with `"use node"` at the top may only export actions.
-- No public functions: every query, mutation and action is `internal*` (run them with
+- Only `signup.ts` is public (the sign-up page); everything else is `internal*` (run it with
   `npx convex run`). Public Convex functions are callable by anyone with the deployment URL;
-  the deleted v1 dashboard queries exposed call transcripts that way. Keep it that way.
+  the deleted v1 dashboard queries exposed call transcripts that way. Public functions return
+  ids and ok/reason only, never elder rows or transcripts.
 - v1 leftovers are deleted (`questions.ts`, `answers.ts`, `replies.ts`, `calls.ts`,
   `lib/auth.ts`); `elders.ts` keeps only `seed`. The v1 `questions`, `answers` and `replies`
   tables stay in `schema.ts` until they're empty.
