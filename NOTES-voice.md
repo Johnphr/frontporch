@@ -70,6 +70,19 @@ Build:
   already recorded, no calls row).
 - R12 First Spanish test call: check the language of Cartesia's inactivity check-in / goodbye.
 
+## Inbound calls: confirm on the first live call
+- The agent calls `lookup_caller` right after the greeting, before talking (no documented way
+  to force a tool before `initial_message`; the prompt asks for it). If it doesn't, the
+  10-minute backstop still records the call.
+- Which `telephony_params` field holds the caller: the API reference says `to`, the webhooks
+  page says `from`. `callerCandidates` tries both; check a real call and drop one.
+- `system__conversation_id` equals the id `GET /agents/calls/{id}` takes (the docs call it the
+  call id); `pollCall` relies on it.
+- The tool id field in the create response (`id` assumed, `tool_id` tried) and that
+  `config.tools: [{id}]` attaches it.
+- Spanish speech recognition on an `en` agent (Cartesia documents one primary language).
+- Unknown-number path: goodbye + `end_call`, no `calls` row.
+
 ## Decisions outside the spec
 - Persona "both" read as: Pip for English agents, Juanito for Spanish agents.
 - Model instructions stay in English for both languages; the persona says which language to speak,
