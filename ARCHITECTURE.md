@@ -35,7 +35,7 @@ No family, no SMS, no UI. Only phone calls in and LinkedIn posts out.
 | Decision | Choice |
 |---|---|
 | Backend | Everything in Convex: tables, crons, actions, HTTP actions. No separate server |
-| UI | None. Setup (his phone, LinkedIn URL, call time) is by hand in the Convex dashboard |
+| UI | None. Setup (his phone, LinkedIn URL, call time) is by hand in the Convex dashboard. Temporary: a key-protected `/posts` review page (`convex/postsPage.ts`) to iterate on post content |
 | Phone calls | **Cartesia Managed Agents** run the whole call: phone number, speech-to-text, in-call LLM, voice. No Vapi; no Twilio in our code |
 | Agent config | Lives in code (`convex/lib/prompts/`), pushed to Cartesia with `npx convex run cartesiaAgents:syncAgent` |
 | Language + persona | Per elder (`elders.language`): **Pip** in English, **Juanito** (Latin American Spanish, "usted") for `es*`. One onboarding + one story agent per language |
