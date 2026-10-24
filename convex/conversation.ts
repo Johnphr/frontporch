@@ -5,10 +5,12 @@
 //                                     from his profile, open threads, memories,
 //                                     reader feedback, audience + recent topics.
 //   prepareCall({ elderId })          ~1h before his call (schedule.tick): fresh
-//                                     audience questions (Apify) + recent topics in
-//                                     his field (Claude web search) -> refresh.
+//                                     audience questions (Apify) and recent topics in
+//                                     his field (Claude web search), in parallel, then
+//                                     schedules a refresh with them.
 //   planNextCall({ elderId })         at call time (vapi.startCall): CallPlan + the
-//                                     prompt variables for vapi/prompts/*.md.
+//                                     prompt variables. Fast: never waits on a refresh
+//                                     or a Claude call; reuses the saved feedback line.
 //   markPlanUsed({ elderId, bankId, callId })   vapi.startCall, once the call is placed.
 //
 // Ranking rules live in lib/planner.ts (pure, tested). Owner: Core: Brain.
@@ -70,7 +72,11 @@ type PlanningContext = {
   elder: ElderV2 | null;
   queued: BankRow[];
   recentlyUsedTopics: string[];
+  feedbackLine: string;
+  resonated: string;
 };
+
+const RECENTLY_USED_COUNT = 10;
 
 // ---------- queries + mutations ----------
 
@@ -83,14 +89,17 @@ export const getPlanningContext = internalQuery({
       .withIndex("by_elder_status_priority", (q) => q.eq("elderId", elderId).eq("status", "queued"))
       .order("desc")
       .take(50);
+    // Most recently used first (by usedAt), so "recently asked" really is recent.
     const used = await ctx.db
       .query("questionBank")
-      .withIndex("by_elder_status_priority", (q) => q.eq("elderId", elderId).eq("status", "used"))
-      .take(100);
-    const recentlyUsedTopics = used
-      .sort((a, b) => (b.usedAt ?? 0) - (a.usedAt ?? 0))
-      .slice(0, 10)
-      .map((u) => u.topicKey.replace(/-/g, " "));
+      .withIndex("by_elder_status_usedAt", (q) => q.eq("elderId", elderId).eq("status", "used"))
+      .order("desc")
+      .take(RECENTLY_USED_COUNT);
+    const recentlyUsedTopics = used.map((u) => u.topicKey.replace(/-/g, " "));
+    const meta = await ctx.db
+      .query("questionBankMeta")
+      .withIndex("by_elder", (q) => q.eq("elderId", elderId))
+      .first();
     return {
       elder,
       queued: queued.map((r) => ({
@@ -104,14 +113,33 @@ export const getPlanningContext = internalQuery({
         firstSeenAt: r.firstSeenAt,
       })),
       recentlyUsedTopics,
+      feedbackLine: meta?.feedbackLine ?? "",
+      resonated: meta?.resonated ?? "",
     };
+  },
+});
+
+/** The feedback the last refresh worked out (for the post writer). */
+export const getSavedFeedback = internalQuery({
+  args: { elderId: v.id("elders") },
+  handler: async (ctx, { elderId }): Promise<{ feedbackLine: string; resonated: string } | null> => {
+    const meta = await ctx.db
+      .query("questionBankMeta")
+      .withIndex("by_elder", (q) => q.eq("elderId", elderId))
+      .first();
+    return meta ? { feedbackLine: meta.feedbackLine, resonated: meta.resonated } : null;
   },
 });
 
 /** Swap the queued bank for a freshly ranked one. Used rows stay as history. */
 export const replaceQueued = internalMutation({
-  args: { elderId: v.id("elders"), items: v.array(bankItemValidator) },
-  handler: async (ctx, { elderId, items }) => {
+  args: {
+    elderId: v.id("elders"),
+    items: v.array(bankItemValidator),
+    feedbackLine: v.optional(v.string()),
+    resonated: v.optional(v.string()),
+  },
+  handler: async (ctx, { elderId, items, feedbackLine, resonated }) => {
     const old = await ctx.db
       .query("questionBank")
       .withIndex("by_elder_status_priority", (q) => q.eq("elderId", elderId).eq("status", "queued"))
@@ -119,6 +147,15 @@ export const replaceQueued = internalMutation({
     for (const row of old) await ctx.db.delete(row._id);
     for (const item of items) {
       await ctx.db.insert("questionBank", { elderId, ...item, status: "queued" });
+    }
+    if (feedbackLine !== undefined || resonated !== undefined) {
+      const meta = await ctx.db
+        .query("questionBankMeta")
+        .withIndex("by_elder", (q) => q.eq("elderId", elderId))
+        .first();
+      const fields = { feedbackLine: feedbackLine ?? "", resonated: resonated ?? "", refreshedAt: Date.now() };
+      if (meta) await ctx.db.patch(meta._id, fields);
+      else await ctx.db.insert("questionBankMeta", { elderId, ...fields });
     }
     return { removed: old.length, queued: items.length };
   },
@@ -203,10 +240,10 @@ export const refreshQuestionBank = internalAction({
       .sort((a, b) => (b.lastMentionedAt ?? b._creationTime) - (a.lastMentionedAt ?? a._creationTime))
       .slice(0, 30)
       .map((m) => (m.name ? `${m.name}: ${m.text}` : m.text));
-    const covered = [
-      ...memories.filter((m) => m.kind === "topic_covered").map((m) => m.text),
-      ...context.recentlyUsedTopics,
-    ];
+    // covered: topics he already talked about (open threads / readers may revisit them).
+    // recentlyUsed: topics of questions asked in his last calls (never repeated).
+    const covered = memories.filter((m) => m.kind === "topic_covered").map((m) => m.text);
+    const recentlyUsed = context.recentlyUsedTopics;
     const avoid = [...memories.filter((m) => m.kind === "avoid").map((m) => m.text), ...(profile?.topicsToAvoid ?? [])];
 
     const feedbackPosts = await attempt(
@@ -255,6 +292,7 @@ export const refreshQuestionBank = internalAction({
             openThreads,
             memories: storyMemories,
             covered,
+            recentlyAsked: recentlyUsed,
             avoid,
             readerQuestions: feedback.readerQuestions,
             audienceQuestions,
@@ -273,7 +311,8 @@ export const refreshQuestionBank = internalAction({
       });
     }
 
-    // Keep what's already queued in the mix so its age (firstSeenAt) carries over.
+    // Keep what's already queued in the mix so its age (firstSeenAt) carries over
+    // (rankCandidates keeps the oldest firstSeenAt per topic, whatever the order).
     const existing: Candidate[] = context.queued.map((r) => ({
       question: r.question,
       why: r.why,
@@ -282,9 +321,17 @@ export const refreshQuestionBank = internalAction({
       topicKey: r.topicKey,
       firstSeenAt: r.firstSeenAt,
     }));
-    const ranked = rankCandidates([...candidates, ...existing], { avoid, covered, now: Date.now(), limit: 12 });
+    const ranked = rankCandidates([...candidates, ...existing], {
+      avoid,
+      covered,
+      recentlyUsed,
+      now: Date.now(),
+      limit: 12,
+    });
     await ctx.runMutation(internal.conversation.replaceQueued, {
       elderId: args.elderId,
+      feedbackLine: feedback.line,
+      resonated: feedback.resonated,
       items: ranked.map((r) => ({
         question: r.question,
         why: r.why,
@@ -299,7 +346,7 @@ export const refreshQuestionBank = internalAction({
   },
 });
 
-type PrepareResult = RefreshResult & { recentTopics: number; audience: string };
+type PrepareResult = { refreshScheduled: boolean; recentTopics: number; audience: string; errors: string[] };
 
 export const prepareCall = internalAction({
   args: { elderId: v.id("elders") },
@@ -308,31 +355,26 @@ export const prepareCall = internalAction({
     const context: PlanningContext = await ctx.runQuery(internal.conversation.getPlanningContext, { elderId });
     if (!context.elder) throw new Error("Elder not found");
 
-    // Fresh questions people in his field are asking online (saved by apify itself;
-    // refreshQuestionBank reads the best ones back via topAudienceQuestions).
-    const audience = await attempt(
-      errors,
-      "findAudienceQuestions",
-      async () => {
-        const r = await ctx.runAction(internal.apify.findAudienceQuestions, { elderId });
-        return `${r.inserted} new`;
-      },
-      "failed",
-    );
-    const recent = await attempt(
-      errors,
-      "findRecentTopics",
-      () =>
-        ctx.runAction(internal.llm.findRecentTopics, {
-          ...(context.elder?.profile ? { profile: context.elder.profile } : {}),
-        }),
-      { topics: [] as RecentTopic[] },
-    );
-    const refreshed: RefreshResult = await ctx.runAction(internal.conversation.refreshQuestionBank, {
-      elderId,
-      recentTopics: recent.topics,
-    });
-    return { ...refreshed, errors: [...errors, ...refreshed.errors], recentTopics: recent.topics.length, audience };
+    // Both lookups run at once (each can take minutes). Apify saves its own results;
+    // refreshQuestionBank reads the best ones back via topAudienceQuestions.
+    const [audienceRun, recentRun] = await Promise.allSettled([
+      ctx.runAction(internal.apify.findAudienceQuestions, { elderId }),
+      ctx.runAction(internal.llm.findRecentTopics, {
+        ...(context.elder.profile ? { profile: context.elder.profile } : {}),
+      }),
+    ]);
+    const message = (reason: unknown) => (reason instanceof Error ? reason.message : String(reason));
+    let audience = "failed";
+    if (audienceRun.status === "fulfilled") audience = `${audienceRun.value.inserted} new`;
+    else errors.push(`findAudienceQuestions: ${message(audienceRun.reason)}`);
+    let recentTopics: RecentTopic[] = [];
+    if (recentRun.status === "fulfilled") recentTopics = recentRun.value.topics;
+    else errors.push(`findRecentTopics: ${message(recentRun.reason)}`);
+
+    // The refresh runs on its own so this action stays well inside Convex's time limit.
+    await ctx.scheduler.runAfter(0, internal.conversation.refreshQuestionBank, { elderId, recentTopics });
+    if (errors.length) console.warn(`prepareCall ${elderId}`, errors.join(" | "));
+    return { refreshScheduled: true, recentTopics: recentTopics.length, audience, errors };
   },
 });
 
@@ -341,9 +383,18 @@ type PlanResult = { plan: CallPlan; variables: PromptVariables };
 export const planNextCall = internalAction({
   args: { elderId: v.id("elders") },
   handler: async (ctx, { elderId }): Promise<PlanResult> => {
-    let context: PlanningContext = await ctx.runQuery(internal.conversation.getPlanningContext, { elderId });
+    const context: PlanningContext = await ctx.runQuery(internal.conversation.getPlanningContext, { elderId });
     const elder = context.elder;
     if (!elder) throw new Error("Elder not found");
+
+    // Topics he doesn't want to discuss always reach Pip (outside the memories budget).
+    let avoidMemories: string[] = [];
+    try {
+      const rows: MemoryDoc[] = await ctx.runQuery(memoriesListForElder, { elderId, kinds: ["avoid"], limit: 10 });
+      avoidMemories = rows.map((m) => m.text);
+    } catch {
+      // memories not available: the profile's topicsToAvoid still go through.
+    }
 
     if (isOnboarding(elder)) {
       let knownBackground = elder.knownBackground ?? "";
@@ -359,16 +410,13 @@ export const planNextCall = internalAction({
         }
       }
       const plan = buildCallPlan({ kind: "onboarding", knownBackground });
-      return { plan, variables: toPromptVariables(plan, elder) };
+      return { plan, variables: toPromptVariables(plan, elder, { avoid: avoidMemories }) };
     }
 
     if (context.queued.length === 0) {
-      try {
-        await ctx.runAction(internal.conversation.refreshQuestionBank, { elderId });
-        context = await ctx.runQuery(internal.conversation.getPlanningContext, { elderId });
-      } catch {
-        // Falls back to the default opening question below.
-      }
+      // Don't make the call wait: use the default opening question now and fill the
+      // bank for next time.
+      await ctx.scheduler.runAfter(0, internal.conversation.refreshQuestionBank, { elderId });
     }
     const bank = context.queued.map((r) => ({ _id: String(r._id), question: r.question, topicKey: r.topicKey }));
     const mainQuestion = bank[0]?.question;
@@ -387,25 +435,10 @@ export const planNextCall = internalAction({
       // Memory search not available yet: plan without it.
     }
 
-    let feedbackLine = "";
-    try {
-      const posts = await ctx.runQuery(engagementRecentFeedback, { elderId, sinceDays: 10 });
-      if (posts.length) {
-        const summary = await ctx.runAction(internal.llm.summarizeFeedback, {
-          posts: posts.map((p) => ({
-            linkedinUrl: p.linkedinUrl,
-            ...(p.postText ? { postText: p.postText } : {}),
-            reactions: p.reactions,
-            comments: p.comments,
-          })),
-        });
-        feedbackLine = summary.line;
-      }
-    } catch {
-      // No feedback line this time.
-    }
+    // Worked out by the last refresh (after the previous call / new comments).
+    const feedbackLine = context.feedbackLine;
 
     const plan = buildCallPlan({ kind: "story", bank, memories, feedbackLine });
-    return { plan, variables: toPromptVariables(plan, elder) };
+    return { plan, variables: toPromptVariables(plan, elder, { avoid: avoidMemories }) };
   },
 });

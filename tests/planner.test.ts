@@ -11,14 +11,18 @@ import {
   fallbackCandidates,
   filterTopicsByUrls,
   formatMemoriesBrief,
+  formatProfile,
   isNearSilentCall,
   isNoConversation,
   languageName,
   normalizePlannedCandidates,
+  normalizePostDraft,
   normalizeTopicKey,
+  overlapsAvoid,
   overlapsTopic,
   rankCandidates,
   runSteps,
+  startsWithHook,
   toPromptVariables,
   type Candidate,
 } from "../convex/lib/planner.ts";
@@ -209,7 +213,7 @@ test("toPromptVariables covers exactly the {{variables}} in the Vapi prompts", (
   assert.equal(vars.threads, "- Q2?");
   assert.equal(vars.memories, "- Ran a bakery.");
   assert.match(vars.profile, /Industry: Baking\./);
-  assert.match(vars.profile, /Avoid: the strike\./);
+  assert.match(vars.profile, /Topics to avoid: the strike\./);
   assert.equal(vars.feedback, "");
   assert.equal(vars.knownBackground, "");
 });
@@ -237,8 +241,108 @@ test("isNearSilentCall counts only his words", () => {
 test("isNoConversation matches voicemail-like endings", () => {
   assert.equal(isNoConversation("voicemail"), true);
   assert.equal(isNoConversation("customer-did-not-answer"), true);
+  assert.equal(isNoConversation("no_answer"), true);
   assert.equal(isNoConversation("customer-ended-call"), false);
   assert.equal(isNoConversation(undefined), false);
+});
+
+test("a call that ended on silence still counts when he talked", () => {
+  const story = fixture<{ turns: { role: string; text: string }[] }>("story_call.json");
+  assert.equal(isNoConversation("silence-timed-out"), false);
+  assert.equal(isNoConversation("silence_timeout"), false);
+  assert.equal(isNearSilentCall(story.turns), false);
+});
+
+test("recently used topics are never repeated, even by readers or open threads", () => {
+  const ranked = rankCandidates(
+    [
+      cand("reader", "How did you price bread in the seventies?", { topicKey: "price bread" }),
+      cand("open_thread", "Finish the story about pricing bread for the co-op?", { topicKey: "price bread coop" }),
+      cand("memory", "Tell me about your first delivery van.", { topicKey: "delivery van" }),
+    ],
+    { recentlyUsed: ["price bread"], now: NOW },
+  );
+  assert.deepEqual(ranked.map((r) => r.source), ["memory"]);
+});
+
+test("readers may revisit covered topics but not recently used ones", () => {
+  const ranked = rankCandidates(
+    [cand("reader", "How did you fix the oven breakdown?", { topicKey: "oven breakdown fix" })],
+    { covered: ["oven breakdown"], recentlyUsed: ["delivery van"], now: NOW },
+  );
+  assert.equal(ranked.length, 1);
+});
+
+test("dedupe keeps the oldest firstSeenAt in either order, and the age lowers priority", () => {
+  const old = cand("memory", "Tell me about hiring Eddie.", { topicKey: "hiring eddie", firstSeenAt: NOW - 14 * DAY });
+  const fresh = cand("memory", "How did you hire Eddie?", { topicKey: "eddie hiring" });
+  for (const list of [
+    [fresh, old],
+    [old, fresh],
+  ]) {
+    const ranked = rankCandidates(list, { now: NOW });
+    assert.equal(ranked.length, 1);
+    assert.equal(ranked[0].firstSeenAt, NOW - 14 * DAY);
+    // 14 days old: weight 40 halves to 20 (+ order bonus <= 5)
+    assert.ok(ranked[0].priority <= 25, `priority ${ranked[0].priority}`);
+  }
+});
+
+test("avoid entries written as sentences block any question on that subject", () => {
+  const avoid = ["Doesn't want to talk about his brother's death."];
+  assert.equal(
+    overlapsAvoid({ question: "What was your brother like growing up?", topicKey: "brother growing" }, avoid),
+    true,
+  );
+  assert.equal(overlapsAvoid({ question: "Tell me about your brothers.", topicKey: "brothers" }, avoid), true);
+  assert.equal(
+    overlapsAvoid({ question: "What did you want to be as a kid?", topicKey: "childhood dream" }, avoid),
+    false,
+  );
+  const ranked = rankCandidates(
+    [
+      cand("open_thread", "Finish the story about your brother at the plant?", { topicKey: "brother plant" }),
+      cand("memory", "Tell me about the first oven you bought.", { topicKey: "first oven" }),
+    ],
+    { avoid, now: NOW },
+  );
+  assert.deepEqual(ranked.map((r) => r.source), ["memory"]);
+});
+
+test("avoid topics from later calls always reach the profile variable", () => {
+  const text = formatProfile(
+    { industry: "Baking", specialty: "", careerSummary: "", topicsToAvoid: ["the strike"] },
+    ["His brother's death.", "The strike"],
+  );
+  assert.match(text, /Topics to avoid: the strike; His brother's death\./);
+  assert.equal(formatProfile(null, ["Health"]), "Topics to avoid: Health.");
+  const vars = toPromptVariables(buildCallPlan({ kind: "story" }), { name: "Walter", profile: null }, { avoid: ["Health"] });
+  assert.match(vars.profile, /Topics to avoid: Health\./);
+});
+
+test("normalizePostDraft: skip, and the hook appears once despite spacing/punctuation", () => {
+  assert.deepEqual(normalizePostDraft({ skip: true, reason: "only small talk", hook: "", text: "" }), {
+    skip: true,
+    reason: "only small talk",
+  });
+  assert.deepEqual(normalizePostDraft({ skip: false, reason: "", hook: "", text: "  " }), {
+    skip: true,
+    reason: "nothing worth posting",
+  });
+  const draft = normalizePostDraft({
+    skip: false,
+    reason: "",
+    hook: "The night the oven caught fire.",
+    text: "The night  the oven caught fire!\n\nIt was 1978...",
+  });
+  assert.equal(draft.skip, false);
+  if (!draft.skip) {
+    assert.equal(draft.text.startsWith("The night  the oven caught fire!"), true);
+    assert.equal(draft.text.match(/oven caught fire/g)?.length, 1);
+  }
+  const added = normalizePostDraft({ skip: false, reason: "", hook: "Bread taught me patience.", text: "It was 1962." });
+  assert.equal(!added.skip && added.text, "Bread taught me patience.\n\nIt was 1962.");
+  assert.equal(startsWithHook("Hello, world", "hello world"), true);
 });
 
 test("runSteps isolates failures and reports skips", async () => {

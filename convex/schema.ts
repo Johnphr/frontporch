@@ -230,6 +230,16 @@ export default defineSchema({
     status: v.union(v.literal("queued"), v.literal("used"), v.literal("dropped")),
     usedInCallId: v.optional(v.id("calls")),
     usedAt: v.optional(v.number()),
-  }).index("by_elder_status_priority", ["elderId", "status", "priority"]),
+  })
+    .index("by_elder_status_priority", ["elderId", "status", "priority"])
+    .index("by_elder_status_usedAt", ["elderId", "status", "usedAt"]),
+  // One row per elder: what the last bank refresh worked out, reused at call time
+  // and by the post writer so they don't call Claude again.
+  questionBankMeta: defineTable({
+    elderId: v.id("elders"),
+    feedbackLine: v.string(), // one warm sentence Pip reads out ("" when nothing new)
+    resonated: v.string(), // what readers liked lately ("" when unknown)
+    refreshedAt: v.number(), // epoch ms
+  }).index("by_elder", ["elderId"]),
   // ---- end Brain block ----
 });

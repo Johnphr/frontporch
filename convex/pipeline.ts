@@ -7,7 +7,8 @@
 //   3. profile     onboarding: llm.extractProfile -> elders.profile, stage = "active"
 //      post        story call: llm.writePost -> posts row -> linkedapi.createPost (scheduled)
 //   4. plan        conversation.refreshQuestionBank (scheduled)
-// Steps 2-4 are skipped on voicemail / no answer or when he barely spoke.
+// Steps 2-4 are skipped on voicemail / no answer or when he barely spoke (a call
+// that merely ended on silence still counts). writePost may decline: no post then.
 // Returns a step report, visible in the Convex dashboard logs.
 //
 // Owner: Core: Brain.
@@ -178,10 +179,14 @@ export const processCall = internalAction({
             skip: skipContent,
             run: async () => {
               if (!callId) throw new Error("No calls row (save step failed), so the post has nothing to link to");
+              const saved = await ctx.runQuery(internal.conversation.getSavedFeedback, { elderId: r.elderId });
+              const feedback = saved?.resonated || saved?.feedbackLine || "";
               const post = await ctx.runAction(internal.llm.writePost, {
                 turns: r.turns,
                 ...(profile ? { profile } : {}),
+                ...(feedback ? { feedback } : {}),
               });
+              if (post.skip) return `no post: ${post.reason}`;
               const postId = await ctx.runMutation(internal.pipeline.insertPost, {
                 elderId: r.elderId,
                 callId,

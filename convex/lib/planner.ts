@@ -92,11 +92,59 @@ export function overlapsTopic(candidate: Pick<Candidate, "question" | "topicKey"
   return false;
 }
 
+// Words that say "he doesn't want to talk about X" rather than naming X.
+const AVOID_FILLER = new Set(
+  (
+    "doesn didn don want wants wanted wanting discuss discussed discussing talking mention mentioned " +
+    "rather prefer prefers painful topic topics subject subjects avoid avoids bring brought please asked " +
+    "anything something everything anymore lately hard upset upsets sensitive private personal"
+  ).split(" "),
+);
+
+/** Simple plural normalization: "deaths" -> "death", "stories" -> "story". */
+function stem(word: string): string {
+  if (word.endsWith("ies") && word.length > 5) return word.slice(0, -3) + "y";
+  if (word.endsWith("sses")) return word.slice(0, -2);
+  if (word.endsWith("s") && !word.endsWith("ss") && word.length > 4) return word.slice(0, -1);
+  return word;
+}
+
+/** Significant words for avoid matching: at least 4 letters, no stopwords or "doesn't want to" filler. */
+export function avoidKeywordsOf(text: string): Set<string> {
+  const words = (text ?? "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/['’]s\b/g, "")
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length >= 4 && !STOPWORDS.has(w) && !AVOID_FILLER.has(w))
+    .map(stem);
+  return new Set(words);
+}
+
+/**
+ * Avoid topics are strict: any shared significant word blocks the candidate, so
+ * "Doesn't want to talk about his brother's death" blocks "What was your brother like?".
+ */
+export function overlapsAvoid(candidate: Pick<Candidate, "question" | "topicKey">, avoid: string[]): boolean {
+  if (avoid.length === 0) return false;
+  const words = new Set([
+    ...avoidKeywordsOf(candidate.question),
+    ...avoidKeywordsOf(candidate.topicKey.replace(/-/g, " ")),
+  ]);
+  for (const topic of avoid) {
+    for (const w of avoidKeywordsOf(topic)) if (words.has(w)) return true;
+  }
+  return false;
+}
+
 export type RankOptions = {
   /** topics he doesn't want to discuss: always filtered out */
   avoid?: string[];
-  /** topics already covered or recently asked: filtered unless an open thread or reader question */
+  /** topics he already covered in calls: filtered unless an open thread or reader question */
   covered?: string[];
+  /** topics of questions asked in recent calls: always filtered, whatever the source */
+  recentlyUsed?: string[];
   now: number;
   /** drop queued questions older than this (default 45 days) */
   maxAgeDays?: number;
@@ -110,35 +158,43 @@ export type RankOptions = {
 export function rankCandidates(candidates: Candidate[], opts: RankOptions): RankedCandidate[] {
   const avoid = (opts.avoid ?? []).filter(Boolean);
   const covered = (opts.covered ?? []).filter(Boolean);
+  const recentlyUsed = (opts.recentlyUsed ?? []).filter(Boolean);
   const maxAgeMs = (opts.maxAgeDays ?? 45) * DAY_MS;
   const limit = opts.limit ?? 12;
   const n = Math.max(candidates.length, 1);
 
-  const byKey = new Map<string, RankedCandidate>();
+  // Pass 1: clean up, filter, and find the oldest firstSeenAt per topic so a
+  // re-suggested question keeps its age whatever order the copies arrive in.
+  type Prepared = { cand: Candidate & { topicKey: string; question: string }; index: number };
+  const prepared: Prepared[] = [];
+  const oldest = new Map<string, number>();
   candidates.forEach((c, i) => {
     const question = (c.question ?? "").trim();
     if (!question || !CANDIDATE_SOURCES.includes(c.source)) return;
     const topicKey = normalizeTopicKey(c.topicKey || question) || normalizeTopicKey(question);
     const cand = { ...c, question, topicKey };
-    if (overlapsTopic(cand, avoid)) return;
+    if (overlapsAvoid(cand, avoid)) return;
+    if (overlapsTopic(cand, recentlyUsed)) return;
     const mayRevisit = c.source === "open_thread" || c.source === "reader";
     if (!mayRevisit && overlapsTopic(cand, covered)) return;
-
-    const firstSeenAt = typeof c.firstSeenAt === "number" && Number.isFinite(c.firstSeenAt) ? c.firstSeenAt : opts.now;
-    const ageMs = Math.max(0, opts.now - firstSeenAt);
-    if (ageMs > maxAgeMs) return;
-    const decay = Math.pow(0.5, ageMs / (HALF_LIFE_DAYS * DAY_MS));
-    const orderBonus = ((n - i) / n) * 5;
-    const priority = Math.round((SOURCE_WEIGHTS[c.source] * decay + orderBonus) * 100) / 100;
-
-    const ranked: RankedCandidate = { ...cand, priority, firstSeenAt };
-    const existing = byKey.get(topicKey);
-    if (!existing || ranked.priority > existing.priority) {
-      // Keep the oldest firstSeenAt so a re-suggested question doesn't look brand new.
-      if (existing) ranked.firstSeenAt = Math.min(existing.firstSeenAt, ranked.firstSeenAt);
-      byKey.set(topicKey, ranked);
-    }
+    const seenAt = typeof c.firstSeenAt === "number" && Number.isFinite(c.firstSeenAt) ? c.firstSeenAt : opts.now;
+    oldest.set(topicKey, Math.min(oldest.get(topicKey) ?? seenAt, seenAt));
+    prepared.push({ cand, index: i });
   });
+
+  // Pass 2: score with the topic's oldest age, keep the best copy per topic.
+  const byKey = new Map<string, RankedCandidate>();
+  for (const { cand, index } of prepared) {
+    const firstSeenAt = oldest.get(cand.topicKey) ?? opts.now;
+    const ageMs = Math.max(0, opts.now - firstSeenAt);
+    if (ageMs > maxAgeMs) continue;
+    const decay = Math.pow(0.5, ageMs / (HALF_LIFE_DAYS * DAY_MS));
+    const orderBonus = ((n - index) / n) * 5;
+    const priority = Math.round((SOURCE_WEIGHTS[cand.source] * decay + orderBonus) * 100) / 100;
+    const ranked: RankedCandidate = { ...cand, priority, firstSeenAt };
+    const existing = byKey.get(cand.topicKey);
+    if (!existing || ranked.priority > existing.priority) byKey.set(cand.topicKey, ranked);
+  }
 
   return [...byKey.values()].sort((a, b) => b.priority - a.priority).slice(0, limit);
 }
@@ -218,15 +274,32 @@ export type ElderProfile = {
   topicsToAvoid: string[];
 };
 
-export function formatProfile(profile: ElderProfile | undefined | null): string {
-  if (!profile) return "";
+/** Profile text for prompts. `extraAvoid` (avoid memories from later calls) is always included. */
+export function formatProfile(profile: ElderProfile | undefined | null, extraAvoid: string[] = []): string {
+  const avoid = mergeAvoid(profile?.topicsToAvoid ?? [], extraAvoid);
   const parts = [
-    profile.industry && `Industry: ${profile.industry}.`,
-    profile.specialty && `Specialty: ${profile.specialty}.`,
-    profile.careerSummary && `Career: ${profile.careerSummary}`,
-    profile.topicsToAvoid?.length ? `Avoid: ${profile.topicsToAvoid.join(", ")}.` : "",
+    profile?.industry && `Industry: ${profile.industry}.`,
+    profile?.specialty && `Specialty: ${profile.specialty}.`,
+    profile?.careerSummary && `Career: ${profile.careerSummary}`,
+    avoid.length ? `Topics to avoid: ${avoid.join("; ")}.` : "",
   ];
   return parts.filter(Boolean).join("\n");
+}
+
+/** Case-insensitive union, trailing punctuation dropped, order kept. */
+export function mergeAvoid(...lists: string[][]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const list of lists) {
+    for (const raw of list) {
+      const t = (raw ?? "").trim().replace(/[.!?]+$/, "");
+      const key = t.toLowerCase();
+      if (!t || seen.has(key)) continue;
+      seen.add(key);
+      out.push(t);
+    }
+  }
+  return out;
 }
 
 // ---------- call plan + Vapi variables ----------
@@ -324,11 +397,12 @@ export function languageName(code: string | undefined): string {
 export function toPromptVariables(
   plan: CallPlan,
   elder: { name: string; language?: string; profile?: ElderProfile | null },
+  opts: { avoid?: string[] } = {},
 ): PromptVariables {
   return {
     firstName: (elder.name ?? "").trim().split(/\s+/)[0] ?? "",
     language: languageName(elder.language),
-    profile: formatProfile(elder.profile),
+    profile: formatProfile(elder.profile, opts.avoid ?? []),
     memories: plan.memories.map((m) => `- ${m}`).join("\n"),
     feedback: plan.feedback ?? "",
     mainQuestion: plan.mainQuestion ?? "",
@@ -351,9 +425,13 @@ export function isNearSilentCall(turns: Turn[], minWords = 25): boolean {
   return true;
 }
 
-/** Voicemail / nobody picked up. Vapi endedReason strings vary, so match loosely. */
+/**
+ * Voicemail / nobody picked up. End-reason strings vary by provider, so match loosely.
+ * A call that ended on silence is NOT here: he may have talked for 20 minutes first;
+ * isNearSilentCall decides whether there was enough of him to use.
+ */
 export function isNoConversation(endedReason: string | undefined): boolean {
-  return /voicemail|no-answer|did-not-answer|busy|failed-to-connect|silence-timed-out/i.test(endedReason ?? "");
+  return /voicemail|no[-_ ]?answer|did[-_ ]not[-_ ]answer|busy|failed[-_ ]to[-_ ]connect/i.test(endedReason ?? "");
 }
 
 export type StepStatus = "ok" | "skipped" | "failed";
@@ -376,6 +454,32 @@ export async function runSteps(steps: Step[]): Promise<StepReport[]> {
     }
   }
   return reports;
+}
+
+// ---------- writePost result ----------
+
+export type PostDraft = { skip: true; reason: string } | { skip: false; text: string; hook: string };
+
+function looseText(s: string): string {
+  return s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+/** Does `text` already open with `hook` (ignoring case, spacing and punctuation)? */
+export function startsWithHook(text: string, hook: string): boolean {
+  const h = looseText(hook);
+  return h.length > 0 && looseText(text).startsWith(h);
+}
+
+/** Clean writePost's raw output: a skip, or the post text opening with the hook exactly once. */
+export function normalizePostDraft(raw: { skip?: unknown; reason?: unknown; text?: unknown; hook?: unknown }): PostDraft {
+  const text = typeof raw.text === "string" ? raw.text.trim() : "";
+  const hook = typeof raw.hook === "string" ? raw.hook.trim() : "";
+  if (raw.skip === true || !text) {
+    const reason = typeof raw.reason === "string" && raw.reason.trim() ? raw.reason.trim() : "nothing worth posting";
+    return { skip: true, reason };
+  }
+  const full = hook && !startsWithHook(text, hook) ? `${hook}\n\n${text}` : text;
+  return { skip: false, text: full, hook: hook || full.split("\n")[0] };
 }
 
 // ---------- recent topics ----------
