@@ -27,8 +27,9 @@ Cartesia runs the call; Convex starts it, polls for the transcript, and has Clau
 his profile + story seeds. Setup: `../voice/README.md`.
 
 ```bash
-npx convex run cartesia:syncAgent                                    # push prompt + settings
-npx convex run elders:seed '{"name":"Walter Smith","phone":"+14155550123"}'   # -> elderId
+npx convex run cartesiaAgents:syncAgent                              # push the agents (Spanish: '{"language":"es"}')
+npx convex run elders:seed '{"name":"Walter Smith","phone":"+14155550123","language":"en-US",
+  "timezone":"America/Los_Angeles","callDay":"sunday","callHour":10}'   # -> elderId (es-MX → Juanito)
 npx convex run cartesia:startCall '{"elderId":"<id>"}'               # phone rings
 npx convex logs                                                      # watch poll -> done
 ```
@@ -48,10 +49,34 @@ Local backend + `"use node"` files need Node 20–24: `npx -p node@24 -c 'npx co
 | `CARTESIA_API_KEY`, `CARTESIA_FROM_NUMBER_ID` | Cartesia account + the phone number's id (`ap_...`) |
 | `CARTESIA_ONBOARDING_AGENT_ID` | printed by the first `syncAgent` run |
 | `CARTESIA_STORY_AGENT_ID` | story agent (slice 2), printed by the first `syncAgent` run that creates it |
+| `CARTESIA_ONBOARDING_AGENT_ID_ES`, `CARTESIA_STORY_AGENT_ID_ES` | Juanito (Spanish elders), printed by `cartesiaAgents:syncAgent '{"language":"es"}'` |
 | `CARTESIA_VOICE_ID`, `CARTESIA_MODEL` | optional voice + in-call model (default `claude-haiku-4.5`) |
+| `CARTESIA_VOICE_ID_ES` | a Spanish voice; required before syncing Juanito |
 | `ANTHROPIC_API_KEY` | profile extraction |
 | `APIFY_TOKEN` | optional: prefill his LinkedIn background (needs `linkedinUrl` on the elder) |
 | `AUTO_POST` | optional, default `on`. `off` = story posts are saved but not sent to LinkedIn (preview only, for tests) |
+
+If his kind + language has no agent id, `startCall` throws before any row is written. From the
+hourly cron that costs that week's call (`schedule.tick` records the slot first), so keep the ids
+of every language your elders use set.
+
+## Try the after-call flow without a phone
+
+Fixtures in `../tests/fixtures/`. Use a throwaway seeded elder: fixture facts merge into his
+profile and memories. A story fixture ends in a post, so `seedEndedCall` refuses it while posting
+is live (both LinkedAPI tokens set and `AUTO_POST` on) unless you pass `"allowPost": true`;
+`npx convex env set AUTO_POST off` keeps the post `pending`.
+
+```bash
+ID=$(npx convex run elders:seed '{"name":"Test Walter","phone":"+15550001111","profile":{"industry":"Baking","specialty":"Bread"}}' | tr -d '"')
+npx convex run pipeline:seedEndedCall "$(jq --arg id $ID '{elderId:$id,kind,turns,summary,endReason}' tests/fixtures/story_call.json)"
+npx convex run conversation:planNextCall '{"elderId":"'$ID'"}'      # what Pip would get next
+```
+
+A memories step that fails (e.g. no `OPENAI_API_KEY`) doesn't fail the call: the row is `done`
+with error `memories step failed (not retried)`. To rerun it, clear that row's `processedAt` in the
+dashboard, then `npx convex run pipeline:processCall '{"callId":"<id>"}'` (memories for a callId
+are never duplicated, and the post is reused).
 
 ## Test a follow-up (story) call (slice 2)
 
@@ -61,8 +86,8 @@ For an elder who already did the onboarding call (his row has `stage: "active"` 
 1. Story agent + preview-only posting (once):
 
    ```bash
-   npx convex run cartesia:syncAgent '{"only":"story"}'   # first run prints the next line
-   npx convex env set CARTESIA_STORY_AGENT_ID <id>
+   npx convex run cartesiaAgents:syncAgent '{"only":"story"}'   # first run prints the next line
+   npx convex env set CARTESIA_STORY_AGENT_ID <id>             # Spanish elders: '{"language":"es"}' -> ..._ES
    npx convex env set AUTO_POST off                       # posts stay `pending`, nothing goes to LinkedIn
    ```
 
@@ -81,8 +106,8 @@ For an elder who already did the onboarding call (his row has `stage: "active"` 
    npx convex run conversation:planNextCall '{"elderId":"<id>"}'
    ```
 
-   `plan.mainQuestion`, `plan.threads`, `plan.memories` and `dynamicVariables` are exactly what
-   the story agent gets. An empty bank falls back to a default opening question (and schedules a
+   `plan.question` (the call's one goal: a story that starts from it), `plan.memories` and
+   `dynamicVariables` are exactly what the story agent gets. An empty bank falls back to a default opening question (and schedules a
    refresh), so run step 2 first for a real follow-up.
 
 4. Call him:

@@ -6,7 +6,9 @@
 // ranking is predictable and easy to tune.
 
 import { formatMemoriesForPrompt } from "./memoryText.ts";
-import type { Profile } from "./onboarding.ts";
+import { firstName, type Profile } from "./onboarding.ts";
+import type { CallLanguage } from "./prompts/principles.ts";
+import { neutralizeFences } from "./text.ts";
 
 export type CandidateSource = "open_thread" | "reader" | "recent_topic" | "audience" | "memory" | "profile";
 
@@ -300,15 +302,18 @@ export function mergeAvoid(...lists: string[][]): string[] {
 
 export type CallKind = "onboarding" | "story";
 
-/** ARCHITECTURE.md "Contracts": conversation.planNextCall -> cartesia.startCall. */
+/**
+ * ARCHITECTURE.md "Contracts": conversation.planNextCall -> cartesia.startCall.
+ * Kept simple on purpose: a story call has ONE goal, a story that starts from `question`
+ * (the goal's wording is fixed in lib/prompts/story.ts); Pip/Juanito follows him from there.
+ */
 export type CallPlan = {
   kind: CallKind;
-  mainQuestion?: string;
-  threads: string[];
+  question?: string;
   memories: string[];
   feedback?: string;
   knownBackground?: string;
-  /** questionBank row behind mainQuestion; pass to conversation.markPlanUsed once the call starts */
+  /** questionBank row behind `question`; pass to conversation.markPlanUsed once the call starts */
   bankId?: string;
 };
 
@@ -324,85 +329,54 @@ export function buildCallPlan(input: {
   if (input.kind === "onboarding") {
     return {
       kind: "onboarding",
-      threads: [],
       memories: [],
       ...(input.knownBackground?.trim() ? { knownBackground: input.knownBackground.trim() } : {}),
     };
   }
-  const bank = (input.bank ?? []).filter((b) => b.question?.trim());
-  const main = bank[0];
-  const usedKeys = new Set(main ? [main.topicKey] : []);
-  const threads: string[] = [];
-  for (const b of bank.slice(1)) {
-    if (threads.length >= 3) break;
-    if (usedKeys.has(b.topicKey)) continue;
-    usedKeys.add(b.topicKey);
-    threads.push(b.question.trim());
-  }
+  const main = firstBankQuestion(input.bank);
   const memoryLines = formatMemoriesBrief(input.memories ?? [], { max: 6 })
     .split("\n")
     .map((l) => l.replace(/^- /, ""))
     .filter(Boolean);
   return {
     kind: "story",
-    mainQuestion: main ? main.question.trim() : FALLBACK_MAIN_QUESTION,
-    threads,
+    question: main ? main.question.trim() : FALLBACK_MAIN_QUESTION,
     memories: memoryLines,
     ...(input.feedbackLine?.trim() ? { feedback: input.feedbackLine.trim() } : {}),
     ...(main ? { bankId: main._id } : {}),
   };
 }
 
+/** The question a story call starts from: the first non-blank queued one. */
+export function firstBankQuestion<T extends { question: string }>(bank: T[] | undefined): T | undefined {
+  return (bank ?? []).find((b) => b.question?.trim());
+}
+
 /**
- * The {{variables}} in voice/prompts/story-call.md (Cartesia dynamic_variables).
+ * The {{variables}} in lib/prompts/story.ts (Cartesia dynamic_variables). The call language
+ * is set per agent (Pip in English, Juanito in Spanish), so it isn't a variable.
  * Onboarding variables are PR #7's: lib/onboarding.buildOnboardingVariables.
  */
-export const PROMPT_VARIABLES = [
-  "first_name",
-  "language",
-  "profile",
-  "memories",
-  "feedback",
-  "main_question",
-  "threads",
-] as const;
+export const PROMPT_VARIABLES = ["first_name", "profile", "memories", "feedback", "question"] as const;
 
 export type PromptVariables = Record<(typeof PROMPT_VARIABLES)[number], string>;
 
-const LANGUAGE_NAMES: Record<string, string> = {
-  en: "English",
-  es: "Spanish",
-  fr: "French",
-  pt: "Portuguese",
-  de: "German",
-  it: "Italian",
-  zh: "Chinese",
-  ja: "Japanese",
-  ko: "Korean",
-  hi: "Hindi",
-  ar: "Arabic",
-};
-
-/** "es-MX" -> "Spanish". Unknown codes are returned as they are. */
-export function languageName(code: string | undefined): string {
-  const base = (code ?? "en").split(/[-_]/)[0].toLowerCase();
-  return LANGUAGE_NAMES[base] ?? (code || "English");
-}
+// The story prompt fences each data value in these tags; no value may open or close one.
+const STORY_FENCES = ["profile", "memories", "feedback", "question", "reader_feedback", "background"];
+const fence = (text: string) => neutralizeFences(text, STORY_FENCES);
 
 /** Every story variable is always present (empty string when unused; cartesia's templateVariables turns "" into "none"). */
 export function toPromptVariables(
   plan: CallPlan,
-  elder: { name: string; language?: string; profile?: Profile | null },
-  opts: { avoid?: string[] } = {},
+  elder: { name: string; profile?: Profile | null },
+  opts: { avoid?: string[]; lang?: CallLanguage } = {},
 ): PromptVariables {
   return {
-    first_name: (elder.name ?? "").trim().split(/\s+/)[0] ?? "",
-    language: languageName(elder.language),
-    profile: formatProfile(elder.profile, opts.avoid ?? []),
-    memories: plan.memories.map((m) => `- ${m}`).join("\n"),
-    feedback: plan.feedback ?? "",
-    main_question: plan.mainQuestion ?? "",
-    threads: plan.threads.map((t) => `- ${t}`).join("\n"),
+    first_name: firstName(elder.name ?? "", opts.lang),
+    profile: fence(formatProfile(elder.profile, opts.avoid ?? [])),
+    memories: fence(plan.memories.map((m) => `- ${m}`).join("\n")),
+    feedback: fence(plan.feedback ?? ""),
+    question: fence(plan.question ?? ""),
   };
 }
 

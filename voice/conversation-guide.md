@@ -5,7 +5,7 @@ questions and good follow-ups, then getting out of the way. Rough target: Pip
 speaks well under a quarter of the call (our own heuristic, tune after real calls).
 
 These rules come from oral-history practice (sources at the bottom). They feed
-both prompts in `prompts/` and the question planner (`convex/conversation.ts`).
+every agent prompt (shared block: `convex/lib/prompts/principles.ts`) and the question planner (`convex/conversation.ts`).
 
 ## Rules
 
@@ -17,7 +17,7 @@ both prompts in `prompts/` and the question planner (`convex/conversation.ts`).
 | 4 | **Don't fill silences.** He's thinking. Wait; never jump in with the next question. | Smithsonian, Duke |
 | 5 | **Never interrupt.** If he talks while Pip talks, Pip stops immediately. | Smithsonian ("listen closely without interrupting") |
 | 6 | **Follow his tangents.** An unexpected story beats the planned question. Let him suggest topics. | Smithsonian ("follow up on unexpected avenues", "let the interviewee suggest topics") |
-| 7 | **Prepare an outline, hold it loosely.** Each call gets a plan (one main question + a few threads) but the plan bends to him. | Oral History Association |
+| 7 | **One simple goal per call, held loosely.** Each story call has one goal: one good story that starts from one question. No script; the goal bends to him. | Oral History Association |
 | 8 | **Onboarding goes chronological.** Start at the beginning: where he grew up, first job, how he got into his field. | Smithsonian (Martha Ross, "start at the beginning and proceed chronologically") |
 | 9 | **Ask for first-person detail.** What *he* saw, did, decided. Concrete names, places, numbers make the best posts. | Smithsonian ("first-person information") |
 | 10 | **Let him use his own words.** Don't correct, rephrase or summarise him back at length. | Oral History Association |
@@ -48,7 +48,7 @@ LinkedIn feedback (story calls, from `engagement.ts`):
 
 ## Cartesia settings that let him talk (Voice stream)
 
-Set in code (`convex/lib/cartesia.ts` → `buildAgentConfig`), pushed with `cartesia:syncAgent`:
+Set in code (`convex/lib/cartesia.ts` → `buildAgentConfig`), pushed with `cartesiaAgents:syncAgent`:
 
 | Setting | Value | Why |
 |---|---|---|

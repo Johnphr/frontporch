@@ -1,17 +1,16 @@
 // Phone calls through Cartesia Managed Agents: onboarding (slice 1) and weekly story calls
-// (slice 2). Two agents, both defined in code (lib/prompts/onboarding.ts, lib/prompts/story.ts).
+// (slice 2), in his language (elders.language: Pip in English, Juanito in Spanish). The agents
+// are defined in code and pushed by cartesiaAgents:syncAgent.
 //
-//   npx convex run cartesia:syncAgent                      push both agents' prompt + settings
-//                                                          (add '{"only":"story"}' for one)
 //   npx convex run cartesia:startCall '{"elderId":"<id>"}' call him (add "force":true to skip
 //                                                          the "already calling" guard)
 //
-// startCall: next call kind (onboarding until his profile is usable, then story) -> env check
-//   for that kind's agent -> reserveCall (one transaction: no second open call, kind unchanged,
+// startCall: next call kind + language (onboarding until his profile is usable, then story) ->
+//   env check for that agent -> reserveCall (one transaction: no second open call, kind unchanged,
 //   inserts the `queued` row) -> variables: onboarding = known background (cached, else
-//   apify.scrapeProfile once); story = conversation.planNextCall (plan + dynamic variables) ->
-//   POST /agents/calls with that kind's agent -> markStarted (`in_progress` + first poll, one
-//   transaction; story calls also save their plan) -> story: conversation.markPlanUsed. Or
+//   apify.scrapeProfile once); story = conversation.planNextCall (one goal: a story from today's
+//   question) -> POST /agents/calls with that agent -> markStarted (`in_progress` + first poll,
+//   one transaction; story calls also save their plan) -> story: conversation.markPlanUsed. Or
 //   `failed` (clear refusal, or story planning failed) / `start_unknown` (timeout or 5xx: the
 //   phone may be ringing; check Cartesia's call log, it blocks a new call for 90 min).
 // pollCall: GET /agents/calls/{id} every minute until it's over (Cartesia has no call
@@ -20,18 +19,14 @@
 //   instead of undoing `ended`/`done`. Finished -> `ended` -> pipeline.processCall.
 //
 // Never log names, numbers, transcripts or raw Cartesia bodies; ids and statuses only.
-// Env: CARTESIA_API_KEY, CARTESIA_ONBOARDING_AGENT_ID, CARTESIA_STORY_AGENT_ID,
-//      CARTESIA_FROM_NUMBER_ID, CARTESIA_VOICE_ID (optional), CARTESIA_MODEL (optional).
-//      Owner: Voice + Brain.
+// Env: CARTESIA_API_KEY, CARTESIA_FROM_NUMBER_ID, CARTESIA_ONBOARDING_AGENT_ID,
+//      CARTESIA_STORY_AGENT_ID (+ the _ES pair for Spanish elders). Owner: Voice + Brain.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import {
-  CARTESIA_API,
-  CARTESIA_VERSION,
-  buildAgentConfig,
   buildOutboundCallBody,
   classifyHttp,
   clip,
@@ -45,138 +40,33 @@ import {
   unknownRoles,
   type PollOutcome,
 } from "./lib/cartesia";
+import { cartesiaFetch, httpError, requireEnv } from "./lib/cartesiaHttp";
 import {
   agentEnvName,
   buildOnboardingVariables,
+  callLanguage,
   planNextCall,
   reserveDecision,
   type CallKind,
 } from "./lib/onboarding";
-import { ONBOARDING_AGENT_NAME, ONBOARDING_GREETING, ONBOARDING_INSTRUCTIONS } from "./lib/prompts/onboarding";
-import { STORY_AGENT_NAME, STORY_GREETING, STORY_INSTRUCTIONS, STORY_PLACEHOLDERS } from "./lib/prompts/story";
+import type { CallLanguage } from "./lib/prompts/principles";
+import { asElderV2 } from "./lib/v2Fields";
 
 // Convex exposes env vars on process.env (declared so we don't need @types/node).
 declare const process: { env: Record<string, string | undefined> };
 
-const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_SUMMARY_CHARS = 4000;
-
-function requireEnv(names: string[]): Record<string, string> {
-  const missing = names.filter((n) => !process.env[n]);
-  if (missing.length) {
-    throw new Error(`Missing Convex env: ${missing.join(", ")} (set with: npx convex env set NAME value)`);
-  }
-  return Object.fromEntries(names.map((n) => [n, process.env[n] as string]));
-}
-
-async function cartesiaFetch(
-  path: string,
-  init: { method: string; body?: unknown },
-): Promise<{ status: number; json: any; error?: string }> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    const res = await fetch(`${CARTESIA_API}${path}`, {
-      method: init.method,
-      headers: {
-        "X-API-Key": process.env.CARTESIA_API_KEY ?? "",
-        "Cartesia-Version": CARTESIA_VERSION,
-        "Content-Type": "application/json",
-      },
-      ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
-      signal: controller.signal,
-    });
-    const json = await res.json().catch(() => null);
-    return { status: res.status, json };
-  } catch (err) {
-    return { status: 0, json: null, error: err instanceof Error ? err.message : String(err) };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/**
- * Short description of a failed Cartesia response. Call endpoints keep only the status: their
- * messages can echo the phone number. The agent endpoint's message is kept (it only ever sees
- * our prompt + settings) because it says what to fix.
- */
-function httpError(res: { status: number; json: any }, withDetail = false): string {
-  const detail = withDetail && typeof res.json?.message === "string" ? `: ${res.json.message}` : "";
-  return clip(`Cartesia HTTP ${res.status}${detail}`);
-}
-
-// ---------- agent ----------
-
-/** Prompt + settings for each Cartesia agent. Same model and voice for both. */
-function agentSettings(kind: CallKind) {
-  const shared = { model: process.env.CARTESIA_MODEL, voiceId: process.env.CARTESIA_VOICE_ID };
-  return kind === "story"
-    ? {
-        ...shared,
-        name: STORY_AGENT_NAME,
-        instructions: STORY_INSTRUCTIONS,
-        initialMessage: STORY_GREETING,
-        placeholders: STORY_PLACEHOLDERS,
-      }
-    : {
-        ...shared,
-        name: ONBOARDING_AGENT_NAME,
-        instructions: ONBOARDING_INSTRUCTIONS,
-        initialMessage: ONBOARDING_GREETING,
-        placeholders: { first_name: "there", known_background: "none" },
-      };
-}
-
-type SyncResult = { agentId: string; created: boolean };
-
-/** Create the agent (no id in env yet) or update it with the prompt + settings from code. */
-async function syncOne(kind: CallKind): Promise<SyncResult> {
-  const envName = agentEnvName(kind);
-  const existing = process.env[envName];
-  const res = await cartesiaFetch(existing ? `/v1/agents/${existing}` : "/v1/agents", {
-    method: existing ? "PATCH" : "POST",
-    body: buildAgentConfig(agentSettings(kind)),
-  });
-  if (classifyHttp(res.status) !== "ok") throw new Error(`${kind} agent: ${httpError(res, true)}`);
-  const agentId = existing ?? res.json?.id ?? res.json?.agent_id;
-  if (!agentId) throw new Error(`Cartesia created the ${kind} agent but returned no id; copy it from the dashboard`);
-  if (!existing) console.log(`cartesia.syncAgent: created ${kind} agent ${agentId}. Run: npx convex env set ${envName} ${agentId}`);
-  return { agentId, created: !existing };
-}
-
-/**
- * Push both agents (onboarding + story) from code. `only` syncs one. Both are attempted even if
- * one fails, so a story-agent problem never blocks onboarding updates (and vice versa).
- */
-export const syncAgent = internalAction({
-  args: { only: v.optional(v.union(v.literal("onboarding"), v.literal("story"))) },
-  handler: async (_ctx, { only }): Promise<{ onboarding?: SyncResult; story?: SyncResult }> => {
-    requireEnv(["CARTESIA_API_KEY"]);
-    const kinds: CallKind[] = only ? [only] : ["onboarding", "story"];
-    const out: { onboarding?: SyncResult; story?: SyncResult } = {};
-    const errors: string[] = [];
-    for (const kind of kinds) {
-      try {
-        out[kind] = await syncOne(kind);
-      } catch (err) {
-        errors.push(err instanceof Error ? err.message : String(err));
-      }
-    }
-    if (errors.length) throw new Error(`cartesia.syncAgent: ${errors.join("; ")}`);
-    return out;
-  },
-});
 
 // ---------- database helpers ----------
 
 const callKind = v.union(v.literal("onboarding"), v.literal("story"));
 
-/** Which call he gets next (onboarding until his profile is usable, then story). */
+/** Which call he gets next (onboarding until his profile is usable, then story), and in which language. */
 export const nextCallKind = internalQuery({
   args: { elderId: v.id("elders") },
-  handler: async (ctx, { elderId }): Promise<CallKind | null> => {
-    const elder = await ctx.db.get(elderId);
-    return elder ? planNextCall(elder).kind : null;
+  handler: async (ctx, { elderId }): Promise<{ kind: CallKind; lang: CallLanguage } | null> => {
+    const elder = asElderV2(await ctx.db.get(elderId));
+    return elder ? { kind: planNextCall(elder).kind, lang: callLanguage(elder.language) } : null;
   },
 });
 
@@ -194,7 +84,8 @@ export const reserveCall = internalMutation({
       .withIndex("by_elder", (q) => q.eq("elderId", elderId))
       .order("desc")
       .take(5);
-    const decision = reserveDecision(elder, recent, Date.now(), { force, expectedKind });
+    // Same normalized input as conversation.planNextCall, so both pick the same kind.
+    const decision = reserveDecision(asElderV2(elder) ?? {}, recent, Date.now(), { force, expectedKind });
     if (!decision.ok) return { ok: false as const, reason: decision.reason };
     const callId = await ctx.db.insert("calls", { elderId, kind: decision.kind, status: "queued", transcript: [] });
     return {
@@ -290,16 +181,22 @@ export const startCall = internalAction({
   handler: async (ctx, { elderId, force }): Promise<StartResult> => {
     // Check the env for the agent he'll get BEFORE reserving, so a missing story agent id
     // never leaves a queued row behind.
-    const expectedKind = await ctx.runQuery(internal.cartesia.nextCallKind, { elderId });
-    if (!expectedKind) return { status: "refused", reason: "Elder not found" };
-    const agentVar = agentEnvName(expectedKind);
+    const next = await ctx.runQuery(internal.cartesia.nextCallKind, { elderId });
+    if (!next) return { status: "refused", reason: "Elder not found" };
+    const { kind: expectedKind, lang } = next;
+    // A missing agent id throws here, before any row: the cron's slot for this week is then lost
+    // (schedule.tick records it first), so keep all four agent ids set once elders use them.
+    const agentVar = agentEnvName(expectedKind, lang);
     const env = requireEnv(["CARTESIA_API_KEY", agentVar, "CARTESIA_FROM_NUMBER_ID"]);
     const reserved = await ctx.runMutation(internal.cartesia.reserveCall, {
       elderId,
       force: force ?? false,
       expectedKind,
     });
-    if (!reserved.ok) return { status: "refused", reason: reserved.reason };
+    if (!reserved.ok) {
+      console.warn(`cartesia.startCall: elder ${elderId} refused (${reserved.reason})`); // fixed reasons only
+      return { status: "refused", reason: reserved.reason };
+    }
     const { callId, elder, kind } = reserved;
 
     let variables: Record<string, string>;
@@ -310,8 +207,9 @@ export const startCall = internalAction({
         if (planned.plan.kind !== "story") throw new Error(`planner returned a ${planned.plan.kind} plan`);
         plan = planned.plan;
         variables = planned.dynamicVariables;
-      } catch (err) {
-        const error = clip(`Planning the story call failed: ${err instanceof Error ? err.message : String(err)}`);
+      } catch {
+        // Fixed text: a planning error could quote his memories or profile.
+        const error = "Planning the story call failed";
         await ctx.runMutation(internal.cartesia.markStartFailed, { callId, status: "failed", error });
         console.warn(`cartesia.startCall: call ${callId} failed (planning)`);
         return { status: "failed", callId, error };
@@ -329,7 +227,7 @@ export const startCall = internalAction({
           console.warn(`cartesia.startCall: call ${callId} profile prefill skipped (scrape failed)`);
         }
       }
-      variables = buildOnboardingVariables(elder, knownBackground);
+      variables = buildOnboardingVariables(elder, knownBackground, lang);
     }
 
     const res = await cartesiaFetch("/agents/calls", {
@@ -368,7 +266,7 @@ export const startCall = internalAction({
         console.warn(`cartesia.startCall: call ${callId} started, but marking its bank question used failed`);
       }
     }
-    console.log(`cartesia.startCall: ${kind} call ${callId} started (cartesia ${parsed.callId})`);
+    console.log(`cartesia.startCall: ${kind} (${lang}) call ${callId} started (cartesia ${parsed.callId})`);
     return { status: "started", kind, callId, cartesiaCallId: parsed.callId };
   },
 });

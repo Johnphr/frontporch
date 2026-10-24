@@ -4,14 +4,12 @@ import assert from "node:assert/strict";
 
 import {
   FALLBACK_MAIN_QUESTION,
-  PROMPT_VARIABLES,
   SOURCE_WEIGHTS,
   buildCallPlan,
   fallbackCandidates,
   filterTopicsByUrls,
   formatMemoriesBrief,
   formatProfile,
-  languageName,
   normalizePlannedCandidates,
   normalizePostDraft,
   normalizeTopicKey,
@@ -23,7 +21,6 @@ import {
   toPromptVariables,
   type Candidate,
 } from "../convex/lib/planner.ts";
-import { STORY_GREETING, STORY_INSTRUCTIONS } from "../convex/lib/prompts/story.ts";
 import { asElderV2, isOnboarding } from "../convex/lib/v2Fields.ts";
 import { fixture, NOW } from "./helpers.ts";
 
@@ -154,70 +151,32 @@ test("formatMemoriesBrief: uses the shared prompt format, people and places firs
   );
 });
 
-test("buildCallPlan: story uses top bank item, distinct threads, bankId", () => {
+test("buildCallPlan: a story call has one goal question (top bank item), memories, feedback, bankId", () => {
   const plan = buildCallPlan({
     kind: "story",
     bank: [
+      { _id: "b0", question: "  ", topicKey: "blank" },
       { _id: "b1", question: "Tell me how you hired Eddie.", topicKey: "eddie" },
-      { _id: "b2", question: "How did you hire Eddie again?", topicKey: "eddie" },
       { _id: "b3", question: "What was Golden Crust like?", topicKey: "golden-crust" },
-      { _id: "b4", question: "Tell me about Rosa.", topicKey: "rosa" },
-      { _id: "b5", question: "First day at the plant?", topicKey: "plant" },
-      { _id: "b6", question: "One too many?", topicKey: "extra" },
     ],
     memories: [{ kind: "person", name: "Eddie", text: "His foreman" }],
     feedbackLine: "  Readers loved the oven story.  ",
   });
-  assert.equal(plan.mainQuestion, "Tell me how you hired Eddie.");
-  assert.deepEqual(plan.threads, ["What was Golden Crust like?", "Tell me about Rosa.", "First day at the plant?"]);
-  assert.deepEqual(plan.memories, ["People in his life: Eddie (His foreman)."]);
-  assert.equal(plan.feedback, "Readers loved the oven story.");
-  assert.equal(plan.bankId, "b1");
+  assert.deepEqual(plan, {
+    kind: "story",
+    question: "Tell me how you hired Eddie.",
+    memories: ["People in his life: Eddie (His foreman)."],
+    feedback: "Readers loved the oven story.",
+    bankId: "b1",
+  });
 });
 
 test("buildCallPlan: empty bank falls back; onboarding carries background only", () => {
   const story = buildCallPlan({ kind: "story", bank: [] });
-  assert.equal(story.mainQuestion, FALLBACK_MAIN_QUESTION);
+  assert.equal(story.question, FALLBACK_MAIN_QUESTION);
   assert.equal(story.bankId, undefined);
   const onboarding = buildCallPlan({ kind: "onboarding", knownBackground: " 30 years at Golden Crust " });
-  assert.deepEqual(onboarding, { kind: "onboarding", threads: [], memories: [], knownBackground: "30 years at Golden Crust" });
-});
-
-test("toPromptVariables covers exactly the {{variables}} in the story prompt (Cartesia dynamic_variables)", () => {
-  const used = new Set<string>();
-  const text = [STORY_INSTRUCTIONS, STORY_GREETING].join("\n"); // the story agent prompt (lib/prompts/story.ts)
-  for (const m of text.matchAll(/\{\{(\w+)\}\}/g)) used.add(m[1]);
-  assert.deepEqual([...used].sort(), [...PROMPT_VARIABLES].sort());
-
-  const plan = buildCallPlan({
-    kind: "story",
-    bank: [
-      { _id: "b1", question: "Q1?", topicKey: "q1" },
-      { _id: "b2", question: "Q2?", topicKey: "q2" },
-    ],
-    memories: [{ kind: "fact", text: "Ran a bakery" }],
-  });
-  const vars = toPromptVariables(plan, {
-    name: "Walter Brandt",
-    language: "es-MX",
-    profile: { industry: "Baking", specialty: "Production", careerSummary: "Ran a bakery.", topicsToAvoid: ["the strike"] },
-  });
-  assert.deepEqual(Object.keys(vars).sort(), [...PROMPT_VARIABLES].sort());
-  assert.equal(vars.first_name, "Walter");
-  assert.equal(vars.language, "Spanish");
-  assert.equal(vars.main_question, "Q1?");
-  assert.equal(vars.threads, "- Q2?");
-  assert.equal(vars.memories, "- Ran a bakery.");
-  assert.match(vars.profile, /Industry: Baking\./);
-  assert.match(vars.profile, /Topics to avoid: the strike\./);
-  assert.equal(vars.feedback, "");
-});
-
-test("languageName maps codes and keeps unknown ones", () => {
-  assert.equal(languageName("en-US"), "English");
-  assert.equal(languageName("pt_BR"), "Portuguese");
-  assert.equal(languageName("tl-PH"), "tl-PH");
-  assert.equal(languageName(undefined), "English");
+  assert.deepEqual(onboarding, { kind: "onboarding", memories: [], knownBackground: "30 years at Golden Crust" });
 });
 
 test("recently used topics are never repeated, even by readers or open threads", () => {

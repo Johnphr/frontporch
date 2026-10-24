@@ -64,7 +64,7 @@ async function embed(texts: string[]): Promise<number[][]> {
       fetch("https://api.openai.com/v1/embeddings", {
         method: "POST",
         headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ model: EMBEDDING_MODEL, input: batch }),
+        body: JSON.stringify({ model: EMBEDDING_MODEL, input: batch }), signal: AbortSignal.timeout?.(8_000), // capped: can't stall a call start
       });
     let response = await send();
     if (!response.ok && isRetryableStatus(response.status)) {

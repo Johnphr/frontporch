@@ -4,6 +4,8 @@
 // then story calls (slice 2) that build on everything learned so far.
 
 import { templateVariables } from "./cartesia.ts";
+import type { CallLanguage } from "./prompts/principles.ts";
+import { neutralizeFences } from "./text.ts";
 
 export type Profile = {
   industry?: string;
@@ -45,15 +47,24 @@ export function planNextCall(elder: { stage?: string; profile?: Profile }): Call
   return elder.stage === "active" && isProfileUsable(elder.profile) ? { kind: "story" } : { kind: "onboarding" };
 }
 
-export function firstName(name: string): string {
-  return name.trim().split(/\s+/)[0] || "friend";
+/** His call language from elders.language (BCP-47): Spanish for any es*, else English. */
+export function callLanguage(code: string | undefined): CallLanguage {
+  return /^es(?:$|[-_])/i.test((code ?? "").trim()) ? "es" : "en";
 }
 
-export function buildOnboardingVariables(elder: { name: string }, knownBackground: string | undefined) {
+export function firstName(name: string, lang: CallLanguage = "en"): string {
+  return name.trim().split(/\s+/)[0] || (lang === "es" ? "amigo" : "friend");
+}
+
+export function buildOnboardingVariables(
+  elder: { name: string },
+  knownBackground: string | undefined,
+  lang: CallLanguage = "en",
+) {
   return templateVariables({
-    first_name: firstName(elder.name),
-    // scraped text sits inside a <background> fence in the prompt; it must not close it
-    known_background: (knownBackground ?? "").replace(/<\/?background\b[^>]*>/gi, ""),
+    first_name: firstName(elder.name, lang),
+    // scraped text sits inside a <background> fence in the prompt; it must not open or close it
+    known_background: neutralizeFences(knownBackground ?? "", ["background"]),
   });
 }
 
@@ -133,9 +144,10 @@ export function hasOpenCall(calls: { status: string; _creationTime: number }[], 
 
 export type CallKind = CallPlan["kind"];
 
-/** Convex env var holding the Cartesia agent id for each kind of call. */
-export function agentEnvName(kind: CallKind): "CARTESIA_ONBOARDING_AGENT_ID" | "CARTESIA_STORY_AGENT_ID" {
-  return kind === "story" ? "CARTESIA_STORY_AGENT_ID" : "CARTESIA_ONBOARDING_AGENT_ID";
+/** Convex env var holding the Cartesia agent id for each kind of call and language. */
+export function agentEnvName(kind: CallKind, lang: CallLanguage = "en"): string {
+  const base = kind === "story" ? "CARTESIA_STORY_AGENT_ID" : "CARTESIA_ONBOARDING_AGENT_ID";
+  return lang === "en" ? base : `${base}_${lang.toUpperCase()}`;
 }
 
 /**
