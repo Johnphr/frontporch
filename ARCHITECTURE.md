@@ -84,14 +84,47 @@ The phone number is already set up in Cartesia; Convex only needs its id (`CARTE
    `stage` becomes `"active"` once the profile is usable; otherwise the next call onboards again.
 
 ### ② Weekly story call (slice 2)
-1. Hourly cron finds elders whose local `callDay`/`callHour` match → `cartesia.startCall`.
-2. `conversation.planNextCall`: profile + story seeds + recent call summaries (slice 2), then
-   memories + reader feedback + audience questions (slice 3) → `llm.planQuestions`.
-3. Story agent (draft prompt: `voice/prompts/story-call.md`) gets the plan as dynamic variables.
+1. Hourly cron finds elders whose local `callDay`/`callHour` match → `cartesia.startCall`
+   (~1h earlier, `conversation.prepareCall` refreshes the question bank, see below).
+2. `cartesia.startCall` (story branch, slice 2; today `reserveCall` refuses story calls) →
+   `conversation.planNextCall` → `{ plan, dynamicVariables }` (kind from PR #7's
+   `lib/onboarding.planNextCall`, the same rule `reserveCall` uses): top queued
+   question as `mainQuestion`, the next 2–3 as `threads`, memories related to the main question
+   (vector search) + people/places, topics to avoid, one `feedback` line saved by the last
+   refresh. Fast by design: no Claude call, never waits on a refresh (empty bank → safe opening
+   question + a refresh scheduled for next time).
+3. Story agent (draft prompt: `voice/prompts/story-call.md`) gets `dynamicVariables` as Cartesia
+   `dynamic_variables` on `POST /agents/calls`.
+4. Once a story call is placed, `cartesia.startCall` calls
+   `conversation.markPlanUsed({ elderId, bankId: plan.bankId, callId })`.
+
+**Question bank** (`questionBank`, `questionBankMeta`): his ranked next questions, rebuilt by
+`conversation.refreshQuestionBank` after every call, when new reader comments arrive, and by
+`conversation.prepareCall` ~1h before each call (fresh `apify.findAudienceQuestions` +
+`llm.findRecentTopics` web search, run in parallel). Inputs: profile, open threads, memories,
+topics covered / to avoid, reader questions (`llm.summarizeFeedback`), audience questions,
+recent topics → `llm.planQuestions` writes 8–12 candidates → `lib/planner.ts` ranks them
+(open thread > reader > recent topic ≈ audience > memory > profile; avoid topics and questions
+asked in recent calls are always skipped; covered topics only for open threads / readers;
+dedupes; ages out).
 
 ### ③ After the call
-`cartesia.pollCall` → `pipeline.processCall`: save transcript → extract memories →
-`llm.writePost` → `posts` row → `linkedapi.createPost`.
+`cartesia.pollCall` → `cartesia.applyPoll` saves the normalized transcript
+(`lib/cartesia.normalizeTranscript`), summary and `end_reason`, sets `status: "ended"` and
+schedules `pipeline.processCall({ callId })`. `processCall` (PR #7) claims the call
+(`processingAt`, retaken after 15 min), skips no-conversation calls
+(`lib/cartesia.isNoConversation`: voicemail / no answer / busy, or under 30 words from him →
+`no_conversation`), then:
+- onboarding: `llm.extractProfile` (merged with earlier calls) → `elders.profile`;
+  `stage: "active"` once usable · then a question-bank refresh is scheduled (best effort)
+- story (each step isolated): `llm.extractKnowledge` → `memories.addMany` (facts, story seeds,
+  open threads, people, places, topics covered / to avoid; finished open threads resolved) ·
+  `llm.writePost` (may decline: no post) → one `posts` row per call (`by_call`) →
+  `linkedapi.createPost` (scheduled, new row only) · `conversation.refreshQuestionBank` (scheduled)
+
+Ends with `status: "done"` + `processedAt`, or `process_failed` + error (claim released, retry
+by hand with `pipeline:processCall`; safe: `memories.addMany` skips a callId it already has and
+the post row is reused, so no second LinkedIn post).
 Inside `linkedapi.createPost`: claim the row (no double posting) → format for LinkedIn
 (`lib/linkedinPost.ts`) → `postGuard.checkPost` fact-checks the post against the whole call
 and his profile/memories → fail: `needs_review`, nothing posted → pass: LinkedAPI
@@ -125,9 +158,19 @@ type CallPlan = {                  // conversation.planNextCall -> cartesia.star
   memories: string[];
   feedback?: string;               // one short line Pip reads out
   knownBackground?: string;        // onboarding only
+  bankId?: string;                 // questionBank row behind mainQuestion -> markPlanUsed
 };
 
 type Turn = { role: "pip" | "elder"; text: string };   // calls.transcript, after normalizing Cartesia roles
+
+// conversation.planNextCall({ elderId }) -> { plan: CallPlan, dynamicVariables }
+// onboarding: dynamicVariables = lib/onboarding.buildOnboardingVariables (first_name, known_background)
+// story: every {{name}} in voice/prompts/story-call.md, via lib/cartesia.templateVariables
+// ("" -> "none"): firstName, language ("Spanish", not "es-MX"), profile (incl. "Topics to
+// avoid: ..."), memories ("- ..." lines), feedback, mainQuestion, threads ("- ..." lines).
+
+// pipeline.processCall({ callId }) -> { status: "done" | "no_conversation" | "process_failed" | "skipped", reason? }
+//   scheduled by cartesia.applyPoll once the call has ended (PR #7)
 ```
 
 **Function names** (all `internal.*`):
@@ -140,6 +183,14 @@ type Turn = { role: "pip" | "elder"; text: string };   // calls.transcript, afte
 
 Post guard: `postGuard.checkPost` · `linkedapi.approvePost` · `linkedapi.previewPost` ·
 `linkedapi.previewText` · `linkedapi.checkPostStatus`
+
+Brain (memory + planning): `pipeline.insertPost` / `pipeline.findPostForCall` (one post per
+call) · `llm.extractKnowledge` (replaces `llm.extractMemories`) · `llm.findRecentTopics` ·
+`conversation.refreshQuestionBank` · `conversation.prepareCall` · `conversation.markPlanUsed` ·
+`conversation.getSavedFeedback` · `memories.addMany` / `memories.search` / `memories.listForElder`
+(Data). Pure logic: `lib/planner.ts` (ranking, CallPlan, story variables, post draft, step
+runner); transcript, no-conversation and claim rules are PR #7's (`lib/cartesia.ts`,
+`lib/onboarding.ts`).
 
 ## Data model (in `schema.ts`)
 
@@ -178,7 +229,12 @@ engagement: elderId, postId?, linkedinUrl (canonical, lib/linkedinUrl.ts), react
 
 posts:    see the Integrations block in schema.ts; + index by_call (one post per call)
 audienceQuestions: see the Integrations block in schema.ts.
-questionBank: Core: Brain (conversation.ts).
+questionBank: elderId, question, why, source (open_thread | reader | recent_topic | audience |
+          memory | profile), sourceRef?, topicKey, priority, firstSeenAt,
+          status (queued | used | dropped), usedInCallId?, usedAt?
+          indexes by_elder_status_priority, by_elder_status_usedAt   (Core: Brain)
+questionBankMeta: elderId, feedbackLine, resonated, refreshedAt; index by_elder
+          (what the last refresh worked out; reused by planNextCall and writePost)
 ```
 
 **Memory functions** (`memories.ts`, all internal):

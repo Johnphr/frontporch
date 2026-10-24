@@ -24,3 +24,30 @@ command, so the repo is the source of truth. Owner: Voice stream.
 
 Tune in the Cartesia playground if you like, but copy the final values back into code
 and run `syncAgent` again, or the next sync overwrites the playground changes.
+
+## Dynamic variables (from Convex)
+
+Onboarding calls use PR #7's variables (`first_name`, `known_background`, built by
+`lib/onboarding.buildOnboardingVariables`). For story calls (slice 2), `cartesia.startCall`
+gets them ready-made:
+`const { plan, dynamicVariables } = await ctx.runAction(internal.conversation.planNextCall, { elderId })`.
+Send `dynamicVariables` as `dynamic_variables` on `POST /agents/calls` with the story agent.
+Every `{{name}}` in `prompts/story-call.md` is always present (`templateVariables` turns an
+empty value into `none`):
+
+| Variable | Example |
+|---|---|
+| `firstName` | `Walter` |
+| `language` | `Spanish` (a language name, not `es-MX`) |
+| `profile` | `Industry: Baking.` / `Specialty: Production.` / `Career: ...` / `Topics he knows well: ...` / `Topics to avoid: ...` (one per line) |
+| `memories` | `- People in his life: Eddie Morales (His foreman).` lines (unfinished stories and people first) |
+| `feedback` | one warm sentence about reader reactions, or `none` |
+| `mainQuestion` | today's question |
+| `threads` | `- ...` lines, 2–3 backup questions |
+
+After a story call is placed, call `internal.conversation.markPlanUsed({ elderId, bankId:
+plan.bankId, callId })` (skip when `plan.bankId` is missing). A test in
+`tests/planner.test.ts` fails if `story-call.md` starts using a variable Convex doesn't send.
+
+After the call nothing extra is needed: `cartesia.applyPoll` schedules
+`pipeline.processCall({ callId })`, which handles both onboarding and story calls.

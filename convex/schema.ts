@@ -227,4 +227,33 @@ export default defineSchema({
     .index("by_elder", ["elderId"])
     .index("by_url", ["linkedinUrl"])
     .index("by_call", ["callId"]), // one post per call (pipeline idempotency)
+
+  // ---- Brain: question bank (conversation.ts) ----
+  // Ranked questions for his next calls, refreshed after every call, when new
+  // reader comments arrive, and ~1h before each call (conversation.prepareCall).
+  // planNextCall takes the top queued row; markPlanUsed flips it to used.
+  questionBank: defineTable({
+    elderId: v.id("elders"),
+    question: v.string(),
+    why: v.string(),
+    source: v.string(), // open_thread | reader | recent_topic | audience | memory | profile
+    sourceRef: v.optional(v.string()), // memories id, audienceQuestions id, or a URL
+    topicKey: v.string(), // normalized topic words, dedupes the bank
+    priority: v.number(), // higher = ask sooner (lib/planner.ts rankCandidates)
+    firstSeenAt: v.number(), // epoch ms; drives age decay across refreshes
+    status: v.union(v.literal("queued"), v.literal("used"), v.literal("dropped")),
+    usedInCallId: v.optional(v.id("calls")),
+    usedAt: v.optional(v.number()),
+  })
+    .index("by_elder_status_priority", ["elderId", "status", "priority"])
+    .index("by_elder_status_usedAt", ["elderId", "status", "usedAt"]),
+  // One row per elder: what the last bank refresh worked out, reused at call time
+  // and by the post writer so they don't call Claude again.
+  questionBankMeta: defineTable({
+    elderId: v.id("elders"),
+    feedbackLine: v.string(), // one warm sentence Pip reads out ("" when nothing new)
+    resonated: v.string(), // what readers liked lately ("" when unknown)
+    refreshedAt: v.number(), // epoch ms
+  }).index("by_elder", ["elderId"]),
+  // ---- end Brain block ----
 });
