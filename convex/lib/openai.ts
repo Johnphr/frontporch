@@ -68,16 +68,42 @@ export function collectSourceUrls(response: unknown): string[] {
   return [...new Set(urls)];
 }
 
-/** POST /v1/responses with a timeout; one retry on 429 / 5xx / network errors. */
-async function createResponse(body: Json, opts: { timeoutMs: number; retries: number }): Promise<unknown> {
+/** OpenAI's error code / param for a 4xx (identifiers only, never message text, which can quote input). */
+function errorDetail(json: unknown): string {
+  const err = isRecord(json) && isRecord(json.error) ? json.error : {};
+  const safe = (x: unknown) => (typeof x === "string" && /^[\w.\-[\]]{1,80}$/.test(x) ? x : "");
+  const parts = [safe(err.code), safe(err.param) && `param ${safe(err.param)}`].filter(Boolean);
+  return parts.length ? ` (${parts.join(", ")})` : "";
+}
+
+/** Seconds from Retry-After, capped, else a short backoff. */
+function retryDelayMs(retryAfter: string | null, attempt: number): number {
+  const seconds = Number(retryAfter);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 10) * 1000 : 2000 * (attempt + 1);
+}
+
+type Fetch = (url: string, init: RequestInit) => Promise<Response>;
+
+/**
+ * POST /v1/responses with a timeout; retries 429 / 5xx / network errors up to `retries` times.
+ * `fetchImpl` / `sleep` are only swapped in tests.
+ */
+export async function createResponse(
+  body: Json,
+  opts: { timeoutMs: number; retries: number; fetchImpl?: Fetch; sleep?: (ms: number) => Promise<void> },
+): Promise<unknown> {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error("OPENAI_API_KEY is not set in Convex (npx convex env set OPENAI_API_KEY <key>)");
+  const doFetch = opts.fetchImpl ?? fetch;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   for (let attempt = 0; ; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
     let status = 0;
+    let detail = "";
+    let retryAfter: string | null = null;
     try {
-      const res = await fetch(RESPONSES_URL, {
+      const res = await doFetch(RESPONSES_URL, {
         method: "POST",
         headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -85,16 +111,20 @@ async function createResponse(body: Json, opts: { timeoutMs: number; retries: nu
       });
       status = res.status;
       if (res.ok) return await res.json();
+      retryAfter = res.headers.get("retry-after");
+      // Read (and so release) the body; on a 4xx keep only OpenAI's error code / param.
+      const json = await res.json().catch(() => null);
+      if (status >= 400 && status < 500) detail = errorDetail(json);
     } catch {
-      status = 0; // timeout or network
+      if (status < 300) status = 0; // timeout, network, or an unreadable 2xx body
     } finally {
       clearTimeout(timer);
     }
     const retryable = status === 0 || status === 429 || status >= 500;
     if (!retryable || attempt >= opts.retries) {
-      throw new Error(status === 0 ? "OpenAI did not answer (timeout or network)" : `OpenAI HTTP ${status}`);
+      throw new Error(status === 0 ? "OpenAI did not answer (timeout or network)" : `OpenAI HTTP ${status}${detail}`);
     }
-    await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+    await sleep(retryDelayMs(retryAfter, attempt));
   }
 }
 

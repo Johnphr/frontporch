@@ -104,10 +104,10 @@ test("finishPatch: keeps Cartesia's reason unless processing succeeded", () => {
     processingAt: undefined,
     processedAt: 7,
   });
-  assert.deepEqual(finishPatch("process_failed", "Claude returned invalid JSON", 7), {
+  assert.deepEqual(finishPatch("process_failed", "OpenAI returned invalid JSON", 7), {
     status: "process_failed",
     processingAt: undefined,
-    error: "Claude returned invalid JSON",
+    error: "OpenAI returned invalid JSON",
   });
   assert.deepEqual(finishPatch("done", undefined, 7), {
     status: "done",

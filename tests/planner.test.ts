@@ -108,7 +108,7 @@ test("overlapsTopic: short topics need all words, long ones two", () => {
   assert.equal(overlapsTopic(c, []), false);
 });
 
-test("normalizePlannedCandidates cleans Claude output", () => {
+test("normalizePlannedCandidates cleans the LLM output", () => {
   const out = normalizePlannedCandidates({
     candidates: [
       { question: "  Tell me about Rosa.  ", why: "w", source: "memory", sourceRef: "", topicKey: "Rosa Wife!" },

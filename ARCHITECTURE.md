@@ -314,8 +314,7 @@ tests/                          node --test + fixtures/
 |---|---|
 | `CARTESIA_API_KEY`, `CARTESIA_ONBOARDING_AGENT_ID`, `CARTESIA_STORY_AGENT_ID`, `CARTESIA_FROM_NUMBER_ID`, `CARTESIA_VOICE_ID` (optional), `CARTESIA_MODEL` (optional) | Voice |
 | `LINKEDAPI_TOKEN`, `LINKEDAPI_ID_TOKEN`, `APIFY_TOKEN`, `STACKEXCHANGE_KEY` (optional), `POST_GUARD_MODE` (optional, default `enforce`), `AUTO_POST` (optional, default `on`; `off` = preview-only for tests) | Integrations |
-| `OPENAI_API_KEY` | Data |
-| `OPENAI_API_KEY` | Brain (LLM + embeddings), Integrations (post guard) |
+| `OPENAI_API_KEY` | Data (embeddings), Brain (LLM), Integrations (post guard) |
 | `OPENAI_MODEL` | optional, default `gpt-6-luna` |
 
 Share keys through a password manager, never the repo or chat.
