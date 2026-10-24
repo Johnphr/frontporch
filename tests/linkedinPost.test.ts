@@ -105,3 +105,59 @@ test("poll backoff grows, caps, and waits long outside working hours", () => {
   assert.equal(pollDelayMs(0, "outsideWorkingHours"), 1_800_000);
   assert.ok(MAX_POLL_ATTEMPTS > 10);
 });
+
+// ---------- review fixes ----------
+
+test("story lines that mention AI are never treated as disclosures", () => {
+  const story =
+    "In 1987 we created the first AI group at the plant, with six engineers and one borrowed computer.\n\n" +
+    "I have written about AI before, but never about the people.\n\nWhat was your first team like?";
+  const { text, warnings } = prepareLinkedInText(story);
+  assert.ok(text.includes("In 1987 we created the first AI group at the plant"));
+  assert.ok(text.includes("I have written about AI before"));
+  assert.ok(!warnings.some((w) => w.includes("disclosure")));
+});
+
+test("a disclosure-like line in the middle of the post is kept", () => {
+  const post = "Hook.\n\nWritten with AI help, this line sits mid-story.\n\nMore story.\n\nClosing question?";
+  assert.ok(prepareLinkedInText(post).text.includes("Written with AI help, this line sits mid-story."));
+});
+
+test("long lines at the end are not stripped even if they mention AI", () => {
+  const long = "Written up with AI " + "and a lot of other words about the old days at the plant ".repeat(4);
+  assert.ok(long.length > 160);
+  assert.ok(prepareLinkedInText(`Story.\n\n${long}`).text.includes(long.trim()));
+});
+
+test("the writer's disclosure is replaced with a warning; Spanish too", () => {
+  for (const line of ["Made with AI.", "Escrito con ayuda de IA.", "Hecho con IA a partir de sus palabras."]) {
+    const { text, warnings } = prepareLinkedInText(`Una historia.\n\n${line}`);
+    assert.ok(!text.includes(line), `should remove: ${line}`);
+    assert.equal(count(text, DEFAULT_DISCLOSURE), 1);
+    assert.ok(warnings.some((w) => w.includes("disclosure")), `should warn for: ${line}`);
+  }
+});
+
+test("our own disclosure is not reported as replaced", () => {
+  const once = prepareLinkedInText("A story.").text;
+  assert.ok(!prepareLinkedInText(once).warnings.some((w) => w.includes("disclosure")));
+});
+
+test("number-only tags like #1 are not hashtags and don't use up a slot", () => {
+  const { text, removed } = capHashtags("I was #1 in sales #grit #work #craft #extra", 3);
+  assert.ok(text.includes("#1"));
+  assert.deepEqual(removed, ["#extra"]);
+});
+
+test("bullets and headings after a blank line keep the blank line", () => {
+  assert.equal(stripMarkdown("Intro\n\n- one\n- two"), "Intro\n\n• one\n• two");
+  assert.equal(stripMarkdown("Intro\n\n# Heading"), "Intro\n\nHeading");
+});
+
+test("truncate never leaves half an emoji", () => {
+  const out = truncate("a".repeat(10) + "😀".repeat(20), 26);
+  const body = out.replace(/…$/, "");
+  const last = body.charCodeAt(body.length - 1);
+  assert.ok(!(last >= 0xd800 && last <= 0xdbff), "ends on a lone high surrogate");
+  assert.ok(out.length <= 26);
+});
