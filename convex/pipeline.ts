@@ -15,11 +15,13 @@
 //                    (posts.by_call) -> linkedapi.createPost, scheduled only for a new row
 //                    and only when AUTO_POST isn't "off" (off = preview-only, for tests)
 //          plan      conversation.refreshQuestionBank (scheduled)
-//     4. status `done` + processedAt; any error (or a failed story step) -> `process_failed`
-//        + error. A retry is safe: memories.addMany skips a callId it already has and the
-//        post row is reused, so no duplicate memories or second LinkedIn post.
+//     4. status `done` + processedAt; any error (or a failed post / plan step) -> `process_failed`
+//        + error. Memories are best effort: if that step fails the call is still `done`, with
+//        error "memories step failed (not retried)". A retry is safe: memories.addMany skips a
+//        callId it already has and the post row is reused, so no duplicate memories or post.
 //
 // Retry by hand: npx convex run pipeline:processCall '{"callId":"<id>"}'
+// Without a phone: pipeline:seedEndedCall with a tests/fixtures call (convex/README.md).
 // Owner: Core: Brain.
 
 import { v } from "convex/values";
@@ -117,7 +119,35 @@ export const findPostForCall = internalQuery({
   },
 });
 
-/** Story call steps (slices 2-3). Each step is isolated; the caller turns failures into process_failed. */
+/**
+ * Dev/testing: a finished call from a fixture (tests/fixtures/onboarding_call.json,
+ * story_call.json), so the whole post-call flow runs without a phone. Use a throwaway seeded
+ * elder: fixture facts merge into his profile and memories. A story fixture would post to his
+ * real LinkedIn, so it's refused while posting is live unless allowPost is set.
+ */
+export const seedEndedCall = internalMutation({
+  args: {
+    elderId: v.id("elders"),
+    kind: v.union(v.literal("onboarding"), v.literal("story")),
+    turns: v.array(v.object({ role: v.union(v.literal("pip"), v.literal("elder")), text: v.string() })),
+    summary: v.optional(v.string()),
+    endReason: v.optional(v.string()),
+    cartesiaCallId: v.optional(v.string()),
+    allowPost: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { elderId, kind, turns, allowPost, ...rest }) => {
+    const postingLive =
+      parseAutoPost(process.env.AUTO_POST) && Boolean(process.env.LINKEDAPI_TOKEN && process.env.LINKEDAPI_ID_TOKEN);
+    if (kind === "story" && postingLive && !allowPost) {
+      throw new Error("This fixture would post to his LinkedIn: set AUTO_POST=off (or pass allowPost: true)");
+    }
+    const callId = await ctx.db.insert("calls", { elderId, kind, status: "ended", transcript: turns, ...rest });
+    await ctx.scheduler.runAfter(0, internal.pipeline.processCall, { callId });
+    return callId;
+  },
+});
+
+/** Story call steps (slices 2-3). Each step is isolated; processCall decides which failures retry. */
 async function runStoryCall(
   ctx: ActionCtx,
   callId: Id<"calls">,
@@ -217,9 +247,14 @@ export const processCall = internalAction({
       }
       if (call.kind === "story") {
         const steps = await runStoryCall(ctx, callId, elder, turns);
-        const failed = steps.filter((s) => s.status === "failed");
+        // Memories are best effort (e.g. no OPENAI_API_KEY yet): only the post and the plan refresh
+        // decide on a retry; a lost memories step stays visible as a fixed marker on the `done` row.
+        const failed = steps.filter((s) => s.status === "failed" && s.step !== "memories");
+        const memoriesLost = steps.some((s) => s.step === "memories" && s.status === "failed");
         // Step details can quote the model or his words: keep only step names in errors.
-        const error = failed.length ? `story steps failed: ${failed.map((s) => s.step).join(", ")}` : undefined;
+        const error = failed.length
+          ? `story steps failed: ${failed.map((s) => s.step).join(", ")}`
+          : memoriesLost ? "memories step failed (not retried)" : undefined;
         await ctx.runMutation(internal.pipeline.finishProcessing, {
           callId,
           status: failed.length ? "process_failed" : "done",
