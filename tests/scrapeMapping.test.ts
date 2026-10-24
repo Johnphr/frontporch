@@ -2,22 +2,31 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   buildKnownBackground,
+  linkedinPublicIdentifier,
   mapApimaestroPosts,
   mapHarvestPosts,
-  normalizeLinkedInUrl,
+  postUrlFor,
 } from "../convex/lib/scrapeMapping.ts";
 import { fixture } from "./helpers.ts";
 
-test("normalizeLinkedInUrl drops query, hash and trailing slash", () => {
+const POST_1 = "https://www.linkedin.com/feed/update/urn:li:activity:7380000000000000001";
+
+test("postUrlFor: canonical activity URL, from the URL or from the post id", () => {
   assert.equal(
-    normalizeLinkedInUrl("https://www.linkedin.com/posts/x_y-activity-1-AbCd/?utm_source=share#top"),
-    "https://www.linkedin.com/posts/x_y-activity-1-AbCd",
+    postUrlFor("https://www.linkedin.com/posts/x_y-activity-7380000000000000001-AbCd/?utm_source=share#top"),
+    POST_1,
   );
-  assert.equal(
-    normalizeLinkedInUrl("https://de.linkedin.com/posts/x-activity-1"),
-    "https://www.linkedin.com/posts/x-activity-1",
-  );
-  assert.equal(normalizeLinkedInUrl("  "), "");
+  assert.equal(postUrlFor("https://www.linkedin.com/posts/no-id-here", "7380000000000000001"), POST_1);
+  assert.equal(postUrlFor(undefined, "urn:li:activity:7380000000000000001"), POST_1);
+  assert.equal(postUrlFor("https://www.linkedin.com/posts/p/", "p"), "https://www.linkedin.com/posts/p");
+  assert.equal(postUrlFor(undefined, undefined), "");
+});
+
+test("linkedinPublicIdentifier pulls the /in/<id> part for apimaestro", () => {
+  assert.equal(linkedinPublicIdentifier("https://www.linkedin.com/in/walter-baker/"), "walter-baker");
+  assert.equal(linkedinPublicIdentifier("linkedin.com/in/satyanadella?trk=x"), "satyanadella");
+  assert.equal(linkedinPublicIdentifier("https://www.linkedin.com/in/jos%C3%A9-p/"), "josé-p");
+  assert.equal(linkedinPublicIdentifier("satyanadella"), "satyanadella");
 });
 
 test("harvestapi posts map to url + reaction total + reader comments", () => {
@@ -25,10 +34,8 @@ test("harvestapi posts map to url + reaction total + reader comments", () => {
   assert.equal(posts.length, 2, "post without a URL is skipped, comments/reactions aren't posts");
 
   const [bakery, mentors] = posts;
-  assert.equal(
-    bakery.linkedinUrl,
-    "https://www.linkedin.com/posts/walter-baker_bakery-story-activity-7380000000000000001-AbCd",
-  );
+  assert.equal(bakery.linkedinUrl, POST_1, "same form linkedapi.ts saves, so engagement matches posts");
+  assert.equal(mentors.linkedinUrl, "https://www.linkedin.com/feed/update/urn:li:activity:7380000000000000002");
   assert.equal(bakery.reactions, 48, "sums the reaction breakdown");
   assert.deepEqual(bakery.comments, [{ author: "Maria Lopez", text: "How did you price your bread back then?" }]);
   assert.equal(bakery.postedAt, 1792500000000);
@@ -53,6 +60,7 @@ test("harvestapi comments are capped per post", () => {
 test("apimaestro backup maps counts and handles the data.posts wrapper", () => {
   const posts = mapApimaestroPosts(fixture<unknown[]>("linkedin_posts_apimaestro.json"));
   assert.equal(posts.length, 3);
+  assert.equal(posts[0].linkedinUrl, POST_1);
   assert.equal(posts[0].reactions, 48);
   assert.equal(posts[1].reactions, 12, "sums per-type counts when total_reactions is missing");
   assert.equal(posts[2].reactions, 5);

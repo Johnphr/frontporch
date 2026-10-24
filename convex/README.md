@@ -24,7 +24,15 @@ npx convex env set ANTHROPIC_API_KEY <value>
 ## Apify scrapers (`apify.ts`, Integrations)
 
 Env: `APIFY_TOKEN` (required), `STACKEXCHANGE_KEY` (optional; raises the free
-Stack Exchange limit from 300 to 10,000 requests/day).
+Stack Exchange limit from 300 to 10,000 requests/day). **Set it for the demo:** the
+no-key limit is per IP, and Convex actions share outbound IPs with other apps.
+A failing Stack Exchange request no longer loses the rest; errors show up in
+the run's per-source report, and the run throws only if every source fails.
+
+**Post URLs:** scraped posts are stored as
+`https://www.linkedin.com/feed/update/urn:li:activity:<id>` (`lib/linkedinUrl.ts`,
+shared with `linkedapi.ts`), so `engagement:upsert` can match `posts.linkedinUrl`
+with a plain equality check.
 
 | Function | Run it | What it does |
 |---|---|---|

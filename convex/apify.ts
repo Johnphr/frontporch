@@ -26,13 +26,15 @@ import {
   discourseItemsFromSearch,
   discourseSearchUrl,
   enabledSources,
+  fetchStackExchange,
+  livePriority,
   processItems,
-  stackExchangeSearchUrl,
   stackExchangeSitesFor,
 } from "./lib/questionSources";
 import {
   type EngagementPost,
   buildKnownBackground,
+  linkedinPublicIdentifier,
   mapApimaestroPosts,
   mapHarvestPosts,
   MAX_COMMENTS_PER_POST,
@@ -50,6 +52,12 @@ const PROFILE_ACTOR = "harvestapi/linkedin-profile-scraper";
 const engagementUpsert = makeFunctionReference<"mutation">("engagement:upsert");
 
 // ---------- shared ----------
+
+/** v.number() args can be fractions or NaN; Actors and .take() want integers in range. */
+function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
+  const n = Math.floor(value ?? fallback);
+  return Number.isFinite(n) ? Math.max(min, Math.min(n, max)) : fallback;
+}
 
 /** What the scrapers need from an elder. Reads defensively: v2 fields may not exist yet. */
 export const getElderForScrape = internalQuery({
@@ -85,11 +93,12 @@ export const scrapeEngagement = internalAction({
     const elder = await ctx.runQuery(internal.apify.getElderForScrape, { elderId: args.elderId });
     const profileUrl = args.linkedinUrl ?? elder?.linkedinUrl;
     if (!profileUrl) throw new Error("No LinkedIn URL: pass linkedinUrl or set it on the elder");
-    const maxPosts = Math.max(1, Math.min(args.maxPosts ?? 10, 50));
+    const maxPosts = clampInt(args.maxPosts, 10, 1, 50);
     const errors: string[] = [];
 
     let actor = POSTS_ACTOR;
     let posts: EngagementPost[] = [];
+    let primaryFailed = false;
     try {
       const items = await runActor(POSTS_ACTOR, {
         targetUrls: [profileUrl],
@@ -105,14 +114,20 @@ export const scrapeEngagement = internalAction({
       });
       posts = mapHarvestPosts(items);
     } catch (error) {
+      primaryFailed = true;
       errors.push(`${POSTS_ACTOR}: ${errorMessage(error)}`);
     }
 
-    if (posts.length === 0) {
+    // Only when the primary errored: a profile with no posts yet is a normal
+    // result, not a reason to pay for a second run.
+    if (primaryFailed) {
       // LinkedIn scrapers break now and then; the backup returns counts only.
       actor = POSTS_BACKUP_ACTOR;
       try {
-        const items = await runActor(POSTS_BACKUP_ACTOR, { username: profileUrl, total_posts: maxPosts });
+        const items = await runActor(POSTS_BACKUP_ACTOR, {
+          username: linkedinPublicIdentifier(profileUrl),
+          total_posts: maxPosts,
+        });
         posts = mapApimaestroPosts(items);
       } catch (error) {
         errors.push(`${POSTS_BACKUP_ACTOR}: ${errorMessage(error)}`);
@@ -166,54 +181,57 @@ export const scrapeProfile = internalAction({
 
 // ---------- audience questions ----------
 
-type SourceReport = { fetched: number; kept: number; dropped: Record<string, number>; error?: string };
+type SourceReport = {
+  fetched: number;
+  kept: number;
+  dropped: Record<string, number>;
+  /** the whole source failed */
+  error?: string;
+  /** some requests failed; what the others fetched is still kept */
+  errors?: string[];
+};
 
-async function fetchSource(source: SourceConfig, keywords: string[]): Promise<unknown[]> {
+type Fetched = { items: unknown[]; errors: string[] };
+
+async function fetchSource(source: SourceConfig, keywords: string[]): Promise<Fetched> {
   if (source.kind === "apify") {
     if (!source.actor) throw new Error(`source ${source.name} has no actor`);
-    return runActor(source.actor, buildApifyInput(source, keywords), {
+    const items = await runActor(source.actor, buildApifyInput(source, keywords), {
       timeoutSecs: 240,
       maxItems: source.maxQuestions * 3,
     });
+    return { items, errors: [] };
   }
 
   if (source.kind === "stackexchange_api") {
-    // Free official API: 300 requests/day without a key, 10,000 with one.
-    const key = process.env.STACKEXCHANGE_KEY || undefined;
-    const sites = stackExchangeSitesFor(keywords);
-    const queries = keywords.slice(0, 2);
-    const items: unknown[] = [];
-    for (const site of sites) {
-      for (const query of queries) {
-        const response = await fetch(stackExchangeSearchUrl(site, query, 10, key));
-        const data = (await response.json()) as {
-          items?: Record<string, unknown>[];
-          backoff?: number;
-          error_message?: string;
-          quota_remaining?: number;
-        };
-        if (!response.ok || data.error_message) {
-          throw new Error(`Stack Exchange ${site}: ${data.error_message ?? `HTTP ${response.status}`}`);
-        }
-        for (const item of data.items ?? []) items.push({ ...item, site });
-        if (data.quota_remaining === 0) return items;
-        // The API asks clients to wait `backoff` seconds before the next call.
-        if (data.backoff) await sleep(data.backoff * 1000);
-      }
-    }
-    return items;
+    // Free official API: 300 requests/day per IP without a key (Convex's IPs are
+    // shared, so set STACKEXCHANGE_KEY for the demo), 10,000/day with one.
+    return fetchStackExchange(stackExchangeSitesFor(keywords), keywords.slice(0, 2), {
+      key: process.env.STACKEXCHANGE_KEY || undefined,
+      pageSize: 10,
+      fetchFn: (url) => fetch(url),
+      sleepFn: sleep,
+    });
   }
 
-  // discourse_json
+  // discourse_json: one failing forum/query doesn't lose the others
   const items: unknown[] = [];
+  const errors: string[] = [];
   for (const forum of source.forumUrls ?? []) {
     for (const query of keywords.slice(0, 2)) {
-      const response = await fetch(discourseSearchUrl(forum, query), { headers: { Accept: "application/json" } });
-      if (!response.ok) throw new Error(`Discourse ${forum}: HTTP ${response.status}`);
-      items.push(...discourseItemsFromSearch(await response.json(), forum));
+      try {
+        const response = await fetch(discourseSearchUrl(forum, query), { headers: { Accept: "application/json" } });
+        if (!response.ok) {
+          errors.push(`Discourse ${forum} "${query}": HTTP ${response.status}`);
+          continue;
+        }
+        items.push(...discourseItemsFromSearch(await response.json(), forum));
+      } catch (error) {
+        errors.push(`Discourse ${forum} "${query}": ${errorMessage(error)}`);
+      }
     }
   }
-  return items;
+  return { items, errors };
 }
 
 type AudienceResult = {
@@ -237,20 +255,39 @@ export const findAudienceQuestions = internalAction({
     const keywords = given.length ? given.slice(0, 5) : (elder?.keywords ?? deriveKeywords(null));
     const now = Date.now();
 
+    const sources = enabledSources(args.sources);
+    if (sources.length === 0) throw new Error("No audience-question sources enabled or matched");
+
     const reports: Record<string, SourceReport> = {};
     const found: AudienceQuestion[] = [];
+    let working = 0;
     await Promise.all(
-      enabledSources(args.sources).map(async (source) => {
+      sources.map(async (source) => {
         try {
-          const items = await fetchSource(source, keywords);
+          const { items, errors } = await fetchSource(source, keywords);
           const result = processItems(items, source, keywords, now);
-          reports[source.name] = { fetched: items.length, kept: result.kept.length, dropped: result.dropped };
+          reports[source.name] = {
+            fetched: items.length,
+            kept: result.kept.length,
+            dropped: result.dropped,
+            ...(errors.length ? { errors } : {}),
+          };
           found.push(...result.kept);
+          // A source "worked" if any request succeeded (even with zero results).
+          if (items.length > 0 || errors.length === 0) working += 1;
         } catch (error) {
           reports[source.name] = { fetched: 0, kept: 0, dropped: {}, error: errorMessage(error) };
         }
       }),
     );
+
+    // Every source failed: throw so the cron run shows up as an error in the logs.
+    if (working === 0) {
+      const details = Object.entries(reports)
+        .map(([name, r]) => `${name}: ${r.error ?? (r.errors ?? []).join("; ")}`)
+        .join(" | ");
+      throw new Error(`findAudienceQuestions: every source failed. ${details}`);
+    }
 
     const unique = dedupe(found);
     const saved = await ctx.runMutation(internal.apify.saveAudienceQuestions, {
@@ -306,17 +343,29 @@ export const saveAudienceQuestions = internalMutation({
   },
 });
 
-/** Best unused questions for his next call, highest priority first. */
+/**
+ * Best unused questions for his next call, highest priority first. Priority is
+ * recomputed now (freshness decays) and questions past their source's age
+ * limit are skipped, so an old scrape doesn't keep looking "fresh".
+ */
 export const topAudienceQuestions = internalQuery({
   args: { elderId: v.id("elders"), limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    const rows = await ctx.db
+    const limit = clampInt(args.limit, 5, 1, 25);
+    const now = Date.now();
+    // Stored priority is a good pre-sort; re-rank a wider window by live priority.
+    const candidates = await ctx.db
       .query("audienceQuestions")
       .withIndex("by_elder_priority", (q) => q.eq("elderId", args.elderId))
       .order("desc")
       .filter((q) => q.eq(q.field("usedAt"), undefined))
-      .take(Math.max(1, Math.min(args.limit ?? 5, 25)));
-    return rows.map((r) => ({
+      .take(Math.min(limit * 4, 100));
+    const ranked = candidates
+      .map((r) => ({ row: r, live: livePriority(r, now) }))
+      .filter((x): x is { row: (typeof candidates)[number]; live: number } => x.live !== null)
+      .sort((a, b) => b.live - a.live)
+      .slice(0, limit);
+    return ranked.map(({ row: r, live }) => ({
       _id: r._id,
       title: r.title,
       body: r.body,
@@ -324,7 +373,7 @@ export const topAudienceQuestions = internalQuery({
       source: r.source,
       community: r.community,
       score: r.score,
-      priority: r.priority,
+      priority: live,
     }));
   },
 });

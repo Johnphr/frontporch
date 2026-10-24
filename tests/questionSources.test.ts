@@ -9,9 +9,14 @@ import {
   deriveKeywords,
   discourseItemsFromSearch,
   enabledSources,
+  type FetchLike,
+  fetchStackExchange,
   fingerprint,
   GENERAL_KEYWORDS,
+  livePriority,
   looksLikeQuestion,
+  maxAgeDaysFor,
+  needsProfessional,
   priority,
   processItems,
   relevance,
@@ -182,4 +187,122 @@ test("looksLikeQuestion", () => {
   assert.ok(looksLikeQuestion("Any tips for a first-time manager"));
   assert.ok(looksLikeQuestion("Is it worth learning to bake bread"));
   assert.ok(!looksLikeQuestion("Finished my grandpa's old workbench restoration"));
+});
+
+// ---------- review fixes ----------
+
+test("blocklist keeps everyday trade questions, still blocks medical/legal/finance", () => {
+  const kept = [
+    "How do you make chicken stock that actually gels?",
+    "Can you help diagnose this grinding noise when I brake?",
+    "What symptoms mean my alternator is going bad?",
+    "Is investing in a second oven worth it for a small bakery?",
+    "Do you keep extra flour in stock over winter?",
+  ];
+  for (const title of kept) assert.equal(needsProfessional(title), false, title);
+  const blocked = [
+    "What medication dosage helped your arthritis?",
+    "My doctor can't diagnose my chest pain, what should I do?",
+    "What symptoms did your heart attack start with?",
+    "Should I put my savings in the stock market?",
+    "Which stocks should a retiree buy?",
+    "Should I sue my landlord?",
+    "Is bitcoin a good idea at 70?",
+  ];
+  for (const title of blocked) assert.equal(needsProfessional(title), true, title);
+});
+
+test("fingerprint keeps negations: 'quit' and 'not quit' are different questions", () => {
+  assert.notEqual(fingerprint("Should I quit my job?"), fingerprint("Should I not quit my job?"));
+  assert.notEqual(fingerprint("Do you regret moving?"), fingerprint("Do you never regret moving?"));
+  assert.equal(fingerprint("Should I not quit my job?"), fingerprint("Not quit my job, should I?"));
+});
+
+test("Reddit keyword search splits maxPostCount across keywords", () => {
+  const one = buildApifyInput(source("reddit-search"), ["baking"]);
+  const three = buildApifyInput(source("reddit-search"), ["baking", "bread", "small business"]);
+  assert.equal(one.maxPostCount, one.maxItems);
+  assert.equal(three.maxPostCount, Math.ceil((three.maxItems as number) / 3));
+  assert.ok((three.maxPostCount as number) * 3 >= (three.maxItems as number));
+  const quora = buildApifyInput(source("quora-search"), ["baking"]);
+  assert.deepEqual(quora.proxyConfiguration, { useApifyProxy: true });
+});
+
+test("titles over 300 chars are dropped as too long (not silently cut)", () => {
+  const long = `How do I ${"really ".repeat(60)}start a bakery?`;
+  const { kept, dropped } = processItems(
+    [{ title: long, url: "https://x/1", dataType: "post", createdAt: new Date(NOW).toISOString() }],
+    source("reddit-search"),
+    ["bakery"],
+    NOW,
+  );
+  assert.equal(kept.length, 0);
+  assert.equal(dropped["too long"], 1);
+});
+
+test("livePriority decays with age and drops questions past their source's limit", () => {
+  assert.equal(maxAgeDaysFor("reddit"), 60, "longest limit among reddit sources");
+  assert.equal(maxAgeDaysFor("stackexchange"), null);
+  const q = { source: "reddit", title: "How did you price bread at a bakery?", score: 10, keywords: ["bakery"] };
+  const fresh = livePriority({ ...q, postedAt: NOW - 1 * 86_400_000 }, NOW);
+  const older = livePriority({ ...q, postedAt: NOW - 40 * 86_400_000 }, NOW);
+  assert.ok(fresh !== null && older !== null && fresh > older);
+  assert.equal(livePriority({ ...q, postedAt: NOW - 61 * 86_400_000 }, NOW), null);
+  assert.ok(livePriority({ ...q, source: "stackexchange", postedAt: NOW - 900 * 86_400_000 }, NOW) !== null);
+});
+
+function fakeFetch(responses: Record<string, { status?: number; body: unknown } | Error>): {
+  fetchFn: FetchLike;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  const fetchFn: FetchLike = async (url) => {
+    const u = new URL(url);
+    const key = `${u.searchParams.get("site")}|${u.searchParams.get("q")}`;
+    calls.push(key);
+    const r = responses[key] ?? { body: { items: [] } };
+    if (r instanceof Error) throw r;
+    const status = r.status ?? 200;
+    return { ok: status < 400, status, json: async () => r.body };
+  };
+  return { fetchFn, calls };
+}
+
+test("Stack Exchange: one failing request keeps the rest; backoff is honored", async () => {
+  const sleeps: number[] = [];
+  const { fetchFn, calls } = fakeFetch({
+    "workplace|first job": { body: { items: [{ title: "How do I ask for a raise?" }], backoff: 2 } },
+    "workplace|mentor": new Error("socket hang up"),
+    "diy|first job": { status: 400, body: { error_id: 400, error_message: "bad parameter" } },
+    "diy|mentor": { body: { items: [{ title: "How do I find a mentor for woodworking?" }] } },
+  });
+  const { items, errors } = await fetchStackExchange(["workplace", "diy"], ["first job", "mentor"], {
+    fetchFn,
+    sleepFn: async (ms) => {
+      sleeps.push(ms);
+    },
+  });
+  assert.equal(calls.length, 4);
+  assert.deepEqual(items.map((i) => [i.site, i.title]), [
+    ["workplace", "How do I ask for a raise?"],
+    ["diy", "How do I find a mentor for woodworking?"],
+  ]);
+  assert.equal(errors.length, 2);
+  assert.match(errors[0], /socket hang up/);
+  assert.match(errors[1], /bad parameter/);
+  assert.deepEqual(sleeps, [2000]);
+});
+
+test("Stack Exchange: throttle violation stops further calls but keeps results", async () => {
+  const { fetchFn, calls } = fakeFetch({
+    "workplace|first job": { body: { items: [{ title: "Kept?" }] } },
+    "workplace|mentor": { status: 400, body: { error_id: 502, error_name: "throttle_violation", error_message: "too many requests" } },
+  });
+  const { items, errors } = await fetchStackExchange(["workplace", "diy"], ["first job", "mentor"], {
+    fetchFn,
+    sleepFn: async () => {},
+  });
+  assert.equal(calls.length, 2, "no calls after the throttle");
+  assert.equal(items.length, 1);
+  assert.equal(errors.length, 1);
 });

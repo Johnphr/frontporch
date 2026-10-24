@@ -7,6 +7,7 @@
 // Field names come from each Actor's README on apify.com. No runtime imports on
 // purpose: tests run this file directly with Node.
 
+import { canonicalLinkedInPostUrl, linkedinActivityId } from "./linkedinUrl.ts";
 import { cleanText, isRecord, parseTimestamp, truncate } from "./text.ts";
 
 export type EngagementComment = { author: string; text: string };
@@ -23,19 +24,36 @@ export type EngagementPost = {
 export const MAX_COMMENTS_PER_POST = 20;
 const MAX_COMMENT_CHARS = 500;
 
-/** Strip query string, hash and trailing slash so the same post URL always matches. */
-export function normalizeLinkedInUrl(url: string): string {
-  const trimmed = url.trim();
-  if (!trimmed) return "";
-  try {
-    const parsed = new URL(trimmed);
-    parsed.search = "";
-    parsed.hash = "";
-    parsed.hostname = parsed.hostname.replace(/^[a-z]{2,3}\.linkedin\.com$/, "www.linkedin.com");
-    return parsed.toString().replace(/\/+$/, "");
-  } catch {
-    return trimmed.replace(/[?#].*$/, "").replace(/\/+$/, "");
+/**
+ * The URL we store for a scraped post: the canonical
+ * https://www.linkedin.com/feed/update/urn:li:activity:<id> form (see lib/linkedinUrl.ts),
+ * the same form linkedapi.ts saves on posts rows, so engagement matches posts.
+ * When the URL has no activity id, a numeric post id (harvestapi's `id`) is used.
+ */
+export function postUrlFor(rawUrl: string | undefined, postId?: unknown): string {
+  if (rawUrl && linkedinActivityId(rawUrl)) return canonicalLinkedInPostUrl(rawUrl);
+  const id = typeof postId === "number" ? String(postId) : typeof postId === "string" ? postId.trim() : "";
+  if (/^\d{6,}$/.test(id)) return canonicalLinkedInPostUrl(`urn:li:activity:${id}`);
+  const fromUrn = typeof postId === "string" ? linkedinActivityId(postId) : undefined;
+  if (fromUrn) return canonicalLinkedInPostUrl(`urn:li:activity:${fromUrn}`);
+  return canonicalLinkedInPostUrl(rawUrl ?? "");
+}
+
+/**
+ * Profile URL -> public identifier ("https://www.linkedin.com/in/walter-baker/" -> "walter-baker").
+ * apimaestro's input takes the identifier, not a full URL. Unknown shapes pass through.
+ */
+export function linkedinPublicIdentifier(profileUrl: string): string {
+  const trimmed = profileUrl.trim();
+  const match = /linkedin\.com\/in\/([^/?#]+)/i.exec(trimmed);
+  if (match) {
+    try {
+      return decodeURIComponent(match[1]);
+    } catch {
+      return match[1];
+    }
   }
+  return trimmed.replace(/\/+$/, "");
 }
 
 function sumReactionCounts(list: unknown): number | undefined {
@@ -84,8 +102,11 @@ export function mapHarvestPosts(items: unknown[], maxComments = MAX_COMMENTS_PER
   const result: EngagementPost[] = [];
   for (const post of posts) {
     const share = isRecord(post.socialContent) ? post.socialContent.shareUrl : undefined;
-    const rawUrl = [post.linkedinUrl, post.url, share].find((u) => typeof u === "string" && u.trim());
-    if (typeof rawUrl !== "string") continue;
+    const rawUrl = [post.linkedinUrl, post.url, share].find((u) => typeof u === "string" && u.trim()) as
+      | string
+      | undefined;
+    const linkedinUrl = postUrlFor(rawUrl, post.id);
+    if (!linkedinUrl) continue;
 
     const engagement = isRecord(post.engagement) ? post.engagement : {};
     const reactions =
@@ -108,7 +129,7 @@ export function mapHarvestPosts(items: unknown[], maxComments = MAX_COMMENTS_PER
     const text = cleanText(post.content ?? post.text ?? "");
 
     result.push({
-      linkedinUrl: normalizeLinkedInUrl(rawUrl),
+      linkedinUrl,
       reactions,
       comments: dedupeComments(comments).slice(0, maxComments),
       ...(postedAt !== undefined ? { postedAt } : {}),
@@ -133,7 +154,9 @@ export function mapApimaestroPosts(items: unknown[]): EngagementPost[] {
   }
   const result: EngagementPost[] = [];
   for (const post of flat) {
-    if (typeof post.url !== "string" || !post.url.trim()) continue;
+    const rawUrl = typeof post.url === "string" && post.url.trim() ? post.url : undefined;
+    const linkedinUrl = postUrlFor(rawUrl, post.urn ?? post.activity_urn ?? post.id);
+    if (!linkedinUrl) continue;
     const stats = isRecord(post.stats) ? post.stats : {};
     let reactions = typeof stats.total_reactions === "number" ? stats.total_reactions : undefined;
     if (reactions === undefined) {
@@ -146,7 +169,7 @@ export function mapApimaestroPosts(items: unknown[]): EngagementPost[] {
       : undefined;
     const text = cleanText(post.text ?? "");
     result.push({
-      linkedinUrl: normalizeLinkedInUrl(post.url),
+      linkedinUrl,
       reactions,
       comments: [],
       ...(postedAt !== undefined ? { postedAt } : {}),

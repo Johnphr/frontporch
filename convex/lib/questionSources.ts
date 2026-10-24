@@ -335,7 +335,9 @@ export function buildApifyInput(source: SourceConfig, keywords: string[]): Recor
       searchUsers: false,
       sort: "relevance",
       time: "month",
-      maxPostCount: source.maxQuestions * 3,
+      // maxPostCount is per search: split the total so every keyword gets results
+      // (otherwise the first keyword alone can fill maxItems).
+      maxPostCount: Math.max(1, Math.ceil(common.maxItems / Math.max(keywords.length, 1))),
     };
   }
   if (source.actor === "blackfalcondata/quora-scraper") {
@@ -345,6 +347,8 @@ export function buildApifyInput(source: SourceConfig, keywords: string[]): Recor
       maxItems: source.maxQuestions * 3,
       includeAnswers: false,
       excludeEmptyFields: true,
+      // Required by the Actor's input schema (it has a default, but be explicit).
+      proxyConfiguration: { useApifyProxy: true },
     };
   }
   return {};
@@ -363,6 +367,56 @@ export function stackExchangeSearchUrl(site: string, query: string, pageSize: nu
   });
   if (key) params.set("key", key);
   return `${STACKEXCHANGE_API}?${params.toString()}`;
+}
+
+type StackExchangeResponse = {
+  items?: Record<string, unknown>[];
+  backoff?: number;
+  error_id?: number;
+  error_name?: string;
+  error_message?: string;
+  quota_remaining?: number;
+};
+
+export type FetchLike = (url: string) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
+
+/**
+ * Search every site × query on the official Stack Exchange API. One failing
+ * request doesn't lose the rest: errors are collected and the items fetched so
+ * far are kept. Stops early on throttling / an empty quota, and waits `backoff`
+ * seconds between calls when the API asks for it. `fetchFn`/`sleepFn` are
+ * injected so tests can run without the network.
+ */
+export async function fetchStackExchange(
+  sites: string[],
+  queries: string[],
+  opts: { key?: string; pageSize?: number; fetchFn: FetchLike; sleepFn: (ms: number) => Promise<void> },
+): Promise<{ items: RawItem[]; errors: string[] }> {
+  const items: RawItem[] = [];
+  const errors: string[] = [];
+  for (const site of sites) {
+    for (const query of queries) {
+      let data: StackExchangeResponse = {};
+      let status = 0;
+      try {
+        const response = await opts.fetchFn(stackExchangeSearchUrl(site, query, opts.pageSize ?? 10, opts.key));
+        status = response.status;
+        data = ((await response.json()) ?? {}) as StackExchangeResponse;
+        if (!response.ok || data.error_message) {
+          errors.push(`Stack Exchange ${site} "${query}": ${data.error_message ?? `HTTP ${response.status}`}`);
+        } else {
+          for (const item of data.items ?? []) items.push({ ...item, site });
+        }
+      } catch (error) {
+        errors.push(`Stack Exchange ${site} "${query}": ${error instanceof Error ? error.message : String(error)}`);
+      }
+      // 502 throttle_violation / 429 / no quota left: every further call would fail too.
+      if (data.error_id === 502 || data.error_name === "throttle_violation" || status === 429) return { items, errors };
+      if (data.quota_remaining === 0) return { items, errors };
+      if (data.backoff) await opts.sleepFn(data.backoff * 1000);
+    }
+  }
+  return { items, errors };
 }
 
 export function discourseSearchUrl(forumUrl: string, query: string): string {
@@ -424,14 +478,19 @@ const STOPWORDS = new Set([
   "the", "and", "for", "you", "your", "with", "that", "this", "what", "how", "why", "when",
   "who", "are", "was", "were", "have", "has", "had", "does", "did", "can", "could", "would",
   "should", "any", "anyone", "there", "their", "they", "from", "about", "into", "just",
-  "like", "get", "got", "its", "it's", "what's", "how's", "i'm", "our", "out", "not",
+  "like", "get", "got", "its", "it's", "what's", "how's", "i'm", "our", "out",
   "all", "but", "one", "some",
 ]);
+
+/** Negations flip a question's meaning, so they always count ("quit" vs "not quit"). */
+const NEGATIONS = new Set(["no", "not", "never", "nor", "don't", "dont", "won't", "can't", "cannot", "shouldn't"]);
 
 /** Same question worded slightly differently -> same fingerprint. */
 export function fingerprint(title: string): string {
   const words = cleanText(title).toLowerCase().match(/[a-z0-9']+/g) ?? [];
-  const tokens = [...new Set(words.filter((w) => w.length > 2 && !STOPWORDS.has(w)))].sort();
+  const tokens = [
+    ...new Set(words.filter((w) => NEGATIONS.has(w) || (w.length > 2 && !STOPWORDS.has(w)))),
+  ].sort();
   const key = tokens.length >= 2 ? tokens.join(" ") : words.join(" ");
   return hash16(key);
 }
@@ -442,9 +501,10 @@ export function normalize(item: RawItem, source: SourceConfig): Omit<AudienceQue
   const title = cleanText(pick(item, fields.title));
   const url = pick(item, fields.url);
   if (!title || !url) return null;
+  // Full title on purpose: filterReason drops titles over 300 chars, so kept ones fit.
   const question: Omit<AudienceQuestion, "priority" | "keywords"> = {
     source: source.source,
-    title: title.slice(0, 300),
+    title,
     url,
     fingerprint: fingerprint(title),
   };
@@ -475,14 +535,37 @@ const QUESTION_STARTS = [
 ];
 const ADVICE_WORDS = /\b(advice|tips?|recommend\w*|suggestions?|help me|wisdom|lessons?)\b/i;
 
-/** Topics that need a licensed professional or are unsafe to crowdsource. */
+/**
+ * Topics that need a licensed professional or are unsafe to crowdsource.
+ * Finance terms are phrases on purpose: "chicken stock" and "investing in a
+ * second oven" are fine questions for a chef or a baker.
+ */
 const BLOCKLIST = new RegExp(
-  "\\b(diagnos\\w*|symptoms?|medication|dosage|prescri\\w*|chemo\\w*|cancer|tumou?r|" +
+  "\\b(medication|dosage|prescri\\w*|chemo\\w*|cancer|tumou?r|" +
     "lawsuit|lawyer|attorney|sue|suing|custody|legal advice|" +
-    "invest\\w*|stocks?|crypto\\w*|bitcoin|forex|tax return|irs|" +
+    "stock market|stocks? and bonds|which stocks?|stock picks?|stock tips?|penny stocks?|" +
+    "investment advice|investing advice|index funds?|retirement portfolio|401k|" +
+    "crypto\\w*|bitcoin|forex|tax return|irs|" +
     "suicid\\w*|self[- ]harm|kill myself|overdose|abuse\\w*)\\b",
   "i",
 );
+
+/**
+ * "diagnose" / "symptoms" are only medical when something medical is nearby
+ * ("help diagnose this grinding noise" is a great question for a mechanic).
+ */
+const MEDICAL_ONLY_WORDS = /\b(diagnos\w*|symptoms?)\b/i;
+const MEDICAL_CONTEXT = new RegExp(
+  "\\b(doctors?|medical|medicine|disease|illness|sick|pain|rash|fever|infection|virus|pregnan\\w*|" +
+    "depress\\w*|anxiety|adhd|autism|blood|heart|lungs?|skin|arthritis|diabet\\w*|covid|flu|" +
+    "therap\\w*|health|hospital|nurse|my (?:son|daughter|baby|child|kid|wife|husband|mom|dad|mother|father))\\b",
+  "i",
+);
+
+export function needsProfessional(text: string): boolean {
+  if (BLOCKLIST.test(text)) return true;
+  return MEDICAL_ONLY_WORDS.test(text) && MEDICAL_CONTEXT.test(text);
+}
 const REMOVED_MARKERS = new Set(["[removed]", "[deleted]", "[ removed by reddit ]"]);
 
 export function looksLikeQuestion(title: string): boolean {
@@ -521,7 +604,7 @@ export function filterReason(
   if (source.maxAgeDays !== null && question.postedAt !== undefined) {
     if (nowMs - question.postedAt > source.maxAgeDays * 86_400_000) return "too old";
   }
-  if (BLOCKLIST.test(`${title} ${body.slice(0, 500)}`)) return "needs a professional";
+  if (needsProfessional(`${title} ${body.slice(0, 500)}`)) return "needs a professional";
   return null;
 }
 
@@ -560,6 +643,29 @@ export function priority(
   const openness = answers === undefined ? 0.3 : answers === 0 ? 0.8 : answers <= 3 ? 0.5 : 0.2;
   const onTopic = 3 * relevance(question, keywords);
   return Math.round((engagement + freshness + openness + onTopic) * 1000) / 1000;
+}
+
+/** Longest age limit among the sources that store this `source` value (null = none). */
+export function maxAgeDaysFor(sourceValue: string): number | null {
+  const limits = SOURCES.filter((s) => s.source === sourceValue).map((s) => s.maxAgeDays);
+  if (limits.length === 0 || limits.some((l) => l === null)) return null;
+  return Math.max(...(limits as number[]));
+}
+
+type StoredQuestion = Pick<AudienceQuestion, "source" | "title" | "body" | "score" | "postedAt" | "answerCount"> & {
+  keywords: string[];
+};
+
+/**
+ * Priority recomputed at read time, so a question found weeks ago doesn't keep
+ * its "fresh" score. Returns null when it's past its source's age limit.
+ */
+export function livePriority(question: StoredQuestion, nowMs: number): number | null {
+  const maxAgeDays = maxAgeDaysFor(question.source);
+  if (maxAgeDays !== null && question.postedAt !== undefined) {
+    if (nowMs - question.postedAt > maxAgeDays * 86_400_000) return null;
+  }
+  return priority(question, question.keywords, nowMs, maxAgeDays);
 }
 
 export type ProcessResult = {
