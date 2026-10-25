@@ -10,9 +10,11 @@ import { normalizeAppPassword, normalizeBlueskyHandle } from "./signupRules.ts";
 export type ConnectError =
   | "invalid_handle" // not a Bluesky handle
   | "not_app_password" // not the xxxx-xxxx-xxxx-xxxx shape, or Bluesky says it's his main password
+  | "privileged_app_password" // an app password with DM access: we ask for one without it
   | "not_found" // no such sign-up
   | "locked" // he's active: accounts change only through us
-  | "rate_limited" // too many tries this hour
+  | "rate_limited" // too many tries this hour (his, or for this handle)
+  | "busy" // too many tries from everyone this hour: try later
   | "wrong_password" // Bluesky refused the handle + app password
   | "account_unavailable" // his Bluesky account is suspended or deactivated
   | "bluesky_busy" // Bluesky is down or rate-limiting us: try later
@@ -23,8 +25,8 @@ export type ConnectResult = { ok: true; handle: string } | { ok: false; error: C
 export type ConnectDeps = {
   fetchFn: FetchFn;
   env: Record<string, string | undefined>;
-  /** Count this attempt; refuse if he's rate limited, active, or unknown. */
-  reserve: () => Promise<{ ok: true } | { ok: false; error: "not_found" | "locked" | "rate_limited" }>;
+  /** Count this attempt (handle already normalized); refuse if rate limited, active, or unknown. */
+  reserve: (handle: string) => Promise<{ ok: true } | { ok: false; error: "not_found" | "locked" | "rate_limited" | "busy" }>;
   /** Save the verified account. */
   save: (account: { handle: string; did: string; secret: SealedSecret }) => Promise<{ ok: true } | { ok: false; error: "not_found" | "locked" }>;
   warn?: (message: string) => void;
@@ -59,6 +61,19 @@ export function sessionScope(accessJwt: string): string | undefined {
   }
 }
 
+/** Log out a session we won't keep (deleteSession with its refresh token). Best effort. */
+async function endSession(fetchFn: FetchFn, session: { service: string; refreshJwt?: string }): Promise<void> {
+  if (!session.refreshJwt) return;
+  try {
+    await fetchFn(`${session.service}/xrpc/com.atproto.server.deleteSession`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session.refreshJwt}` },
+    });
+  } catch {
+    // It expires on its own; nothing was saved.
+  }
+}
+
 export async function connectBlueskyAccount(
   deps: ConnectDeps,
   elderId: string,
@@ -79,7 +94,7 @@ export async function connectBlueskyAccount(
     return { ok: false, error: "failed" };
   }
 
-  const reserved = await deps.reserve();
+  const reserved = await deps.reserve(handle);
   if (!reserved.ok) return { ok: false, error: reserved.error };
 
   let session;
@@ -92,7 +107,12 @@ export async function connectBlueskyAccount(
     }
     return { ok: false, error: code };
   }
-  if (sessionScope(session.accessJwt) === "com.atproto.access") return { ok: false, error: "not_app_password" };
+  // His main password, or an app password that can read his DMs: log that session out, then refuse.
+  const scope = sessionScope(session.accessJwt);
+  if (scope === "com.atproto.access" || scope === "com.atproto.appPassPrivileged") {
+    await endSession(deps.fetchFn, session);
+    return { ok: false, error: scope === "com.atproto.access" ? "not_app_password" : "privileged_app_password" };
+  }
 
   const secret = await encryptSecret(key, password, elderId, "bluesky");
   const saved = await deps.save({ handle: session.handle.toLowerCase(), did: session.did, secret });

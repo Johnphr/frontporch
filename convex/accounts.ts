@@ -10,7 +10,14 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { shortAccountError } from "./lib/accountConnect";
-import { connectRateLimit, recordAttempt, sameTokenHash } from "./lib/signupRules";
+import {
+  GLOBAL_CONNECTS_PER_HOUR,
+  HANDLE_CONNECTS_PER_HOUR,
+  connectCaps,
+  connectRateLimit,
+  recordAttempt,
+  sameTokenHash,
+} from "./lib/signupRules";
 
 const platform = v.union(v.literal("bluesky"), v.literal("reddit"));
 const sealed = v.object({ ciphertext: v.string(), iv: v.string() });
@@ -55,22 +62,49 @@ export const status = internalQuery({
   },
 });
 
+async function attemptRow(ctx: MutationCtx, key: string) {
+  return ctx.db
+    .query("connectAttempts")
+    .withIndex("by_key", (q) => q.eq("key", key))
+    .unique();
+}
+
+/** Add `now` to one connectAttempts row (created if missing). */
+async function recordCap(ctx: MutationCtx, key: string, row: Doc<"connectAttempts"> | null, now: number, max: number) {
+  const times = recordAttempt(row?.times ?? [], now, max);
+  if (row) await ctx.db.patch(row._id, { times });
+  else await ctx.db.insert("connectAttempts", { key, times });
+}
+
 /**
  * Sign-up: count one connect attempt. Refuses an unknown elder or a wrong sign-up token (hash), an active one (his accounts are
- * locked once he's active, like setLinkedin), and too many tries (lib/signupRules.connectRateLimit).
+ * locked once he's active, like setLinkedin), and too many tries: his own (lib/signupRules.connectRateLimit), then per handle
+ * and in all (connectCaps), so new sign-ups can't be used to guess a handle's password through us. `handle` is normalized.
+ * A refused attempt isn't counted.
  */
 export const reserveConnect = internalMutation({
-  args: { elderId: v.id("elders"), tokenHash: v.string(), platform, now: v.number() },
-  handler: async (ctx, { elderId, tokenHash, platform: p, now }): Promise<{ ok: true } | { ok: false; error: "not_found" | "locked" | "rate_limited" }> => {
+  args: { elderId: v.id("elders"), tokenHash: v.string(), platform, handle: v.string(), now: v.number() },
+  handler: async (
+    ctx,
+    { elderId, tokenHash, platform: p, handle, now },
+  ): Promise<{ ok: true } | { ok: false; error: "not_found" | "locked" | "rate_limited" | "busy" }> => {
     const elder = await ctx.db.get(elderId);
     if (!elder || !sameTokenHash(elder.signupTokenHash, tokenHash)) return { ok: false, error: "not_found" };
     if (elder.stage === "active") return { ok: false, error: "locked" };
     const row = await accountRow(ctx, elderId, p);
     const times = row?.attemptTimes ?? [];
     if (!connectRateLimit(times, now).ok) return { ok: false, error: "rate_limited" };
+    const handleKey = `${p}:${handle.toLowerCase()}`;
+    const handleRow = await attemptRow(ctx, handleKey);
+    const globalRow = await attemptRow(ctx, "global");
+    const caps = connectCaps({ handle: handleRow?.times ?? [], global: globalRow?.times ?? [] }, now);
+    if (!caps.ok) return caps;
+
     const attemptTimes = recordAttempt(times, now);
     if (row) await ctx.db.patch(row._id, { attemptTimes });
     else await ctx.db.insert("elderAccounts", { elderId, platform: p, status: "disconnected", attemptTimes });
+    await recordCap(ctx, handleKey, handleRow, now, HANDLE_CONNECTS_PER_HOUR);
+    await recordCap(ctx, "global", globalRow, now, GLOBAL_CONNECTS_PER_HOUR);
     return { ok: true };
   },
 });

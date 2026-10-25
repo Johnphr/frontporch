@@ -101,6 +101,13 @@ export default defineSchema({
     attemptTimes: v.optional(v.array(v.number())), // recent connect attempts (rate limit)
   }).index("by_elder_platform", ["elderId", "platform"]),
 
+  // Connect-attempt caps across sign-ups (accounts.reserveConnect): one row per Bluesky handle
+  // ("bluesky:<handle>") plus one "global" row. Only the last hour's times are kept.
+  connectAttempts: defineTable({
+    key: v.string(),
+    times: v.array(v.number()), // epoch ms
+  }).index("by_key", ["key"]),
+
   // One Cartesia agent per character (lib/characters.ts), written by cartesiaAgents.syncAgent.
   characterAgents: defineTable({
     characterId: v.string(),

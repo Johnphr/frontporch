@@ -83,7 +83,9 @@ export function publicCallAllowed(mode: string | undefined, allowlist: string | 
 
 // ---------- Connect Bluesky (signup.connectBluesky) ----------
 
-export const CONNECT_ATTEMPTS_PER_HOUR = 5;
+export const CONNECT_ATTEMPTS_PER_HOUR = 5; // per sign-up
+export const HANDLE_CONNECTS_PER_HOUR = 5; // per Bluesky handle, across sign-ups
+export const GLOBAL_CONNECTS_PER_HOUR = 60; // all sign-ups together
 export const CONNECT_COOLDOWN_MS = 5_000;
 const HOUR_MS = 60 * 60_000;
 
@@ -131,8 +133,23 @@ export function connectRateLimit(attemptTimes: number[], now: number): { ok: tru
 }
 
 /** The attempt list to store after one more attempt: only the ones the limit still looks at. */
-export function recordAttempt(attemptTimes: number[], now: number): number[] {
-  return [...attemptTimes.filter((t) => now - t < HOUR_MS), now].slice(-CONNECT_ATTEMPTS_PER_HOUR);
+export function recordAttempt(attemptTimes: number[], now: number, max = CONNECT_ATTEMPTS_PER_HOUR): number[] {
+  return [...attemptTimes.filter((t) => now - t < HOUR_MS), now].slice(-max);
+}
+
+/**
+ * Caps on Bluesky logins through our server. register makes sign-ups freely, so the
+ * per-sign-up limit alone doesn't stop guessing one handle's password from many sign-ups.
+ * At most HANDLE_CONNECTS_PER_HOUR tries per handle, GLOBAL_CONNECTS_PER_HOUR in all.
+ */
+export function connectCaps(
+  times: { handle: number[]; global: number[] },
+  now: number,
+): { ok: true } | { ok: false; error: "rate_limited" | "busy" } {
+  const lastHour = (list: number[]) => list.filter((t) => now - t < HOUR_MS).length;
+  if (lastHour(times.handle) >= HANDLE_CONNECTS_PER_HOUR) return { ok: false, error: "rate_limited" };
+  if (lastHour(times.global) >= GLOBAL_CONNECTS_PER_HOUR) return { ok: false, error: "busy" };
+  return { ok: true };
 }
 
 // ---------- Weekly call defaults (register) ----------
