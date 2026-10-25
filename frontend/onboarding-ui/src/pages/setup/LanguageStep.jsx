@@ -1,9 +1,10 @@
-// Setup step 3, laid out like a shop page: the chosen host on the left (portrait, qualities, first
+// Setup step 3, laid out like a shop page: the chosen host on the left (3D bust, qualities, first
 // line), the choices on the right (language on one row, then a tile per host who speaks it).
 // Changing the language picks that language's default host. Props as in steps.jsx.
 import { HOSTS, hostForLanguage, hostsForLanguage } from '../../copy'
 import { SETUP } from '../../copy/setup'
 import { HostAvatar } from '../../art/hosts'
+import { HostStage } from '../../art/host3d/HostStage'
 import { PillChoices, cx } from '../../ui/controls'
 import { QualityChips } from '../../ui/QualityChips'
 import { StepCard } from './steps'
@@ -40,7 +41,7 @@ function HostShowcase({ id, words }) {
   const host = HOSTS[id]
   return (
     <div aria-live="polite" className="flex w-full min-w-0 flex-col items-start gap-4 rounded-inset bg-wash p-6">
-      <HostAvatar key={id} id={id} className="h-40 w-40 self-center motion-safe:animate-enter md:h-64 md:w-64" />
+      <HostStage id={id} className="h-48 w-48 self-center md:h-72 md:w-72" />
       <span className="tag">{words.hostTag}</span>
       <h2 className="text-[2rem]">{host.name}</h2>
       <QualityChips qualities={host.qualities} />
