@@ -8,8 +8,11 @@ import { Button, ErrorBanner, Note } from './ui'
 // ?connect_error=<code>&platform=<id>. Sign-up progress survives the trip in sessionStorage
 // (App.jsx); which platforms are connected is kept under OAUTH_KEY. No token ever reaches this page.
 
-/** Add X here: { id: 'x', name: 'X', Icon: XIcon }. Labels come from t.sOAuth. */
-export const OAUTH_PLATFORMS = [{ id: 'threads', name: 'Threads', Icon: ThreadsIcon }]
+/** The Connect buttons. Labels come from t.sOAuth; a platform's own note from t.sOAuth.notes[id]. */
+export const OAUTH_PLATFORMS = [
+  { id: 'threads', name: 'Threads', Icon: ThreadsIcon },
+  { id: 'x', name: 'X', Icon: XIcon },
+]
 
 export const OAUTH_KEY = 'onboarding-v2-oauth'
 
@@ -107,7 +110,17 @@ export function OAuthConnect({ t, elderId, token }) {
         ),
       )}
       <p className="text-lg">{t.sOAuth.note}</p>
+      {OAUTH_PLATFORMS.map(({ id }) => (t.sOAuth.notes?.[id] ? <p key={id} className="text-base">{t.sOAuth.notes[id]}</p> : null))}
     </div>
+  )
+}
+
+export function XIcon() {
+  return (
+    <svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true">
+      <rect width="24" height="24" rx="5" fill="#000" />
+      <path d="M6 6l12 12M18 6L6 18" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" />
+    </svg>
   )
 }
 

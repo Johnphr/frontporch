@@ -159,25 +159,32 @@ test("callback: success saves and redirects with connected=x, no tokens in the U
   assert.equal(deps.saved.length, 1);
 });
 
-test("callback: bad state, denial, exchange failure, missing scope, save failure", async () => {
+test("callback: bad state, denial, exchange failure, missing scope, save failure (Threads' codes + platform=x)", async () => {
   const r = (deps: CallbackDeps, q: Record<string, string>) => runXCallback(deps, new URLSearchParams(q));
-  assert.deepEqual(await r(callbackDeps(), { state: "nope", code: "C" }), { redirect: "https://frontporch.example/signup?connect_error=unknown_state" });
-  assert.deepEqual(await r(callbackDeps(), { code: "C" }), { redirect: "https://frontporch.example/signup?connect_error=bad_request" });
+  assert.deepEqual(await r(callbackDeps(), { state: "nope", code: "C" }), { redirect: "https://frontporch.example/signup?connect_error=invalid_state&platform=x" });
+  assert.deepEqual(await r(callbackDeps(), { code: "C" }), { redirect: "https://frontporch.example/signup?connect_error=invalid_state&platform=x" });
   const denied = callbackDeps();
-  assert.deepEqual(await r(denied, { state: "good", error: "access_denied" }), { redirect: "https://frontporch.example/signup?connect_error=denied" });
+  assert.deepEqual(await r(denied, { state: "good", error: "access_denied" }), { redirect: "https://frontporch.example/signup?connect_error=denied&platform=x" });
   assert.deepEqual(denied.consumed, ["good"], "a denial still burns the state");
   const failing = callbackDeps({ exchange: async () => Promise.reject(new XAuthError("token", 400, "invalid_request")) });
-  assert.deepEqual(await r(failing, { state: "good", code: "C" }), { redirect: "https://frontporch.example/signup?connect_error=token_exchange" });
+  assert.deepEqual(await r(failing, { state: "good", code: "C" }), { redirect: "https://frontporch.example/signup?connect_error=exchange_failed&platform=x" });
   const noWrite = callbackDeps({ exchange: async () => ({ accessToken: "A", expiresAt: 0, userId: "1", username: "j", scopes: ["tweet.read"] }) });
-  assert.deepEqual(await r(noWrite, { state: "good", code: "C" }), { redirect: "https://frontporch.example/signup?connect_error=missing_scope" });
+  assert.deepEqual(await r(noWrite, { state: "good", code: "C" }), { redirect: "https://frontporch.example/signup?connect_error=missing_scope&platform=x" });
   assert.equal(noWrite.saved.length, 0);
   const noKey = callbackDeps({ save: async () => Promise.reject(new Error("ACCOUNTS_ENC_KEY is not set")) });
-  assert.deepEqual(await r(noKey, { state: "good", code: "C" }), { redirect: "https://frontporch.example/signup?connect_error=server_config" });
+  assert.deepEqual(await r(noKey, { state: "good", code: "C" }), { redirect: "https://frontporch.example/signup?connect_error=failed&platform=x" });
 });
 
 test("callback redirect: returnTo only on the same site; plain text without a site", () => {
   assert.deepEqual(callbackRedirect("https://fp.example/signup", "https://fp.example/me?x=1", { connected: "x" }), { redirect: "https://fp.example/me?x=1&connected=x" });
   assert.deepEqual(callbackRedirect("https://fp.example/signup", "https://evil.example/", { connected: "x" }), { redirect: "https://fp.example/signup?connected=x" });
+  // Old flags are replaced, never doubled.
+  assert.deepEqual(callbackRedirect("https://fp.example/signup?connect_error=old&platform=threads", undefined, { connect_error: "used_state" }), {
+    redirect: "https://fp.example/signup?connect_error=state_used&platform=x",
+  });
+  assert.deepEqual(callbackRedirect("https://fp.example/signup", undefined, { connect_error: "expired_state" }), {
+    redirect: "https://fp.example/signup?connect_error=state_expired&platform=x",
+  });
   const plain = callbackRedirect(undefined, undefined, { connect_error: "denied" });
   assert.ok("text" in plain && plain.status === 400);
 });

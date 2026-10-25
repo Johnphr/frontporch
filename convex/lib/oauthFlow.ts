@@ -1,4 +1,6 @@
-// The OAuth "Connect" flow, shared by Threads and X (adapters in lib/oauthPlatforms.ts):
+// The OAuth "Connect" flow for Threads (adapter in lib/oauthPlatforms.ts). X runs its own
+// flow and callback (xAuth.ts, /oauth/x/callback); startXConnectFlow below is its start, with
+// the same checks and error codes, so signup.startOAuthConnect looks the same for both:
 //
 //   start     signup.startOAuthConnect: check config -> reserve an attempt (sign-up token, rate
 //             limit, locked once active) -> random state (+ PKCE verifier) -> authorize URL
@@ -13,6 +15,7 @@
 import { decryptSecret, encryptSecret, loadAccountKey, type Platform as CryptoPlatform, type SealedSecret } from "./accountCrypto.ts";
 import type { FetchFn } from "./blueskyClient.ts";
 import { OAuthHttpError, oauthAdapter, redirectUriFor, type OAuthEnv, type OAuthPlatform, type OAuthTokens } from "./oauthPlatforms.ts";
+import { xRedirectUri } from "./xOAuth.ts";
 
 // ---------- random values ----------
 
@@ -68,8 +71,7 @@ type TokenPayload = { a: string; r?: string; i?: number };
 
 export async function sealTokens(key: CryptoKey, tokens: OAuthTokens, elderId: string, platform: OAuthPlatform): Promise<SealedSecret> {
   const payload: TokenPayload = { a: tokens.accessToken, ...(tokens.refreshToken ? { r: tokens.refreshToken } : {}), ...(tokens.issuedAt ? { i: tokens.issuedAt } : {}) };
-  // accountCrypto's Platform type predates OAuth; the AAD is just a string, so the cast is safe.
-  return encryptSecret(key, JSON.stringify(payload), elderId, platform as unknown as CryptoPlatform);
+  return encryptSecret(key, JSON.stringify(payload), elderId, platform satisfies CryptoPlatform);
 }
 
 /** Throws (fixed message) on a wrong key, another elder's ciphertext, or a bad payload. */
@@ -80,7 +82,7 @@ export async function openTokens(
   platform: OAuthPlatform,
   row: { externalUserId?: string | null; tokenExpiresAt?: number | null; handle?: string | null },
 ): Promise<OAuthTokens> {
-  const plain = await decryptSecret(key, sealed, elderId, platform as unknown as CryptoPlatform);
+  const plain = await decryptSecret(key, sealed, elderId, platform satisfies CryptoPlatform);
   let payload: TokenPayload;
   try {
     payload = JSON.parse(plain) as TokenPayload;
@@ -134,6 +136,40 @@ export async function startOAuthConnectFlow(deps: StartDeps, platform: OAuthPlat
   await deps.createState({ state, ...(codeVerifier ? { codeVerifier } : {}) });
   const challenge = codeVerifier ? await codeChallengeS256(codeVerifier) : undefined;
   return { ok: true, url: adapter.authorizeUrl(state, redirectUri, challenge) };
+}
+
+/** X Connect is set up: the app's client id + secret and a callback URL (CONVEX_SITE_URL). */
+export function xConnectConfigured(env: OAuthEnv): boolean {
+  return Boolean(xRedirectUri(env) && env.X_CLIENT_ID?.trim() && env.X_CLIENT_SECRET?.trim());
+}
+
+/**
+ * signup.startOAuthConnect for X: the same checks as startOAuthConnectFlow (config, the key,
+ * the reserved attempt), then xAuth.startConnect (its own state row + PKCE) makes the URL.
+ */
+export async function startXConnectFlow(
+  deps: Pick<StartDeps, "env" | "reserve" | "warn"> & { start: () => Promise<{ url: string }> },
+): Promise<StartResult> {
+  const warn = deps.warn ?? (() => {});
+  if (!xConnectConfigured(deps.env)) {
+    warn("oauth: x isn't configured (X_CLIENT_ID / X_CLIENT_SECRET / CONVEX_SITE_URL)");
+    return { ok: false, error: "not_configured" };
+  }
+  try {
+    await loadAccountKey(deps.env.ACCOUNTS_ENC_KEY);
+  } catch (error) {
+    warn(`oauth: ${(error as Error).message}`);
+    return { ok: false, error: "failed" };
+  }
+  const reserved = await deps.reserve();
+  if (!reserved.ok) return { ok: false, error: reserved.error };
+  try {
+    const { url } = await deps.start();
+    return /^https:\/\//.test(url) ? { ok: true, url } : { ok: false, error: "failed" };
+  } catch {
+    warn("oauth: x startConnect failed");
+    return { ok: false, error: "failed" };
+  }
 }
 
 // ---------- callback (http.ts) ----------

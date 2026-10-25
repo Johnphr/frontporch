@@ -1,4 +1,4 @@
-// OAuth platforms he connects with a "Connect" button (Threads now, X later): one adapter per
+// OAuth platforms he connects with a "Connect" button (Threads here; X has its own flow in xAuth.ts): one adapter per
 // platform, built from env, plus the registry. Pure HTTP with an injected fetch
 // (tests/oauth.test.ts drives it with fakes). Errors carry steps and HTTP statuses only,
 // never a token, a code or the app secret.
@@ -211,7 +211,7 @@ export function shouldRefresh(t: { expiresAt: number; issuedAt?: number }, now: 
 
 // ---------- registry ----------
 
-/** One builder per platform. X's adapter is added here at integration. */
+/** One builder per platform. X isn't here: it has its own flow and callback (xAuth.ts, lib/xOAuth.ts). */
 export const OAUTH_ADAPTERS: Partial<Record<OAuthPlatform, (env: OAuthEnv, now?: () => number) => OAuthAdapter | null>> = {
   threads: threadsAdapter,
 };

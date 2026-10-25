@@ -5,6 +5,7 @@
 // actions (lib/logins.ts). Nothing here decrypts, returns a plaintext secret, or logs one.
 // `getForLogin` is the one function that returns the ciphertext; only lib/logins.ts calls it.
 // Reddit: no per-elder connect yet (coming soon); rows for it can't be created from sign-up.
+// Threads and X rows are written by oauth.ts / xAuth.ts (OAuth connect); `status` lists them too.
 
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -45,7 +46,7 @@ export const getForLogin = internalQuery({
   },
 });
 
-/** What's connected for him, with no secret. */
+/** What's connected for him (every platform: Bluesky, Reddit, Threads, X), with no secret or token. */
 export const status = internalQuery({
   args: { elderId: v.id("elders") },
   handler: async (ctx, { elderId }) => {

@@ -1,11 +1,11 @@
-// Encrypts his account secrets (Bluesky app password) for the elderAccounts table.
+// Encrypts his account secrets (Bluesky app password, Threads / X token JSON) for the elderAccounts table.
 // AES-256-GCM with Web Crypto, key from env ACCOUNTS_ENC_KEY (base64 of 32 random bytes:
 // `openssl rand -base64 32`). A fresh random IV per secret. The elderId + platform are bound
 // in as additional data, so a ciphertext copied onto another elder's row won't decrypt.
-// Decrypt only inside actions (lib/logins.ts). Errors never include the key or the secret.
+// Decrypt only inside actions (lib/logins.ts, lib/threadsLogin.ts, lib/xLogin.ts). Errors never include the key or the secret.
 // No runtime imports: unit-tested directly with Node (tests/accounts.test.ts).
 
-export type Platform = "bluesky" | "reddit";
+export type Platform = "bluesky" | "reddit" | "threads" | "x";
 export type SealedSecret = { ciphertext: string; iv: string };
 
 const IV_BYTES = 12;

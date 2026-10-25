@@ -27,8 +27,8 @@ export type XLoginCtx = {
   runMutation: (ref: any, args: any) => Promise<any>;
 };
 
-// accountCrypto's Platform type predates X; the AAD string is what matters ("x").
-export const X_PLATFORM = "x" as unknown as Platform;
+// The AAD platform his X tokens are sealed with.
+export const X_PLATFORM: Platform = "x";
 
 const GET_FOR_LOGIN = makeFunctionReference<"query", { elderId: string }, XAccountForLogin>("xAuth:getForLogin");
 const SAVE_REFRESHED = makeFunctionReference<

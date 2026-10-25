@@ -79,7 +79,7 @@ export const signupApi = {
    */
   connectBluesky: (elderId, token, handle, appPassword) => call('action', 'connectBluesky', { elderId, token, handle, appPassword }),
   /**
-   * OAuth connect (Threads; X later): { ok: true, url } (send the browser there) | { ok: false, error }
+   * OAuth connect (Threads, X): { ok: true, url } (send the browser there) | { ok: false, error }
    * with error one of: not_found, locked, rate_limited, not_configured, failed.
    */
   startOAuthConnect: (elderId, token, platform) => call('action', 'startOAuthConnect', { elderId, token, platform }),

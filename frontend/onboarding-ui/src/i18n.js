@@ -106,12 +106,16 @@ export const STRINGS = {
       done: (name) => `${name} conectado. Ahí también se publicarán sus historias.`,
       connected: (name) => `¡Listo! Su cuenta de ${name} quedó conectada.`,
       note: 'Se abre la página oficial para que usted dé permiso. Nunca vemos su contraseña.',
+      notes: {
+        x: 'Publicar en X cuesta unos centavos por publicación, así que queda apagado hasta que el equipo lo active.',
+      },
       errors: {
         denied: 'No pasa nada: no se conectó la cuenta. Puede intentarlo otra vez cuando quiera.',
         invalid_state: 'El enlace ya no sirve. Toque el botón para intentarlo de nuevo.',
         state_used: 'El enlace ya se usó. Toque el botón para intentarlo de nuevo.',
         state_expired: 'Pasó demasiado tiempo. Toque el botón para intentarlo de nuevo.',
         exchange_failed: 'No pudimos terminar la conexión. Intente otra vez en un momento.',
+        missing_scope: 'Falta el permiso para publicar. Toque el botón otra vez y acepte todos los permisos.',
         not_configured: 'Esta red todavía no está disponible. Puede omitirla por ahora.',
         rate_limited: 'Ya lo intentó varias veces. Espere unos minutos y vuelva a intentarlo.',
         locked: 'Sus cuentas ya están configuradas.',
@@ -274,12 +278,16 @@ export const STRINGS = {
       done: (name) => `${name} connected. Your stories will be posted there too.`,
       connected: (name) => `All set! Your ${name} account is connected.`,
       note: 'It opens the official page so you can give permission. We never see your password.',
+      notes: {
+        x: 'Posting on X costs a few cents per post, so it stays off unless the team turns it on.',
+      },
       errors: {
         denied: 'No problem: the account was not connected. You can try again whenever you like.',
         invalid_state: 'That link no longer works. Tap the button to try again.',
         state_used: 'That link was already used. Tap the button to try again.',
         state_expired: 'Too much time went by. Tap the button to try again.',
         exchange_failed: 'We could not finish connecting. Please try again in a moment.',
+        missing_scope: 'The permission to post is missing. Tap the button again and allow every permission.',
         not_configured: 'This network is not available yet. You can skip it for now.',
         rate_limited: 'You have tried several times. Please wait a few minutes and try again.',
         locked: 'Your accounts are already set up.',

@@ -212,7 +212,26 @@ export type CallbackDeps = {
 
 export type CallbackResult = { redirect: string } | { text: string; status: number };
 
-/** Where to send him: the site (or the state's returnTo when it's on the same site) + one flag. */
+/**
+ * X's callback codes -> the codes the Threads callback uses (lib/oauthFlow.CallbackError), so
+ * the website reads both the same way. missing_scope has no Threads twin and stays.
+ */
+export const SHARED_ERROR: Record<string, string> = {
+  unknown_state: "invalid_state",
+  wrong_platform: "invalid_state",
+  no_verifier: "invalid_state",
+  bad_request: "invalid_state",
+  used_state: "state_used",
+  expired_state: "state_expired",
+  x_error: "exchange_failed",
+  token_exchange: "exchange_failed",
+  server_config: "failed",
+};
+
+/**
+ * Where to send him: the site (or the state's returnTo when it's on the same site) + the same
+ * flags as the Threads callback: ?connected=x, or ?connect_error=<code>&platform=x.
+ */
 export function callbackRedirect(siteUrl: string | undefined, returnTo: string | undefined, flag: { connected: "x" } | { connect_error: string }): CallbackResult {
   const base = siteUrl?.trim();
   if (!base) {
@@ -232,8 +251,13 @@ export function callbackRedirect(siteUrl: string | undefined, returnTo: string |
   }
   url.searchParams.delete("connected");
   url.searchParams.delete("connect_error");
+  url.searchParams.delete("platform");
+  url.hash = "";
   if ("connected" in flag) url.searchParams.set("connected", "x");
-  else url.searchParams.set("connect_error", flag.connect_error);
+  else {
+    url.searchParams.set("connect_error", SHARED_ERROR[flag.connect_error] ?? flag.connect_error);
+    url.searchParams.set("platform", "x");
+  }
   return { redirect: url.toString() };
 }
 

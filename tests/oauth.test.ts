@@ -16,6 +16,8 @@ import {
   sealTokens,
   signupRedirect,
   startOAuthConnectFlow,
+  startXConnectFlow,
+  xConnectConfigured,
   type CallbackDeps,
   type SaveArgs,
 } from "../convex/lib/oauthFlow.ts";
@@ -227,6 +229,30 @@ test("start: not configured, key missing, reserve refusal, then a URL with a sto
   assert.equal(states.length, 1);
   assert.equal(states[0].codeVerifier, undefined); // Threads: no PKCE
   assert.equal(new URL(res.url).searchParams.get("state"), states[0].state);
+});
+
+test("start X: same checks and codes, then xAuth.startConnect makes the URL (its own state + PKCE)", async () => {
+  const X_ENV = { ...ENV, X_CLIENT_ID: "xid", X_CLIENT_SECRET: "xsecret" };
+  const log: string[] = [];
+  const deps = (env: Record<string, string | undefined>, o: { reserved?: any; start?: () => Promise<{ url: string }> } = {}) => ({
+    env,
+    reserve: async () => (log.push("reserve"), o.reserved ?? { ok: true }),
+    start: o.start ?? (async () => (log.push("start"), { url: "https://x.com/i/oauth2/authorize?state=s" })),
+  });
+  assert.equal(xConnectConfigured(X_ENV), true);
+  assert.equal(xConnectConfigured(ENV), false, "no X client");
+  assert.equal(xConnectConfigured({ ...X_ENV, CONVEX_SITE_URL: "" }), false, "no callback URL");
+  assert.deepEqual(await startXConnectFlow(deps(ENV)), { ok: false, error: "not_configured" });
+  assert.deepEqual(await startXConnectFlow(deps({ ...X_ENV, ACCOUNTS_ENC_KEY: undefined })), { ok: false, error: "failed" });
+  assert.deepEqual(log, [], "nothing reserved or started");
+  assert.deepEqual(await startXConnectFlow(deps(X_ENV, { reserved: { ok: false, error: "rate_limited" } })), { ok: false, error: "rate_limited" });
+  assert.deepEqual(log, ["reserve"], "refused: never started");
+  log.length = 0;
+  assert.deepEqual(await startXConnectFlow(deps(X_ENV)), { ok: true, url: "https://x.com/i/oauth2/authorize?state=s" });
+  assert.deepEqual(log, ["reserve", "start"]);
+  const throws = deps(X_ENV, { start: async () => Promise.reject(new Error("X connect isn't set up")) });
+  assert.deepEqual(await startXConnectFlow(throws), { ok: false, error: "failed" });
+  assert.deepEqual(await startXConnectFlow(deps(X_ENV, { start: async () => ({ url: "javascript:alert(1)" }) })), { ok: false, error: "failed" });
 });
 
 // ---------- callback ----------
