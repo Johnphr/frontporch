@@ -33,7 +33,8 @@ export type Candidate = {
 
 export type RankedCandidate = Candidate & { priority: number; firstSeenAt: number };
 
-/** Open threads first, then reader questions, then fresh online topics, then story seeds. */
+/** Open threads first, then reader questions, then fresh online topics, then story seeds
+ *  (a reader question from the last 48h goes above all: FRESH_READER_WEIGHT). */
 export const SOURCE_WEIGHTS: Record<CandidateSource, number> = {
   open_thread: 100,
   reader: 80,
@@ -42,6 +43,11 @@ export const SOURCE_WEIGHTS: Record<CandidateSource, number> = {
   memory: 40,
   profile: 30,
 };
+
+/** A reader question first seen after RankOptions.freshReaderSince: above open threads, so the
+ *  next call asks it. Even at 48h old (decay ~0.9) it beats a brand new open thread (max 105). */
+export const FRESH_READER_WEIGHT = 130;
+export const FRESH_READER_MS = 48 * 60 * 60 * 1000;
 
 /** A queued question loses half its weight every two weeks it sits unused. */
 export const HALF_LIFE_DAYS = 14;
@@ -147,6 +153,9 @@ export type RankOptions = {
   /** topics of questions asked in recent calls: always filtered, whatever the source */
   recentlyUsed?: string[];
   now: number;
+  /** reader questions first seen at or after this (epoch ms) rank first (FRESH_READER_WEIGHT).
+   *  refreshQuestionBank sets it when a reader replied in the last 48h. */
+  freshReaderSince?: number;
   /** drop queued questions older than this (default 45 days) */
   maxAgeDays?: number;
   limit?: number;
@@ -154,7 +163,7 @@ export type RankOptions = {
 
 /**
  * Filter, dedupe and order candidates. Input order is the LLM's own preference and
- * breaks ties (earlier = small bonus).
+ * breaks ties (earlier = small bonus). A fresh reader question (opts.freshReaderSince) goes first.
  */
 export function rankCandidates(candidates: Candidate[], opts: RankOptions): RankedCandidate[] {
   const avoid = (opts.avoid ?? []).filter(Boolean);
@@ -191,7 +200,9 @@ export function rankCandidates(candidates: Candidate[], opts: RankOptions): Rank
     if (ageMs > maxAgeMs) continue;
     const decay = Math.pow(0.5, ageMs / (HALF_LIFE_DAYS * DAY_MS));
     const orderBonus = ((n - index) / n) * 5;
-    const priority = Math.round((SOURCE_WEIGHTS[cand.source] * decay + orderBonus) * 100) / 100;
+    const fresh = cand.source === "reader" && opts.freshReaderSince !== undefined && firstSeenAt >= opts.freshReaderSince;
+    const weight = fresh ? FRESH_READER_WEIGHT : SOURCE_WEIGHTS[cand.source];
+    const priority = Math.round((weight * decay + orderBonus) * 100) / 100;
     const ranked: RankedCandidate = { ...cand, priority, firstSeenAt };
     const existing = byKey.get(cand.topicKey);
     if (!existing || ranked.priority > existing.priority) byKey.set(cand.topicKey, ranked);
@@ -472,4 +483,17 @@ function stripPeriod(s: string): string {
 
 function lowerFirst(s: string): string {
   return s ? s[0].toLowerCase() + s.slice(1) : s;
+}
+
+/**
+ * rankCandidates' freshReaderSince: now - 48h when a reader commented in the last 48h (an
+ * engagement row with comments that changed since then), else undefined (normal order).
+ */
+export function freshReaderSince(
+  feedback: { changedAt: number; comments: unknown[] }[],
+  nowMs: number,
+  windowMs = FRESH_READER_MS,
+): number | undefined {
+  const since = nowMs - windowMs;
+  return feedback.some((f) => f.comments.length > 0 && f.changedAt >= since) ? since : undefined;
 }

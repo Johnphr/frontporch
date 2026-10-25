@@ -33,6 +33,7 @@ import {
   dropJustUsed,
   fallbackCandidates,
   firstBankQuestion,
+  freshReaderSince,
   rankCandidates,
   toPromptVariables,
   type CallPlan,
@@ -365,12 +366,16 @@ export const refreshQuestionBank = internalAction({
       topicKey: r.topicKey,
       firstSeenAt: r.firstSeenAt,
     }));
+    // A reader replied in the last 48h: his new questions go first, so the next call asks one.
+    const now = Date.now();
+    const freshSince = freshReaderSince(feedbackPosts, now);
     const ranked = rankCandidates([...candidates, ...existing], {
       avoid,
       covered,
       recentlyUsed,
-      now: Date.now(),
+      now,
       limit: 12,
+      ...(freshSince !== undefined ? { freshReaderSince: freshSince } : {}),
     });
     await ctx.runMutation(internal.conversation.replaceQueued, {
       elderId: args.elderId,
