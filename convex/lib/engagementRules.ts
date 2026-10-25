@@ -1,17 +1,19 @@
-// Rules for engagement.upsert: did readers react since the last scrape, and is
-// it time to refresh his question bank? No Convex imports: tested with Node.
+// Rules for engagement.upsert: did readers react since the last scrape, and when should his
+// question bank refresh? Plus which scrape runs the daily and 5-min crons schedule.
+// No Convex imports: tested with Node.
 
 import { canonicalLinkedInPostUrl } from "./linkedinUrl.ts";
 
 export type Comment = { author: string; text: string };
 export type Snapshot = { reactions: number; comments: Comment[] };
 
-/** Wait this long after the first changed post before refreshing the bank, so a
- *  whole scrape run (one upsert per post) lands first. */
-export const BANK_REFRESH_DELAY_MS = 2 * 60 * 1000;
+/** Wait this long after a change before refreshing the bank, so the rest of that scrape run
+ *  (one upsert per post, seconds apart) lands first. */
+export const BANK_REFRESH_DELAY_MS = 60 * 1000;
 
-/** At most one bank refresh per elder in this window. */
-export const BANK_REFRESH_DEBOUNCE_MS = 10 * 60 * 1000;
+/** Refreshes for one elder start at least this far apart. Shorter than the 5-min recent
+ *  engagement cron, so a reply it finds is never held back by the previous refresh. */
+export const BANK_REFRESH_GAP_MS = 4 * 60 * 1000;
 
 function commentKey(c: Comment): string {
   return `${c.author.trim().toLowerCase()}|${c.text.trim().toLowerCase().replace(/\s+/g, " ")}`;
@@ -44,13 +46,19 @@ export function engagementChanged(prev: Snapshot | null | undefined, next: Snaps
   return false;
 }
 
-/** True if no bank refresh was scheduled for this elder in the debounce window. */
-export function shouldRefreshBank(
-  lastBankRefreshAt: number | undefined,
+/**
+ * A reader change just landed: when should the bank refresh run? `pendingAt` is the run time of
+ * the last refresh we scheduled (elders.lastBankRefreshAt). Still in the future: that refresh
+ * hasn't started and will read this change, so nothing new. Otherwise schedule one after the
+ * delay, and at least the gap after the last one (a trailing refresh: no change is dropped).
+ */
+export function planBankRefresh(
+  pendingAt: number | undefined,
   nowMs: number,
-  windowMs = BANK_REFRESH_DEBOUNCE_MS,
-): boolean {
-  return lastBankRefreshAt === undefined || nowMs - lastBankRefreshAt >= windowMs;
+): { schedule: false } | { schedule: true; runAt: number } {
+  if (pendingAt !== undefined && pendingAt > nowMs) return { schedule: false };
+  const runAt = Math.max(nowMs + BANK_REFRESH_DELAY_MS, (pendingAt ?? -Infinity) + BANK_REFRESH_GAP_MS);
+  return { schedule: true, runAt };
 }
 
 /**
@@ -125,9 +133,9 @@ export function linkedinEngagementOn(env: Record<string, string | undefined>): b
 
 export type EngagementJob = { kind: "bluesky" | "threads" | "x" | "linkedin"; elderId: string; delayMs: number };
 
-/** LinkedIn runs start this long after the last Bluesky run: past the bank-refresh debounce
- *  (plus its delay), so their comments schedule a refresh of their own instead of being dropped. */
-export const LINKEDIN_AFTER_BLUESKY_MS = BANK_REFRESH_DEBOUNCE_MS + BANK_REFRESH_DELAY_MS;
+/** LinkedIn runs start this long after the last Bluesky run, so its comments get a refresh of
+ *  their own (Apify runs are slow; the refresh would pick them up anyway). */
+export const LINKEDIN_AFTER_BLUESKY_MS = 12 * 60 * 1000;
 
 /**
  * Daily engagement runs, per active elder: Bluesky; Threads (always: cheap when he has no
@@ -151,6 +159,41 @@ export function planDailyEngagement<Id extends string>(
     active
       .filter((e) => !!e.linkedinUrl)
       .forEach((e, i) => jobs.push({ kind: "linkedin", elderId: e._id, delayMs: start + i * staggerMs }));
+  }
+  return jobs;
+}
+
+// ---------- recent posts (5-min cron) ----------
+
+/** Posts this recent are re-read every few minutes (Bluesky + Threads only; X reads cost money). */
+export const RECENT_POST_WINDOW_MS = 48 * 60 * 60 * 1000;
+/** The 5-min scrape reads only threads from this many days (fewer reads per run). */
+export const RECENT_SCRAPE_DAYS = 2;
+
+export type RecentJob<Id extends string> = { kind: "bluesky" | "threads"; elderId: Id; delayMs: number };
+
+/**
+ * From posted publications (by_status_posted, status "posted", newest first): one Bluesky or
+ * Threads scrape per elder with such a post in the window, not taken down. Staggered.
+ */
+export function planRecentEngagement<Id extends string>(
+  pubs: { elderId: Id; platform: string; status: string; postedAt?: number; removedAt?: number }[],
+  nowMs: number,
+  staggerMs: number,
+  windowMs = RECENT_POST_WINDOW_MS,
+): RecentJob<Id>[] {
+  const since = nowMs - windowMs;
+  const seen = new Set<string>();
+  const jobs: RecentJob<Id>[] = [];
+  for (const p of pubs) {
+    const kind = p.platform === "bluesky" || p.platform === "threads" ? p.platform : null;
+    if (!kind) continue;
+    if (p.status !== "posted" || p.removedAt !== undefined) continue;
+    if (p.postedAt === undefined || p.postedAt < since) continue;
+    const key = `${kind}|${p.elderId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    jobs.push({ kind, elderId: p.elderId, delayMs: jobs.length * staggerMs });
   }
   return jobs;
 }

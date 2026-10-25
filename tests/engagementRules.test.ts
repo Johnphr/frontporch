@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  BANK_REFRESH_DEBOUNCE_MS,
+  BANK_REFRESH_DELAY_MS,
+  BANK_REFRESH_GAP_MS,
+  RECENT_POST_WINDOW_MS,
   canonicalBlueskyPostUrl,
   canonicalEngagementUrl,
   cleanComments,
@@ -11,9 +13,10 @@ import {
   nextSnapshot,
   LINKEDIN_AFTER_BLUESKY_MS,
   feedbackVisible,
+  planBankRefresh,
   planDailyEngagement,
+  planRecentEngagement,
   platformOf,
-  shouldRefreshBank,
 } from "../convex/lib/engagementRules.ts";
 import { canonicalLinkedInPostUrl } from "../convex/lib/linkedinUrl.ts";
 
@@ -47,11 +50,61 @@ test("engagementChanged: new posts with activity, reaction changes, comment chan
   assert.equal(engagementChanged(two, { reactions: 1, comments: [two.comments[1], two.comments[0]] }), false, "order");
 });
 
-test("shouldRefreshBank: at most once per debounce window", () => {
+test("planBankRefresh: a minute after a change, at least the gap after the last one, never dropped", () => {
   const now = Date.parse("2026-10-24T12:00:00Z");
-  assert.equal(shouldRefreshBank(undefined, now), true);
-  assert.equal(shouldRefreshBank(now - 5 * 60 * 1000, now), false);
-  assert.equal(shouldRefreshBank(now - BANK_REFRESH_DEBOUNCE_MS, now), true);
+  const MIN = 60_000;
+  assert.deepEqual(planBankRefresh(undefined, now), { schedule: true, runAt: now + BANK_REFRESH_DELAY_MS });
+  assert.equal(BANK_REFRESH_DELAY_MS, MIN);
+  // One is still pending: it hasn't started, so it reads this change too.
+  assert.deepEqual(planBankRefresh(now + 30_000, now), { schedule: false });
+  // The last one ran 2 min ago: a trailing one at the end of the gap (the old 10-min debounce dropped it).
+  assert.deepEqual(planBankRefresh(now - 2 * MIN, now), { schedule: true, runAt: now - 2 * MIN + BANK_REFRESH_GAP_MS });
+  // Long ago: just the delay.
+  assert.deepEqual(planBankRefresh(now - 60 * MIN, now), { schedule: true, runAt: now + MIN });
+  // Running right now (started this instant): the next one waits the gap.
+  assert.deepEqual(planBankRefresh(now, now), { schedule: true, runAt: now + BANK_REFRESH_GAP_MS });
+});
+
+test("planBankRefresh: a reply found by the 5-min cron is in the bank within ~7 minutes", () => {
+  const MIN = 60_000;
+  const posted = Date.parse("2026-10-24T12:00:00Z");
+  // Cron runs every 5 min; a like was found on the previous run and refreshed the bank then.
+  const previousRun = posted + 5 * MIN;
+  const first = planBankRefresh(undefined, previousRun);
+  assert.ok(first.schedule);
+  // The reply comes right after that cron run, so the next run (5 min later) finds it.
+  const reply = previousRun + 1000;
+  const found = previousRun + 5 * MIN;
+  const second = planBankRefresh(first.runAt, found);
+  assert.ok(second.schedule);
+  assert.equal(second.runAt, found + BANK_REFRESH_DELAY_MS, "the gap is shorter than the cron interval: no extra wait");
+  // + about a minute for the refresh itself (feedback summary + question planning).
+  assert.ok(second.runAt + MIN - reply <= 7 * MIN);
+  assert.ok(BANK_REFRESH_GAP_MS < 5 * MIN);
+});
+
+test("planRecentEngagement: Bluesky + Threads posts from the last 48h, one run per elder and platform, staggered", () => {
+  const now = Date.parse("2026-10-24T12:00:00Z");
+  const H = 3_600_000;
+  const pubs = [
+    { elderId: "a", platform: "bluesky", status: "posted", postedAt: now - 1 * H },
+    { elderId: "a", platform: "bluesky", status: "posted", postedAt: now - 2 * H }, // same elder: one run
+    { elderId: "a", platform: "threads", status: "posted", postedAt: now - 3 * H },
+    { elderId: "b", platform: "x", status: "posted", postedAt: now - 1 * H }, // never X (reads cost money)
+    { elderId: "c", platform: "linkedin", status: "posted", postedAt: now - 1 * H },
+    { elderId: "d", platform: "bluesky", status: "posted", postedAt: now - 1 * H, removedAt: now }, // taken down
+    { elderId: "e", platform: "bluesky", status: "removed", postedAt: now - 1 * H },
+    { elderId: "f", platform: "bluesky", status: "posted", postedAt: now - 49 * H }, // too old: daily job
+    { elderId: "g", platform: "bluesky", status: "posted" }, // no postedAt
+    { elderId: "h", platform: "bluesky", status: "posted", postedAt: now - 47 * H },
+  ];
+  assert.deepEqual(planRecentEngagement(pubs, now, 10_000), [
+    { kind: "bluesky", elderId: "a", delayMs: 0 },
+    { kind: "threads", elderId: "a", delayMs: 10_000 },
+    { kind: "bluesky", elderId: "h", delayMs: 20_000 },
+  ]);
+  assert.deepEqual(planRecentEngagement([], now, 10_000), []);
+  assert.equal(RECENT_POST_WINDOW_MS, 48 * H);
 });
 
 test("engagement and posts rows meet on the canonical URL", () => {
@@ -127,14 +180,14 @@ test("planDailyEngagement: Bluesky for every active elder; LinkedIn only behind 
     { kind: "bluesky", elderId: "e", delayMs: 60_000 },
   ]);
   const on = planDailyEngagement(elders, true, 30_000).filter((j) => j.kind === "linkedin");
-  // After the 3 Bluesky runs (90 s) plus 12 minutes, so the refresh debounce has passed.
+  // After the 3 Bluesky runs (90 s) plus 12 minutes.
   assert.equal(LINKEDIN_AFTER_BLUESKY_MS, 12 * 60_000);
   assert.deepEqual(on, [
     { kind: "linkedin", elderId: "a", delayMs: 90_000 + 12 * 60_000 },
     { kind: "linkedin", elderId: "e", delayMs: 120_000 + 12 * 60_000 },
   ]);
   assert.equal(planDailyEngagement(elders, true, 30_000).length, 8, "3 Bluesky + 3 Threads + 2 LinkedIn");
-  // Each elder's LinkedIn run is past the debounce window after his Bluesky run.
+  // Each elder's LinkedIn run is well after his Bluesky run.
   const all = planDailyEngagement(elders, true, 30_000);
   for (const li of on) {
     const bs = all.find((j) => j.kind === "bluesky" && j.elderId === li.elderId)!;
@@ -173,7 +226,7 @@ test("planDailyEngagement: Threads for every active elder, a little after his Bl
     { kind: "x", elderId: "a", delayMs: 20_000 },
     { kind: "x", elderId: "c", delayMs: 50_000 },
   ]);
-  // LinkedIn still starts after the whole batch (Threads and X included), past the debounce.
+  // LinkedIn still starts after the whole batch (Threads and X included).
   const li = on.filter((j) => j.kind === "linkedin");
   assert.deepEqual(li, [{ kind: "linkedin", elderId: "a", delayMs: 60_000 + LINKEDIN_AFTER_BLUESKY_MS }]);
   for (const j of on.filter((j) => j.kind !== "linkedin")) assert.ok(li[0].delayMs - j.delayMs >= LINKEDIN_AFTER_BLUESKY_MS);

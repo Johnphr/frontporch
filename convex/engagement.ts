@@ -6,8 +6,9 @@
 //                   apify.scrapeEngagement (LinkedIn): keeps the latest snapshot, links it to
 //                   our posts row (the postId passed in; LinkedIn: by canonical URL), and when
 //                   something changed schedules conversation.refreshQuestionBank
-//                   (debounced: at most once per elder every 10 minutes, 2 minutes
-//                   after the first change so the whole scrape run lands first)
+//                   (lib/engagementRules.planBankRefresh: 1 minute later so the scrape run
+//                   lands first; refreshes at least 4 minutes apart, and a change during
+//                   that gap gets a trailing refresh, never dropped)
 //   markGone        the post was deleted on its platform (he deleted the thread himself):
 //                   sets goneAt so recentFeedback stops using it
 //   recentFeedback  posts whose reactions/comments changed recently, for the planner
@@ -19,14 +20,13 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery } from "./_generated/server";
 import {
-  BANK_REFRESH_DELAY_MS,
   canonicalEngagementUrl,
   cleanComments,
   feedbackVisible,
   feedbackWindowStart,
   nextSnapshot,
+  planBankRefresh,
   platformOf,
-  shouldRefreshBank,
   type EngagementPlatform,
 } from "./lib/engagementRules";
 
@@ -111,10 +111,11 @@ export const upsert = internalMutation({
     let refreshScheduled = false;
     if (changed) {
       const elder = await ctx.db.get(args.elderId);
-      if (elder && shouldRefreshBank(elder.lastBankRefreshAt, now)) {
+      const plan = elder ? planBankRefresh(elder.lastBankRefreshAt, now) : { schedule: false as const };
+      if (plan.schedule) {
         try {
-          await ctx.scheduler.runAfter(BANK_REFRESH_DELAY_MS, refreshQuestionBank, { elderId: args.elderId });
-          await ctx.db.patch(args.elderId, { lastBankRefreshAt: now });
+          await ctx.scheduler.runAt(plan.runAt, refreshQuestionBank, { elderId: args.elderId });
+          await ctx.db.patch(args.elderId, { lastBankRefreshAt: plan.runAt });
           refreshScheduled = true;
         } catch (error) {
           // conversation.refreshQuestionBank not deployed yet: keep the snapshot anyway.
