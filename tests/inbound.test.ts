@@ -277,8 +277,8 @@ test("buildLookupTool: webhook tool filled from system variables, bearer secret,
   assert.equal(tool.api_schema.url, "https://happy-otter-1.convex.site/cartesia/inbound-lookup");
   assert.equal(tool.api_schema.request_body_schema.properties.caller_id.dynamic_variable, "system__caller_id");
   assert.equal(tool.api_schema.request_body_schema.properties.conversation_id.dynamic_variable, "system__conversation_id");
-  // Cartesia rejects `required` on dynamic_variable parameters (HTTP 400 on create).
-  assert.equal("required" in tool.api_schema.request_body_schema, false);
+  // Cartesia rejects `required` on dynamic_variable parameters (HTTP 400 on create); omitted = all.
+  assert.deepEqual(tool.api_schema.request_body_schema.required, []);
   assert.deepEqual(tool.api_schema.authentication, { mode: "bearer", token: { type: "secret", secret_value: "s3cret" } });
   assert.ok(["auto", "force", "off"].includes(tool.pre_tool_speech));
   assert.ok(tool.response_timeout_secs > 0 && tool.response_timeout_secs <= 120);

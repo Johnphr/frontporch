@@ -303,8 +303,10 @@ export function buildLookupTool(a: { url: string; secret: string }) {
           caller_id: { type: "string", dynamic_variable: "system__caller_id" },
           conversation_id: { type: "string", dynamic_variable: "system__conversation_id" },
         },
-        // No `required`: Cartesia rejects it on dynamic_variable parameters (HTTP 400). A missing
-        // caller_id still reaches http.ts, which answers as an unknown caller (polite goodbye).
+        // Empty on purpose: Cartesia rejects `required` on dynamic_variable parameters (HTTP 400),
+        // and an omitted list counts as every property. A missing caller_id still reaches
+        // http.ts, which answers as an unknown caller (polite goodbye).
+        required: [],
       },
       authentication: { mode: "bearer", token: { type: "secret", secret_value: a.secret } },
     },
