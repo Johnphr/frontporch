@@ -5,6 +5,7 @@
 import { forwardRef, useImperativeHandle, useState } from 'react'
 import { looksLikeAppPassword, signupApi, tidyBlueskyHandle } from '../../api'
 import { errorText } from '../../copy'
+import { branded } from '../../ui/Brand'
 import { Button, ErrorText, TextField } from '../../ui/controls'
 
 const LINK = 'inline-flex min-h-touch-sm flex-wrap items-center gap-x-2 self-start font-bold text-rose underline underline-offset-4 hover:text-rose-dark hover:decoration-2'
@@ -77,7 +78,7 @@ export const BlueskyConnect = forwardRef(function BlueskyConnect({ words: B, lan
         <p className="font-bold">{B.howTitle}</p>
         <ol className="ml-7 flex list-decimal flex-col gap-2">
           {B.how.map((line) => (
-            <li key={line}>{line}</li>
+            <li key={line}>{branded(line)}</li>
           ))}
         </ol>
         <a href="https://bsky.app/settings/app-passwords" target="_blank" rel="noopener noreferrer" className={LINK}>

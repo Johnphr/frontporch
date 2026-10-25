@@ -45,9 +45,11 @@ export function callContext(parts: ContextParts): string {
 
 // First thing he hears; works for a first call and a weekly one. No AI/notes line (team
 // choice): the agent says it's an AI when asked, and the onboarding goal explains the posts.
+// Spoken text writes the name "Memoria", not "MEMORIA", so the voice says the word instead of
+// spelling it out (same in principles.ts and inbound.ts).
 const GREETING: Record<CallLanguage, (name: string) => string> = {
-  en: (name) => `Hi {{first_name}}, it's ${name} from Front Porch. Is now a good time for a little chat?`,
-  es: (name) => `Hola, {{first_name}}, ¿cómo está? Le habla ${name}, de Front Porch. ¿Tiene un momentito para platicar?`,
+  en: (name) => `Hi {{first_name}}, it's ${name} from Memoria. Is now a good time for a little chat?`,
+  es: (name) => `Hola, {{first_name}}, ¿cómo está? Le habla ${name}, de Memoria. ¿Tiene un momentito para platicar?`,
 };
 
 export function characterAgent(c: CharacterConfig): AgentPrompt {

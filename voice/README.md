@@ -67,7 +67,7 @@ Tune in the Cartesia playground if you like, but copy the final values back into
 ## Inbound calls (he calls us)
 
 - **One number, one agent.** A Cartesia number routes inbound calls to exactly one agent
-  (`PATCH /agents/phone-numbers/{id} {agent_id}`), so a single bilingual "Front Porch - inbound"
+  (`PATCH /agents/phone-numbers/{id} {agent_id}`), so a single bilingual "MEMORIA - inbound"
   agent (`convex/lib/prompts/inbound.ts`) answers everyone; outbound calls from the number are
   unaffected. Set it up with `npx convex run cartesiaAgents:syncAgent '{"inbound":true,"assignNumber":true}'`.
 - **Generic greeting, then a lookup.** Nothing about the caller is known before the greeting

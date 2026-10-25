@@ -117,7 +117,7 @@ export function setupCopy({ them, name, host, hostId }) {
       : 'Answer when it rings. There is nothing to prepare.',
     doneSubWeekly: 'There is nothing to prepare.',
     expect: [
-      `${host} says hello and explains how Front Porch works.`,
+      `${host} says hello and explains how MEMORIA works.`,
       `${host} asks about ${your} field, ${your} specialty and how ${your} career went.`,
       them
         ? 'They can take their time, skip any question or end the call whenever they like.'

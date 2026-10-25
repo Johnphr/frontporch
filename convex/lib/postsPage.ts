@@ -271,7 +271,7 @@ export function renderPostsPage(posts: PagePost[], opts: { key: string; check?: 
     : `<p class="empty">No posts yet. Finish a story call (or run pipeline:seedEndedCall with tests/fixtures/story_call.json).</p>`;
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex"><title>Front Porch posts (temporary)</title>
+<meta name="robots" content="noindex"><title>MEMORIA posts (temporary)</title>
 <style>
 :root{--bg:#f6f6f4;--card:#fff;--ink:#1d1d1b;--muted:#6b6b66;--line:#e2e2dd;--good:#1f7a4a;--bad:#a3461f}
 @media (prefers-color-scheme:dark){:root{--bg:#161615;--card:#1f1f1d;--ink:#ecece8;--muted:#a0a09a;--line:#33332f;--good:#5fc08c;--bad:#e5895f}}

@@ -1,4 +1,4 @@
-# Front Porch: demo video script
+# MEMORIA: demo video script
 
 Two minutes for Devpost, plus a 30-second cut. Everything shown here is built. Record it
 ahead of time; don't count on a live call at the judging table.
@@ -23,7 +23,7 @@ The whole loop runs by itself once the env below is set. Nobody types a command 
    up. About a minute later he is `stage: "active"` with a profile, and his question bank is filled.
    - If he hangs up too soon (no real conversation) or the profile comes out empty, he stays in
      onboarding, and his next call (an inbound one too) is another onboarding call.
-2. **He calls the Front Porch number himself.** The call-in line answers as
+2. **He calls the MEMORIA number himself.** The call-in line answers as
    `CARTESIA_INBOUND_HOST` (one voice per Cartesia agent): pick that host for the demo elder in
    step 1, so it's the same voice. The agent looks him up (`/cartesia/inbound-lookup`), greets
    him by name and runs a **story** call with today's plan: the bank's top question, his
@@ -52,7 +52,7 @@ Env on the deployment (once):
 | `CARTESIA_API_KEY`, `CARTESIA_FROM_NUMBER_ID` | set (outbound calls) |
 | `CARTESIA_INBOUND_AGENT_ID`, `CARTESIA_LOOKUP_TOOL_ID`, `CARTESIA_TOOL_SECRET` | the inbound agent, its lookup tool, and the tool's bearer secret |
 
-The Front Porch number must route its inbound calls to the inbound agent in Cartesia (in the
+The MEMORIA number must route its inbound calls to the inbound agent in Cartesia (in the
 Cartesia dashboard, or once with `cartesiaAgents:syncAgent "{inbound:true,assignNumber:true}"`;
 see docs/LIVE-TEST-BLUESKY.md, section 9). The host agents and the inbound agent must be synced
 with the current prompts (same section).
@@ -72,16 +72,16 @@ and replies are read within a minute, not once a day.
 
 | Time | On screen | Voice-over / audio |
 |---|---|---|
-| 0:00–0:08 | Close-up: a phone ringing on a kitchen table. Walter picks up. | *(Call audio)* Pip: "Hi Walter, it's Pip from Front Porch. Is now a good time for a little chat?" |
-| 0:08–0:18 | Walter on the call, smiling. Title card fades in: **Front Porch**. | VO: "Walter spent forty years running a bakery. People ask online every day about what he knows. He's never going to download an app to answer them." |
+| 0:00–0:08 | Close-up: a phone ringing on a kitchen table. Walter picks up. | *(Call audio)* Pip: "Hi Walter, it's Pip from Memoria. Is now a good time for a little chat?" |
+| 0:08–0:18 | Walter on the call, smiling. Title card fades in: **MEMORIA**. | VO: "Walter spent forty years running a bakery. People ask online every day about what he knows. He's never going to download an app to answer them." |
 | 0:18–0:32 | Screen recording of the sign-up page, sped up: name + English, phone number, "Who would you like to call you?" (Pip / Juanito), Connect Bluesky with an app password, "All set", **Call me now**. His granddaughter is typing; Walter is next to her. | VO: "So his granddaughter signs him up once. His name, his number, who should call him: Pip in English, or Juanito in Spanish. His own Bluesky account, with an app password, not his real one. Then: call me now." |
 | 0:32–0:42 | The page's call status: "Your phone is ringing, or you are on the call." Cut to Walter on the phone (first call). | VO: "The first call is just getting to know him: where he started, what he got good at." *(Call audio, short)* Walter: "I started sweeping floors at my uncle's bakery when I was fourteen..." |
 | 0:42–0:55 | Split screen: the real online question (a Reddit or Stack Exchange post, e.g. "How do small bakeries decide what to charge?") next to Walter on the weekly call. | VO: "Every week after that, Pip calls with one good question. Often it's a real one, asked online by a stranger." *(Call audio)* Pip asks it in his own words. Walter answers. |
-| 0:55–1:12 | His Bluesky profile: the new thread, post 1 then scroll through posts 2–4. Zoom on the last post's AI note: "I told this story in a phone interview with Front Porch. It was written up with AI from my own words." | VO: "After the call, his story becomes a short thread on his own account. Three drafts, a judge, a rewrite, and then a fact-check against the call: if he didn't say it, it isn't posted. And every post says it was written up with AI." |
-| 1:12–1:24 | A reader's reply appears under the thread (from a second Bluesky account): "How did you price bread when flour prices jumped?" Likes ticking up. | VO: "Then people answer. Once a day, Front Porch reads the likes and the replies on his posts." |
+| 0:55–1:12 | His Bluesky profile: the new thread, post 1 then scroll through posts 2–4. Zoom on the last post's AI note: "I told this story in a phone interview with MEMORIA. It was written up with AI from my own words." | VO: "After the call, his story becomes a short thread on his own account. Three drafts, a judge, a rewrite, and then a fact-check against the call: if he didn't say it, it isn't posted. And every post says it was written up with AI." |
+| 1:12–1:24 | A reader's reply appears under the thread (from a second Bluesky account): "How did you price bread when flour prices jumped?" Likes ticking up. | VO: "Then people answer. Once a day, MEMORIA reads the likes and the replies on his posts." |
 | 1:24–1:42 | Next weekly call. Walter on the phone, listening, then laughing. | *(Call audio)* Pip: "A reader asked how you priced bread back then, when flour went up. What would you tell her?" Walter starts answering. VO (over the tail): "And the next call starts from them." |
 | 1:42–1:55 | A short call. Walter: "Pip, please take my last post down." Pip: "Of course. I'll have your most recent post taken down right after our call." Cut to his Bluesky profile refreshing: the thread is gone. | VO: "And if he changes his mind, he just says so. No passwords, no menus. It comes down after the call." |
-| 1:55–2:00 | End card: **Front Porch**. "He talks on the phone. His stories find readers." Small line: Convex · Cartesia · OpenAI · Bluesky. | VO: "Front Porch. His stories, in his words, on his own accounts." |
+| 1:55–2:00 | End card: **MEMORIA**. "He talks on the phone. His stories find readers." Small line: Convex · Cartesia · OpenAI · Bluesky. | VO: "MEMORIA. His stories, in his words, on his own accounts." |
 
 About 200 words of voice-over (about 80 seconds at an easy pace); the rest is call audio. If it runs long, trim the 0:55 line first.
 
@@ -95,11 +95,11 @@ review), or that the page verifies his phone (the SMS code screen is switched of
 
 | Time | On screen | Voice-over / audio |
 |---|---|---|
-| 0:00–0:05 | Phone rings, Walter answers. | Pip: "Hi Walter, it's Pip from Front Porch." |
+| 0:00–0:05 | Phone rings, Walter answers. | Pip: "Hi Walter, it's Pip from Memoria." |
 | 0:05–0:12 | Sign-up page, very fast: name, phone, Pip, Bluesky, Call me now. | VO: "Sign him up once. Then an AI host calls him every week with one good question." |
 | 0:12–0:20 | His Bluesky thread, ending on the AI note. | VO: "His story becomes a fact-checked thread on his own account, in his words, marked as written with AI." |
 | 0:20–0:26 | Reader reply, then Pip on the next call: "A reader asked how you priced bread back then..." | VO: "Readers' questions come back on the next call." |
-| 0:26–0:30 | "Pip, please take my last post down." End card. | VO: "And he can take any story back, just by asking. Front Porch." |
+| 0:26–0:30 | "Pip, please take my last post down." End card. | VO: "And he can take any story back, just by asking. MEMORIA." |
 
 Note for the last line: by phone only his **most recent** post can come down. If you want to be
 exact, say "he can take his last post back, just by asking."

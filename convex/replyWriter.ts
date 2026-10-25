@@ -30,7 +30,7 @@ Write a helpful, human reply:
 - His voice and plain phrases; fix only grammar and obvious speech-to-text errors.
 - Platform tone: reddit = conversational and direct; bluesky = one or two short sentences.
 - Length: 80-200 words, plain text, short paragraphs. On bluesky: at most 240 characters in total (a hard limit), no line breaks needed. No markdown headings, no hashtags, no emojis.
-- No links, no self-promotion, no mention of LinkedIn, Front Porch, interviews or AI (a disclosure line is added later).
+- No links, no self-promotion, no mention of LinkedIn, MEMORIA, interviews or AI (a disclosure line is added later).
 - No medical, legal, tax or investment advice. No private details about other people.
 - Write in the language of the thread (translate his words faithfully if he spoke another language). Set "language" to "en" or "es" for the reply's language.
 

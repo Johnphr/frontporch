@@ -1,4 +1,4 @@
-// Inbound calls: he calls the Front Porch number; the inbound agent (lib/prompts/inbound.ts)
+// Inbound calls: he calls the MEMORIA number; the inbound agent (lib/prompts/inbound.ts)
 // answers and calls the lookup_caller tool, which reaches http.ts -> handleLookup here.
 //
 //   handleLookup      1. a repeated lookup for the same call gets the exact same answer back

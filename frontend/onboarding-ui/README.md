@@ -1,4 +1,4 @@
-# Front Porch web app
+# MEMORIA web app
 
 React 18 + Vite + Tailwind CSS 3, plain JSX. "Large & Calm" design: big type, 64px buttons,
 A / A+ / A++ text size. English page (error and connect copy also in Spanish). Talks to `convex/signup.ts` and `convex/account.ts`.

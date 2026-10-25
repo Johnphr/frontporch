@@ -10,6 +10,7 @@ import { loadSession } from '../../lib/session'
 import { GOOD, LIVE, useCallStatus } from '../../lib/useCallStatus'
 import { CheckMark, RingingArt } from '../../art/setup'
 import { CallUsLine } from '../../ui/CallUsLine'
+import { branded } from '../../ui/Brand'
 import { Button, Card, ErrorText } from '../../ui/controls'
 import { placeCall } from './finish'
 
@@ -139,7 +140,7 @@ export default function Done({ words, lang = 'en', host, elderId, token, phone, 
         {words.expect.map((line) => (
           <li key={line} className="flex items-start gap-4">
             <CheckMark />
-            <span>{line}</span>
+            <span>{branded(line)}</span>
           </li>
         ))}
       </ul>

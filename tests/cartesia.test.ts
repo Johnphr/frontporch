@@ -33,7 +33,7 @@ test("normalizeTranscript maps roles, drops tool/system/empty turns, merges same
   assert.deepEqual(normalizeTranscript(call.transcript), [
     {
       role: "pip",
-      text: "Hi Walter, this is Pip, an AI assistant from Front Porch. Tell me about your very first job.",
+      text: "Hi Walter, this is Pip, an AI assistant from Memoria. Tell me about your very first job.",
     },
     { role: "elder", text: "Well, I started at Boeing in 1968, riveting wing panels on the 747 line." },
     { role: "pip", text: "What did that teach you?" },

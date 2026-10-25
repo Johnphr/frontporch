@@ -666,7 +666,7 @@ function reported(before: string, after: string): boolean {
 
 // After the post: only words that keep it about the online post ("the post on the wall" is not).
 const TAIL_OK_EN =
-  /^(?:\s*(?:please|for me|right now|right away|now|today|anymore|again|too|as well|already|then|if you (?:can|could)|when you can|online|up|down|off))*\s*(?:$|about\b|from (?:last|this|the other|the last|yesterday|earlier|before|a few|bluesky|reddit|the internet|my (?:page|account|profile)|online|social media)\b|(?:that |which )?(?:you|we|they|pip|juanito|front porch|y'all) (?:put|posted|wrote|shared|made|did|sent)\b|on (?:bluesky|reddit|the internet|line|my (?:page|account|profile)|social media|facebook)\b)/;
+  /^(?:\s*(?:please|for me|right now|right away|now|today|anymore|again|too|as well|already|then|if you (?:can|could)|when you can|online|up|down|off))*\s*(?:$|about\b|from (?:last|this|the other|the last|yesterday|earlier|before|a few|bluesky|reddit|the internet|my (?:page|account|profile)|online|social media)\b|(?:that |which )?(?:you|we|they|pip|juanito|front porch|memoria|y'all) (?:put|posted|wrote|shared|made|did|sent)\b|on (?:bluesky|reddit|the internet|line|my (?:page|account|profile)|social media|facebook)\b)/;
 const TAIL_OK_ES =
   /^(?:\s*(?:por favor|ahora|ya|hoy|tambien|si puede|cuando pueda|mas reciente))*\s*(?:$|de (?:la semana pasada|la otra vez|la ultima vez|ayer|hoy|antier|bluesky|internet|reddit)\b|que\b|sobre\b|acerca\b|en (?:internet|bluesky|reddit|linea)\b)/;
 

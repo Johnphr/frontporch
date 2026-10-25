@@ -20,7 +20,7 @@ const EN = {
     howTitle: 'How to get one (about 2 minutes):',
     how: [
       'Open Bluesky and go to Settings → Privacy and security → App passwords.',
-      'Tap “Add App Password” and give it a name, for example: Front Porch. Leave direct messages off.',
+      'Tap “Add App Password” and give it a name, for example: MEMORIA. Leave direct messages off.',
       'Copy the password it shows and paste it below.',
     ],
     link: 'Open app passwords in Bluesky',
@@ -110,7 +110,7 @@ const ES = {
     howTitle: 'Cómo obtenerla (unos 2 minutos):',
     how: [
       'Abra Bluesky y vaya a Configuración → Privacidad y seguridad → Contraseñas de aplicación.',
-      'Toque «Agregar contraseña de aplicación» y póngale un nombre, por ejemplo: Front Porch. Deje apagados los mensajes directos.',
+      'Toque «Agregar contraseña de aplicación» y póngale un nombre, por ejemplo: MEMORIA. Deje apagados los mensajes directos.',
       'Copie la contraseña que aparece y péguela aquí abajo.',
     ],
     link: 'Abrir contraseñas de aplicación en Bluesky',

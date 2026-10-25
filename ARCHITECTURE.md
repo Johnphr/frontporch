@@ -1,4 +1,4 @@
-# Front Porch — Architecture (v2)
+# MEMORIA — Architecture (v2)
 
 > **Status:** posting to Bluesky, Threads and X (`publish.ts` + `postGuard.ts`; X behind `X_POSTING`), undo, Apify scraping (`apify.ts`), the
 > onboarding call (slice 1) and the story follow-up call (slice 2: story agent + `startCall` story
@@ -227,7 +227,7 @@ everyone**: `CARTESIA_INBOUND_HOST` (a character id, default `daniel`; `diana` i
 sets its voice, language and persona. **For the demo, set `CARTESIA_INBOUND_HOST` to the host
 the demo elder picks, then re-sync `cartesiaAgents:syncAgent '{"inbound":true}'`.** An elder
 whose host is someone else hears that host introduce itself as his host's colleague
-("it's Daniel, Oscar's colleague at Front Porch"); it never claims to be a voice it isn't.
+("it's Daniel, Oscar's colleague at MEMORIA"); it never claims to be a voice it isn't.
 
 Cartesia has no pre-call hook, so the agent greets with fixed bilingual text ("one moment while
 I pull up your notes") and first calls the `lookup_caller` webhook tool (filled from

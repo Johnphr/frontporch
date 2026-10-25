@@ -11,7 +11,7 @@ The whole loop runs by itself once the env below is set. Nobody types a command 
    up. About a minute later he is `stage: "active"` with a profile, and his question bank is filled.
    - If he hangs up too soon (no real conversation) or the profile comes out empty, he stays in
      onboarding, and his next call (an inbound one too) is another onboarding call.
-2. **He calls the Front Porch number himself.** The call-in line answers as
+2. **He calls the MEMORIA number himself.** The call-in line answers as
    `CARTESIA_INBOUND_HOST` (one voice per Cartesia agent): **pick that host for the demo elder
    in step 1**, so he hears the same voice that calls him. The agent looks him up
    (`/cartesia/inbound-lookup`), greets him by name and runs a **story** call with today's
@@ -43,7 +43,7 @@ Env on the deployment (once):
 | `CARTESIA_INBOUND_AGENT_ID`, `CARTESIA_LOOKUP_TOOL_ID`, `CARTESIA_TOOL_SECRET` | the inbound agent, its lookup tool, and the tool's bearer secret |
 | `CARTESIA_INBOUND_HOST` | the host the demo elder picks (`daniel`, `oscar`, `victoria`, `diana`): the call-in line's voice. Its `CARTESIA_VOICE_ID_<HOST>` must be set. Re-sync `{inbound:true}` after changing it |
 
-The Front Porch number must route its inbound calls to the inbound agent in Cartesia (in the
+The MEMORIA number must route its inbound calls to the inbound agent in Cartesia (in the
 Cartesia dashboard, or once with `cartesiaAgents:syncAgent "{inbound:true,assignNumber:true}"`,
 section 9). The host agents and the inbound agent must be synced with the current prompts
 (section 9). **For the demo, set `CARTESIA_INBOUND_HOST` to the host the demo elder picks, then
@@ -165,7 +165,7 @@ Bluesky sends.
 Then make an app password on the elder account:
 
 1. Go to Settings → Privacy and security → App passwords → Add App Password.
-2. Name it `Front Porch test`.
+2. Name it `MEMORIA test`.
 3. Leave **"Allow access to your direct messages" unchecked.** We refuse an app password with DM
    access (`privileged_app_password`), and also his main password.
 4. Copy the `xxxx-xxxx-xxxx-xxxx` password. Bluesky shows it only once.
@@ -354,7 +354,7 @@ The `/posts` page also prints the right command for each post.
 - **bsky.app:** open the `url`. You should see a 3–5 post thread from the test account, each post
   replying to the one before, with hashtags as links.
 - **The AI note:** the last post ends with
-  *"I told this story in a phone interview with Front Porch. It was written up with AI from my own words."*
+  *"I told this story in a phone interview with MEMORIA. It was written up with AI from my own words."*
 - **`/posts`:** the Bluesky row shows Published, with the link.
 
 ## 6. Feedback test (do this before undo)

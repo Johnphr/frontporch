@@ -2,6 +2,7 @@
 import { Avatar, FamilyArt, PorchArt } from '../art/landing2'
 import { FAMILY, FINAL, POST } from '../copy/landing'
 import { Button, cx } from '../ui/controls'
+import { branded } from '../ui/Brand'
 
 export const WRAP = 'mx-auto w-full max-w-[70rem] px-5 sm:px-8'
 export const STACK = 'flex flex-col items-start gap-6'
@@ -63,7 +64,7 @@ export function ExamplePost() {
               <p key={para}>{para}</p>
             ))}
           </div>
-          <p className="border-t border-line pt-4 text-sm italic">{POST.note}</p>
+          <p className="border-t border-line pt-4 text-sm italic">{branded(POST.note)}</p>
         </article>
       </Split>
     </Band>
