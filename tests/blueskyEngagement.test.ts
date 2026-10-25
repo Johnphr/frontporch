@@ -42,11 +42,11 @@ function node(uri: string, did: string, text: string, extra: Record<string, unkn
   };
 }
 
-test("parseThread: likes + reposts on his posts only, replies by others, blocked/notFound skipped", () => {
+test("parseThread: likes + reposts on the root post only, replies by others, blocked/notFound skipped", () => {
   const e = parseThread(fixture("bluesky_thread.json"), WALT);
-  // root 12+3, post 2 4+1, post 3 2+0, his reply to Carol 1+0. Carol's 5 likes are hers, not his.
-  assert.equal(e.likes, 19);
-  assert.equal(e.reposts, 4);
+  // Root 12+3 only: post 2 (4+1), post 3 and his reply aren't added (same readers, counted again).
+  assert.equal(e.likes, 12);
+  assert.equal(e.reposts, 3);
   assert.deepEqual(e.ownUris.sort(), [
     `at://${WALT}/app.bsky.feed.post/3lpost2`,
     `at://${WALT}/app.bsky.feed.post/3lpost3`,
@@ -99,7 +99,7 @@ test("threadEngagement reads the public AppView without a login", async () => {
   assert.equal(url.searchParams.get("uri"), ROOT);
   assert.equal(url.searchParams.get("depth"), "6");
   assert.deepEqual(calls[0].headers, {});
-  assert.equal(e.likes, 19);
+  assert.equal(e.likes, 12);
 });
 
 test("threadEngagement with a session uses his PDS and token", async () => {
@@ -125,8 +125,8 @@ test("threadEngagement reads a long thread's tail from the first record the root
   const e = await threadEngagement(fetchFn, records);
   assert.equal(calls.length, 2);
   assert.equal(new URL(calls[1].url).searchParams.get("uri"), p(3));
-  assert.equal(e.likes, 13);
-  assert.equal(e.reposts, 1);
+  assert.equal(e.likes, 10, "root likes only, not the tail's");
+  assert.equal(e.reposts, 0);
   assert.deepEqual(e.replies, [{ author: "@dee.bsky.social", text: "When did you retire?" }]);
 });
 
@@ -187,7 +187,7 @@ test("toUpsertArgs maps a thread to engagement.upsert (likes + reposts, replies 
     linkedinUrl: "https://bsky.app/profile/walt.bsky.social/post/3lroot",
     platform: "bluesky",
     postId: "post1",
-    reactions: 23,
+    reactions: 15,
     comments: e.replies,
   });
   // No stored url: built from the root uri.
@@ -205,4 +205,55 @@ test("a Bluesky scrape counts as changed only when likes/reposts or replies chan
   assert.equal(nextSnapshot(snap, { ...snap, reactions: snap.reactions + 1 }).changed, true, "a new like");
   const withReply = [...snap.comments, { author: "@eve.bsky.social", text: "What flour did you use?" }];
   assert.equal(nextSnapshot(snap, { reactions: snap.reactions, comments: withReply }).changed, true, "a new reply");
+});
+
+test("parseThread: 8 readers liking all 5 posts count as 8, not 40", () => {
+  const p = (n: number) => `at://${WALT}/app.bsky.feed.post/p${n}`;
+  let tail: unknown[] = [];
+  for (let n = 5; n >= 2; n--) tail = [node(p(n), WALT, String(n), { likeCount: 8 }, tail)];
+  const e = parseThread({ thread: node(ROOT, WALT, "1", { likeCount: 8 }, tail) }, WALT);
+  assert.equal(e.ownUris.length, 5);
+  assert.equal(toUpsertArgs("elder1", pub(), e).reactions, 8);
+});
+
+test("parseThread: skips replies he hid and replies with moderation labels", () => {
+  const r = (id: string, text: string, extra: Record<string, unknown> = {}, replies: unknown[] = []) =>
+    node(`at://did:plc:${id}/app.bsky.feed.post/${id}`, `did:plc:${id}`, text, extra, replies);
+  const json = {
+    thread: node(ROOT, WALT, "root", {}, [
+      r("ok", "Nice story"),
+      r("hid", "Hidden one", {}, [r("under", "Under the hidden one")]),
+      r("spam", "Buy now", { labels: [{ val: "spam" }] }),
+      r("rude", "Rude one", { author: { did: "did:plc:rude", handle: "rude.bsky.social", labels: [{ val: "rude" }] } }),
+      r("neg", "Label taken back", { labels: [{ val: "!warn", neg: true }] }),
+      r("self", "Harmless self label", { labels: [{ val: "bot" }] }),
+    ]),
+    threadgate: { uri: "at://x/app.bsky.feed.threadgate/1", record: { hiddenReplies: ["at://did:plc:hid/app.bsky.feed.post/hid"] } },
+  };
+  const e = parseThread(json, WALT);
+  assert.deepEqual(
+    e.replies.map((x) => x.text),
+    ["Nice story", "Label taken back", "Harmless self label"],
+  );
+  assert.equal(e.repliesSeen, 3);
+});
+
+test("parseThread: replies sorted oldest first (stable) before the cap, so the set doesn't churn", () => {
+  const at = (min: number) => new Date(NOW + min * 60_000).toISOString();
+  const r = (i: number, indexedAt?: string) =>
+    node(`at://did:plc:r${i}/app.bsky.feed.post/${i}`, `did:plc:r${i}`, `reply ${i}`, indexedAt ? { indexedAt } : {});
+  // Breadth first would give 0,1,2,3; by time: 2 (oldest), then 0 and 3 (same time, keep order), then 1 (no time).
+  const json = { thread: node(ROOT, WALT, "root", {}, [r(0, at(5)), r(1), r(2, at(1)), r(3, at(5))]) };
+  assert.deepEqual(
+    parseThread(json, WALT).replies.map((x) => x.text),
+    ["reply 2", "reply 0", "reply 3", "reply 1"],
+  );
+  assert.deepEqual(
+    parseThread(json, WALT, { maxReplies: 2 }).replies.map((x) => x.text),
+    ["reply 2", "reply 0"],
+    "the cap keeps the oldest",
+  );
+  // A new reply tomorrow doesn't push out today's.
+  const later = { thread: node(ROOT, WALT, "root", {}, [r(9, at(9)), ...json.thread.replies]) };
+  assert.deepEqual(parseThread(later, WALT, { maxReplies: 2 }).replies.map((x) => x.text), ["reply 2", "reply 0"]);
 });

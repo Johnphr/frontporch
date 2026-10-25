@@ -216,7 +216,7 @@ export default defineSchema({
     postId: v.optional(v.id("posts")),
     platform: v.optional(v.union(v.literal("linkedin"), v.literal("bluesky"), v.literal("threads"), v.literal("x"))), // missing = linkedin
     linkedinUrl: v.string(),
-    reactions: v.number(), // Bluesky: likes + reposts on his posts in the thread
+    reactions: v.number(), // Bluesky: likes + reposts on the thread's root post
     comments: v.array(v.object({ author: v.string(), text: v.string() })), // Bluesky: replies by others
     scrapedAt: v.number(), // epoch ms, last scrape
     changedAt: v.optional(v.number()), // epoch ms, last time reactions/comments changed

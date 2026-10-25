@@ -1,11 +1,12 @@
 // Reader engagement on his Bluesky threads, from app.bsky.feed.getPostThread.
 //
-//   parseThread       pure: likes + reposts on HIS posts, replies by OTHERS (capped)
+//   parseThread       pure: likes + reposts on the ROOT post, replies by OTHERS (oldest first, capped)
 //   fetchPostThread   one getPostThread call (public AppView by default, or his PDS with a session)
 //   threadEngagement  root thread, plus any of his records the root read didn't reach (long threads)
 //   toUpsertArgs      result -> engagement.upsert args
 //   publicationsToScrape  which postPublications rows to read (posted, not removed, recent)
 //
+// Replies he hid (threadgate hiddenReplies) and replies carrying moderation labels are skipped.
 // No Convex imports: unit-tested with Node. Errors carry HTTP statuses only, never tokens.
 
 import { BlueskyHttpError, type FetchFn } from "./blueskyClient.ts";
@@ -20,11 +21,27 @@ export const MAX_AUTHOR_CHARS = 80;
 export const SCRAPE_WINDOW_DAYS = 30;
 /** Extra getPostThread calls for long threads whose tail the root read didn't reach. */
 export const MAX_EXTRA_READS = 3;
+/** Labels (on the reply or its author) that keep a reply out of the bank. */
+export const MODERATION_LABELS = new Set([
+  "!hide",
+  "!warn",
+  "spam",
+  "porn",
+  "sexual",
+  "nudity",
+  "graphic-media",
+  "gore",
+  "rude",
+  "intolerant",
+  "threat",
+]);
 
 export type Reply = { author: string; text: string };
 
 export type ThreadEngagement = {
+  /** likes on the root post only (summing every post counts one reader many times) */
   likes: number;
+  /** reposts of the root post */
   reposts: number;
   replies: Reply[];
   /** replies by others seen, before the cap */
@@ -71,40 +88,62 @@ function postOf(node: unknown): Obj | undefined {
   return isObj(node.post) && typeof node.post.uri === "string" ? node.post : undefined;
 }
 
+/** Reply uris he hid on this thread (threadgate record). */
+export function hiddenRepliesOf(json: unknown): Set<string> {
+  const gate = isObj(json) && isObj(json.threadgate) ? json.threadgate : undefined;
+  const list = gate && isObj(gate.record) ? gate.record.hiddenReplies : undefined;
+  return new Set(Array.isArray(list) ? list.filter((u): u is string => typeof u === "string") : []);
+}
+
+/** Does a post or its author carry a moderation label? Negated labels (neg: true) don't count. */
+export function hasModerationLabel(post: Obj): boolean {
+  const author = isObj(post.author) ? post.author : {};
+  const labels = [post.labels, author.labels].flatMap((l) => (Array.isArray(l) ? l : []));
+  return labels.some((l) => isObj(l) && l.neg !== true && MODERATION_LABELS.has(str(l.val).toLowerCase()));
+}
+
+/** When a reply was posted (indexedAt, else createdAt); unknown sorts last. */
+function postedAtMs(post: Obj): number {
+  const record = isObj(post.record) ? post.record : {};
+  for (const raw of [post.indexedAt, record.createdAt]) {
+    const ms = Date.parse(str(raw));
+    if (Number.isFinite(ms)) return ms;
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
+type TimedReply = Reply & { at: number };
+type Walk = { likes: number; reposts: number; replies: TimedReply[]; ownUris: string[] };
+
 /**
- * Walk a getPostThread response (breadth first, so direct replies come before nested ones).
- * `ownerDid` is him (the repo of the root uri). `skip` = uris already counted by an earlier read.
- * Parents above the requested post are ignored.
+ * One getPostThread response, breadth first. Likes/reposts come from the requested post only
+ * (if it's his). Blocked, deleted, hidden or labelled nodes are skipped with everything under them.
  */
-export function parseThread(
-  json: unknown,
-  ownerDid: string,
-  opts: { maxReplies?: number; skip?: Set<string> } = {},
-): ThreadEngagement {
-  const maxReplies = opts.maxReplies ?? MAX_REPLIES;
-  const seen = new Set(opts.skip ?? []);
-  const out: ThreadEngagement = { likes: 0, reposts: 0, replies: [], repliesSeen: 0, ownUris: [] };
-  const root = isObj(json) ? json.thread : undefined;
-  const queue: unknown[] = [root];
+function walkThread(json: unknown, ownerDid: string, seen: Set<string>, hidden: Set<string>): Walk {
+  const out: Walk = { likes: 0, reposts: 0, replies: [], ownUris: [] };
+  const isHim = (author: Obj) => !!ownerDid && (author.did === ownerDid || author.handle === ownerDid);
+  const queue: unknown[] = [isObj(json) ? json.thread : undefined];
+  let top = true;
   while (queue.length) {
     const node = queue.shift();
     const post = postOf(node);
-    if (!post) continue; // blocked, deleted or not found: skip it and everything under it
+    const atTop = top;
+    top = false;
+    if (!post) continue;
     const uri = str(post.uri);
     if (seen.has(uri)) continue;
     seen.add(uri);
     const author = isObj(post.author) ? post.author : {};
-    const isHim = !!ownerDid && (author.did === ownerDid || author.handle === ownerDid);
-    if (isHim) {
-      out.likes += count(post.likeCount);
-      out.reposts += count(post.repostCount);
+    if (isHim(author)) {
+      if (atTop) {
+        out.likes = count(post.likeCount);
+        out.reposts = count(post.repostCount);
+      }
       out.ownUris.push(uri);
     } else {
+      if (hidden.has(uri) || hasModerationLabel(post)) continue; // and its replies
       const text = clip(str(isObj(post.record) ? post.record.text : ""), MAX_REPLY_CHARS);
-      if (text) {
-        out.repliesSeen += 1;
-        if (out.replies.length < maxReplies) out.replies.push({ author: authorLabel(author), text });
-      }
+      if (text) out.replies.push({ author: authorLabel(author), text, at: postedAtMs(post) });
     }
     const replies = isObj(node) ? node.replies : undefined;
     if (Array.isArray(replies)) queue.push(...replies);
@@ -112,15 +151,31 @@ export function parseThread(
   return out;
 }
 
-/** Add a later read (a long thread's tail) to the first one, respecting the reply cap. */
-export function mergeEngagement(a: ThreadEngagement, b: ThreadEngagement, maxReplies = MAX_REPLIES): ThreadEngagement {
+/** Counts from the first (root) read; replies from all reads, oldest first (stable), capped. */
+function finish(walks: Walk[], maxReplies: number): ThreadEngagement {
+  const all = walks.flatMap((w) => w.replies);
+  const sorted = all.map((r, i) => ({ r, i })).sort((a, b) => a.r.at - b.r.at || a.i - b.i);
   return {
-    likes: a.likes + b.likes,
-    reposts: a.reposts + b.reposts,
-    replies: [...a.replies, ...b.replies].slice(0, maxReplies),
-    repliesSeen: a.repliesSeen + b.repliesSeen,
-    ownUris: [...a.ownUris, ...b.ownUris],
+    likes: walks[0]?.likes ?? 0,
+    reposts: walks[0]?.reposts ?? 0,
+    replies: sorted.slice(0, maxReplies).map(({ r }) => ({ author: r.author, text: r.text })),
+    repliesSeen: all.length,
+    ownUris: walks.flatMap((w) => w.ownUris),
   };
+}
+
+/**
+ * Parse one getPostThread response. `ownerDid` is him (the repo of the root uri).
+ * `skip` = uris already counted by an earlier read; `hidden` = extra hidden reply uris.
+ * Parents above the requested post are ignored.
+ */
+export function parseThread(
+  json: unknown,
+  ownerDid: string,
+  opts: { maxReplies?: number; skip?: Set<string>; hidden?: Set<string> } = {},
+): ThreadEngagement {
+  const hidden = new Set([...(opts.hidden ?? []), ...hiddenRepliesOf(json)]);
+  return finish([walkThread(json, ownerDid, new Set(opts.skip ?? []), hidden)], opts.maxReplies ?? MAX_REPLIES);
 }
 
 // ---------- fetching ----------
@@ -161,22 +216,25 @@ export async function threadEngagement(
   const rootUri = records[0]?.uri ?? "";
   const owner = repoOf(rootUri);
   if (!owner) throw new Error("Bluesky publication has no root at:// uri");
-  let result = parseThread(await fetchPostThread(fetchFn, rootUri, source), owner);
-  if (result.ownUris.length === 0) throw new BlueskyHttpError("getPostThread", 404, "NotFound"); // root came back blocked/not found
+  const seen = new Set<string>(); // every uri read so far (his posts and replies)
+  const rootJson = await fetchPostThread(fetchFn, rootUri, source);
+  const hidden = hiddenRepliesOf(rootJson); // the gate lives on the root
+  const walks = [walkThread(rootJson, owner, seen, hidden)];
+  if (walks[0].ownUris.length === 0) throw new BlueskyHttpError("getPostThread", 404, "NotFound"); // root came back blocked/not found
   for (let extra = 0; extra < MAX_EXTRA_READS; extra++) {
-    const seen = new Set(result.ownUris);
     const next = records.find((r) => !seen.has(r.uri));
     if (!next) break;
-    let more: ThreadEngagement;
+    let more: Walk;
     try {
-      more = parseThread(await fetchPostThread(fetchFn, next.uri, source), owner, { skip: seen });
+      const json = await fetchPostThread(fetchFn, next.uri, source);
+      more = walkThread(json, owner, seen, new Set([...hidden, ...hiddenRepliesOf(json)]));
     } catch {
       break; // the tail is extra: keep what the root read found
     }
     if (more.ownUris.length === 0) break;
-    result = mergeEngagement(result, more);
+    walks.push(more);
   }
-  return result;
+  return finish(walks, MAX_REPLIES);
 }
 
 // ---------- mapping ----------
@@ -215,7 +273,7 @@ export type UpsertArgs = {
   comments: Reply[];
 };
 
-/** engagement.upsert args: reactions = likes + reposts on his posts, comments = replies by others. */
+/** engagement.upsert args: reactions = likes + reposts on the root post, comments = replies by others. */
 export function toUpsertArgs(elderId: string, pub: BlueskyPublication, e: ThreadEngagement): UpsertArgs {
   return {
     elderId,
