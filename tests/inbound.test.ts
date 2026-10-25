@@ -17,6 +17,8 @@ import {
   inboundPlanToMark,
   inboundSyncMode,
   isE164,
+  callbackResponse,
+  inboundNextStep,
   knownCallerResponse,
   lookupErrorResponse,
   lookupLogLine,
@@ -275,8 +277,8 @@ test("buildLookupTool: webhook tool filled from system variables, bearer secret,
   assert.equal(tool.api_schema.url, "https://happy-otter-1.convex.site/cartesia/inbound-lookup");
   assert.equal(tool.api_schema.request_body_schema.properties.caller_id.dynamic_variable, "system__caller_id");
   assert.equal(tool.api_schema.request_body_schema.properties.conversation_id.dynamic_variable, "system__conversation_id");
-  // Only caller_id is required: a required variable Cartesia can't fill skips the request entirely.
-  assert.deepEqual(tool.api_schema.request_body_schema.required, ["caller_id"]);
+  // Cartesia rejects `required` on dynamic_variable parameters (HTTP 400 on create).
+  assert.equal("required" in tool.api_schema.request_body_schema, false);
   assert.deepEqual(tool.api_schema.authentication, { mode: "bearer", token: { type: "secret", secret_value: "s3cret" } });
   assert.ok(["auto", "force", "off"].includes(tool.pre_tool_speech));
   assert.ok(tool.response_timeout_secs > 0 && tool.response_timeout_secs <= 120);
@@ -393,17 +395,18 @@ test("inbound prompt: the agent IS the call-in host (voice, language, persona) a
   assert.match(diana.instructions, /speak Spanish unless the caller speaks English/);
 });
 
-test("inbound prompt: after caller_known yes it greets by name, says whose colleague it is, recalls, shares feedback, asks the question", () => {
+test("inbound prompt: next_step talk greets by name, recalls, shares feedback, asks the question; callback hands off", () => {
   const text = inboundAgent(getCharacter("daniel")!).instructions;
-  // Reads every field the lookup sends (lib/inbound knownCallerResponse).
-  for (const field of ["caller_known", "speak_as", "his_host", "same_host", "language", "call_kind", "first_name", "goal", "context"]) {
+  // Reads every field the lookup sends (lib/inbound knownCallerResponse, callbackResponse).
+  for (const field of ["caller_known", "speak_as", "his_host", "same_host", "next_step", "language", "call_kind", "first_name", "goal", "context"]) {
     assert.match(text, new RegExp(`^- ${field}:`, "m"), field);
   }
-  const shape = text.slice(text.indexOf('Shape of the call (caller_known "yes")'));
+  const shape = text.slice(text.indexOf('Shape of the call (next_step "talk")'));
   const step = (n: number) => shape.slice(shape.indexOf(`\n${n}. `), shape.indexOf(`\n${n + 1}. `));
   assert.match(step(1), /Greet them warmly by first_name and thank them for calling in/);
-  assert.match(step(1), /If same_host is "no", say once, right here, that you're Daniel, his_host's colleague at Memoria/);
-  assert.match(step(1), /If same_host is "yes", just carry on as yourself/);
+  assert.doesNotMatch(text, /colleague at Memoria/); // no conversation as someone else's stand-in
+  assert.match(text, /next_step is "callback"[\s\S]*his_host will call them right back[\s\S]*end the call/);
+  assert.match(text, /you pass them on; you never become them/);
   assert.match(step(2), /<memories>.*"Last time you told me about\.\.\."/);
   assert.match(step(3), /If there's <feedback>, share it in one warm sentence/);
   assert.match(step(4), /the question in <question>/);
@@ -413,6 +416,22 @@ test("inbound prompt: after caller_known yes it greets by name, says whose colle
   assert.match(text, /caller_known is "no": you don't recognize this number/);
   assert.match(text, /never confirm or deny whether a particular person is a member/);
   assert.match(text, /caller_known is "error" or the tool fails: apologize/);
+});
+
+test("inboundNextStep: talk only when his host is the line's host; else callback", () => {
+  assert.equal(inboundNextStep("victoria", "victoria"), "talk");
+  for (const id of ["daniel", "oscar", "diana"]) assert.equal(inboundNextStep("victoria", id), "callback", id);
+});
+
+test("callbackResponse: his host + language + first name only, no goal or context", () => {
+  const res = callbackResponse({ kind: "story", lang: "es", character: { name: "Diana" }, host: { name: "Victoria" }, firstName: "Juan" });
+  assert.deepEqual(res, {
+    caller_known: "yes", call_kind: "story", language: "es", speak_as: "Victoria",
+    his_host: "Diana", same_host: "no", next_step: "callback", first_name: "Juan",
+  });
+  assert.equal(lookupOutcome(res), "known");
+  assert.equal(callbackResponse({ kind: "onboarding", lang: "en", character: { name: "Daniel" }, host: { name: "Victoria" }, firstName: " " }).first_name, "none");
+  assert.equal(knownCallerResponse({ kind: "story", lang: "en", character: { name: "Victoria" }, variables: {} }).next_step, "talk");
 });
 
 test("inbound story lookup: today's feedback line, the reader's question and memories reach the agent", () => {

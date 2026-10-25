@@ -195,8 +195,9 @@ answers every call **as one host**: `CARTESIA_INBOUND_HOST` (character id, defau
 It greets generically, then calls the `lookup_caller` tool → `POST /cartesia/inbound-lookup`
 (`http.ts`) → `inbound.handleLookup`: his number → elder → the same plan an outbound call would
 use (onboarding or story, his language), a `calls` row with `direction: "inbound"`, and the usual
-poll → `pipeline.processCall`. If his host is a different one, the line's host says it's his
-colleague; it never claims to be him. Unknown numbers get a polite goodbye and no row. A
+poll → `pipeline.processCall`. If his host is a different one, the line's host says his host
+will call right back and hangs up; his host's agent calls him ~20 s later (`recordHandoff` →
+`cartesia.startCall`). It never claims to be him. Unknown numbers get a polite goodbye and no row. A
 10-minute cron (`inbound.syncInboundCalls`) records any finished inbound call the lookup missed.
 
 1. Once (needs the HTTPS site URL; Convex gives functions `CONVEX_SITE_URL`, else set

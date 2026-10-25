@@ -53,6 +53,8 @@ test("loop: pauses after 3 his-side misses in a row; our-side failures don't cou
   assert.equal(missedInARow(ours), 3);
   // dialled but status lost counts
   assert.equal(missedInARow([row("poll_error", 5), row("poll_timeout", 9), row("start_unknown", 200), done(300)]), 3);
+  // he called in and the line's host handed off to his host's callback: not a miss
+  assert.equal(missedInARow([miss(5), row("no_conversation", 6, "handoff"), miss(20)]), 2);
 });
 
 test("loop: a recent request blocks a second one; old rows fall back to lastPolledAt", () => {
