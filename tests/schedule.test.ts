@@ -78,6 +78,7 @@ test("half-hour timezones: the hourly cron at :00 UTC still lands in his call ho
 test("skips elders that aren't set up or aren't in a calling stage", () => {
   const now = at("2026-10-25T17:00:00Z");
   assert.match(dueActions({ ...base, stage: undefined }, now).skipReason ?? "", /not onboarding or active/);
+  assert.match(dueActions({ ...base, stage: "archived" }, now).skipReason ?? "", /not onboarding or active/);
   assert.match(dueActions({ ...base, timezone: undefined }, now).skipReason ?? "", /not set/);
   assert.match(dueActions({ ...base, callDay: "someday" }, now).skipReason ?? "", /not set/);
   assert.match(dueActions({ ...base, callHour: 24 }, now).skipReason ?? "", /0-23/);

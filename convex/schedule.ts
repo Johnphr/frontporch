@@ -160,6 +160,8 @@ export const recentEngagement = internalMutation({
     const counts = { bluesky: 0, threads: 0 };
     const days = recentScrapeDays(tier);
     for (const job of planRecentEngagement(pubs, now, RECENT_STAGGER_MS[tier], tier)) {
+      // He started over (signup.startOver): his old posts stay up, but we stop reading them.
+      if ((await ctx.db.get(job.elderId))?.stage === "archived") continue;
       // Bluesky: public reads only (no login every 30 s; Bluesky limits logins per day).
       if (job.kind === "bluesky") {
         await ctx.scheduler.runAfter(job.delayMs, SCRAPERS.bluesky, { elderId: job.elderId, days, publicOnly: true });

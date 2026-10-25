@@ -8,6 +8,12 @@
 // knowing a phone number or an elderId isn't enough to change a sign-up. An existing number gets
 // no token (and no elderId): re-issuing one would hand it to anyone who types his number.
 //
+// Family code: `register` also returns a 6-digit code, once (hash in elders.familyCodeHash).
+// `signIn({ phone, code })` is how he gets back to his page from any browser: it mints a NEW
+// token (the old device's stops working). `startOver({ phone, code })` archives his sign-up so
+// the number can sign up again. Both: 5 wrong codes per phone per 15 min, and an unknown phone
+// answers exactly like a wrong code. `setFamilyCode` (internal) gives older rows a code.
+//
 // Remaining risk: the SMS check is fake for now, so anyone can sign up a NEW number and make it
 // ring (onboarding only, at most CALLS_PER_DAY a day, 10 min apart; no global cap). That's why
 // `requestCall` is off by default: PUBLIC_CALLS=on rings only CALL_ALLOWLIST numbers,
@@ -18,7 +24,7 @@
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { action, internalMutation, internalQuery, query } from "./_generated/server";
+import { action, internalAction, internalMutation, internalQuery, query, type MutationCtx } from "./_generated/server";
 import { callState, retryOffer, type CallState } from "./lib/callStatus";
 import { getCharacter, publicCharacters, type Character } from "./lib/characters";
 import { connectBlueskyAccount, type ConnectResult } from "./lib/accountConnect";
@@ -27,16 +33,23 @@ import type { FetchFn } from "./lib/blueskyClient";
 import { planNextCall } from "./lib/onboarding";
 import {
   CALLS_PER_DAY,
+  archiveFields,
   callRateLimit,
   canonicalLinkedInProfileUrl,
+  familyCodeHash,
   languageTag,
   newElderFields,
+  newFamilyCode,
   newSignupToken,
+  normalizeFamilyCode,
   normalizeName,
   normalizePhone,
   publicCallAllowed,
+  recordSignInAttempt,
   sameTokenHash,
+  signInDecision,
   signupTokenHash,
+  type SignInRefusal,
 } from "./lib/signupRules";
 import { asElderV2 } from "./lib/v2Fields";
 
@@ -47,7 +60,9 @@ type CallRequest =
   | { ok: true; callId: Id<"calls"> }
   | { ok: false; reason: "disabled" | "rate_limited" | "already_onboarded" | "failed"; message: string; callId?: Id<"calls"> };
 
-type Registration = { ok: true; elderId: Id<"elders">; token: string } | { ok: false; reason: "already_signed_up" };
+type Registration = { ok: true; elderId: Id<"elders">; token: string; familyCode: string } | { ok: false; reason: "already_signed_up" };
+type SignIn = { ok: true; elderId: Id<"elders">; token: string } | { ok: false; reason: SignInRefusal };
+type StartOver = { ok: true } | { ok: false; reason: SignInRefusal };
 
 const DISABLED = "Calls from the sign-up page are turned off for now.";
 const FAILED = "We couldn't start the call. Please try again later.";
@@ -59,10 +74,12 @@ export const listCharacters = query({
   handler: async (): Promise<Character[]> => publicCharacters(),
 });
 
+const BAD_PHONE = "Please enter a phone number with country code, e.g. +14155550123.";
+
 /**
- * New elder in onboarding -> { elderId, token }. A known phone -> already_signed_up (his row
- * isn't touched and no id or token is given out). An action so the token comes from real
- * randomness. `timeZone` is the browser's (checked; else from the phone's country).
+ * New elder in onboarding -> { elderId, token, familyCode }. A known phone -> already_signed_up
+ * (his row isn't touched and no id, token or code is given out). An action so the token and code
+ * come from real randomness. `timeZone` is the browser's (checked; else from the phone's country).
  * Known, accepted leak: already_signed_up tells anyone whether a number is signed up. Hiding
  * it would mean telling a real person "done" when nothing happened; nothing else is revealed.
  */
@@ -72,32 +89,179 @@ export const register = action({
     const name = normalizeName(args.name);
     if (!name) throw new ConvexError("Please enter your name (up to 100 characters).");
     const phone = normalizePhone(args.phone);
-    if (!phone) throw new ConvexError("Please enter a phone number with country code, e.g. +14155550123.");
+    if (!phone) throw new ConvexError(BAD_PHONE);
     const token = newSignupToken();
     const tokenHash = await signupTokenHash(token);
-    if (!tokenHash) throw new Error("signup token malformed"); // can't happen
+    const familyCode = newFamilyCode();
+    const codeHash = await familyCodeHash(familyCode);
+    if (!tokenHash || !codeHash) throw new Error("signup secret malformed"); // can't happen
     const elderId: Id<"elders"> | null = await ctx.runMutation(internal.signup.createElder, {
       name,
       phone,
       language: args.language,
       ...(args.timeZone ? { timeZone: args.timeZone.slice(0, 100) } : {}),
       tokenHash,
+      codeHash,
       now: Date.now(),
     });
-    return elderId ? { ok: true, elderId, token } : { ok: false, reason: "already_signed_up" };
+    return elderId ? { ok: true, elderId, token, familyCode } : { ok: false, reason: "already_signed_up" };
   },
 });
 
 /** For register: insert his row, or null if the phone is already signed up (nothing changes). */
 export const createElder = internalMutation({
-  args: { name: v.string(), phone: v.string(), language, timeZone: v.optional(v.string()), tokenHash: v.string(), now: v.number() },
-  handler: async (ctx, { tokenHash, now, ...input }): Promise<Id<"elders"> | null> => {
+  args: {
+    name: v.string(),
+    phone: v.string(),
+    language,
+    timeZone: v.optional(v.string()),
+    tokenHash: v.string(),
+    codeHash: v.optional(v.string()),
+    now: v.number(),
+  },
+  handler: async (ctx, { tokenHash, codeHash, now, ...input }): Promise<Id<"elders"> | null> => {
     const existing = await ctx.db
       .query("elders")
       .withIndex("by_phone", (q) => q.eq("phone", input.phone))
       .unique();
     if (existing) return null;
-    return await ctx.db.insert("elders", newElderFields(input, now, tokenHash));
+    return await ctx.db.insert("elders", newElderFields(input, now, tokenHash, codeHash));
+  },
+});
+
+// ---------- Sign in from any device: phone + family code ----------
+
+/**
+ * Phone + family code -> { elderId, token } (a NEW token: the device that signed up, or signed in
+ * before, is signed out) or { ok: false, reason: wrong_code | too_many_tries }. An unknown phone
+ * is wrong_code too, and its tries count the same way, so nothing says whether a number is signed
+ * up. The code is hashed here (Web Crypto) and checked in checkSignIn; neither is ever logged.
+ */
+export const signIn = action({
+  args: { phone: v.string(), code: v.string() },
+  handler: async (ctx, args): Promise<SignIn> => {
+    const phone = normalizePhone(args.phone);
+    if (!phone) throw new ConvexError(BAD_PHONE);
+    if (!normalizeFamilyCode(args.code)) return { ok: false, reason: "wrong_code" };
+    const token = newSignupToken();
+    const tokenHash = await signupTokenHash(token);
+    if (!tokenHash) throw new Error("signup token malformed"); // can't happen
+    const res: { ok: true; elderId: Id<"elders"> } | { ok: false; reason: SignInRefusal } = await ctx.runMutation(internal.signup.checkSignIn, {
+      phone,
+      codeHash: (await familyCodeHash(args.code)) ?? "",
+      tokenHash,
+      now: Date.now(),
+    });
+    return res.ok ? { ok: true, elderId: res.elderId, token } : res;
+  },
+});
+
+const signInKey = (phone: string) => `signin:${phone}`;
+
+/** Wrong-code times for this phone (connectAttempts "signin:<phone>"), and the row they live in. */
+async function signInAttempts(ctx: MutationCtx, phone: string) {
+  const row = await ctx.db
+    .query("connectAttempts")
+    .withIndex("by_key", (q) => q.eq("key", signInKey(phone)))
+    .unique();
+  return { row, times: row?.times ?? [] };
+}
+
+/**
+ * The phone + code check both sign-in mutations share: rate limit, then his row and code.
+ * A wrong code is counted (the row is made if needed); a right one clears the count.
+ */
+async function checkCode(ctx: MutationCtx, phone: string, codeHash: string, now: number) {
+  const elder = await ctx.db
+    .query("elders")
+    .withIndex("by_phone", (q) => q.eq("phone", phone))
+    .unique();
+  const { row, times } = await signInAttempts(ctx, phone);
+  const decision = signInDecision(elder, codeHash, times, now);
+  if (decision.ok && elder) {
+    if (row) await ctx.db.delete(row._id);
+    return { ok: true as const, elder };
+  }
+  const reason: SignInRefusal = decision.ok ? "wrong_code" : decision.reason; // ok without a row can't happen
+  if (reason === "wrong_code") {
+    const next = recordSignInAttempt(times, now);
+    if (row) await ctx.db.patch(row._id, { times: next });
+    else await ctx.db.insert("connectAttempts", { key: signInKey(phone), times: next });
+  }
+  return { ok: false as const, reason };
+}
+
+/** For signIn: check the code, then replace his token hash with the new one. */
+export const checkSignIn = internalMutation({
+  args: { phone: v.string(), codeHash: v.string(), tokenHash: v.string(), now: v.number() },
+  handler: async (ctx, { phone, codeHash, tokenHash, now }): Promise<{ ok: true; elderId: Id<"elders"> } | { ok: false; reason: SignInRefusal }> => {
+    const check = await checkCode(ctx, phone, codeHash, now);
+    if (!check.ok) return check;
+    await ctx.db.patch(check.elder._id, { signupTokenHash: tokenHash });
+    return { ok: true, elderId: check.elder._id };
+  },
+});
+
+/**
+ * "Start over" for a number that's already signed up, behind his family code: his row is archived
+ * (stage "archived", phone freed, token and code dropped) and his connected accounts disconnected
+ * (secrets dropped). Posts and calls stay as history; crons skip him. Same answers and rate limit as signIn.
+ */
+export const startOver = action({
+  args: { phone: v.string(), code: v.string() },
+  handler: async (ctx, args): Promise<StartOver> => {
+    const phone = normalizePhone(args.phone);
+    if (!phone) throw new ConvexError(BAD_PHONE);
+    if (!normalizeFamilyCode(args.code)) return { ok: false, reason: "wrong_code" };
+    return await ctx.runMutation(internal.signup.archiveElder, { phone, codeHash: (await familyCodeHash(args.code)) ?? "", now: Date.now() });
+  },
+});
+
+/** For startOver: check the code, then archive him and disconnect his accounts. */
+export const archiveElder = internalMutation({
+  args: { phone: v.string(), codeHash: v.string(), now: v.number() },
+  handler: async (ctx, { phone, codeHash, now }): Promise<StartOver> => {
+    const check = await checkCode(ctx, phone, codeHash, now);
+    if (!check.ok) return check;
+    const elderId = check.elder._id;
+    await ctx.db.patch(elderId, archiveFields(phone, now));
+    const accounts = await ctx.db
+      .query("elderAccounts")
+      .withIndex("by_elder_platform", (q) => q.eq("elderId", elderId))
+      .collect();
+    for (const a of accounts) await ctx.db.patch(a._id, { status: "disconnected", secret: undefined });
+    console.log(`signup.startOver: elder ${elderId} archived`);
+    return { ok: true };
+  },
+});
+
+/**
+ * Team tool (dashboard / `npx convex run signup:setFamilyCode '{"elderId":"<id>"}'`): give an
+ * elder a family code, for rows made before codes existed or when his got lost. Makes one when
+ * `code` isn't given. Returns the plaintext ONCE (shown only to whoever ran it); only its hash is
+ * stored. An action, since hashing needs Web Crypto.
+ */
+export const setFamilyCode = internalAction({
+  args: { elderId: v.id("elders"), code: v.optional(v.string()) },
+  handler: async (ctx, { elderId, code }): Promise<{ familyCode: string }> => {
+    const familyCode = code === undefined ? newFamilyCode() : normalizeFamilyCode(code);
+    if (!familyCode) throw new ConvexError("The code must be 6 digits.");
+    const codeHash = await familyCodeHash(familyCode);
+    if (!codeHash) throw new Error("family code malformed"); // can't happen
+    const saved: boolean = await ctx.runMutation(internal.signup.saveFamilyCode, { elderId, codeHash });
+    if (!saved) throw new ConvexError("No such elder, or he is archived.");
+    return { familyCode };
+  },
+});
+
+/** For setFamilyCode: store the hash on a live elder. */
+export const saveFamilyCode = internalMutation({
+  args: { elderId: v.id("elders"), codeHash: v.string() },
+  handler: async (ctx, { elderId, codeHash }): Promise<boolean> => {
+    const elder = await ctx.db.get(elderId);
+    if (!elder || elder.stage === "archived") return false;
+    await ctx.db.patch(elderId, { familyCodeHash: codeHash });
+    return true;
   },
 });
 

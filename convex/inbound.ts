@@ -63,7 +63,7 @@ type ElderForLookup = {
   name: string;
   language?: string;
   characterId?: string;
-  stage?: "onboarding" | "active";
+  stage?: Doc<"elders">["stage"];
   profile?: Doc<"elders">["profile"];
   knownBackground?: string;
 };
