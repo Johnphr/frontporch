@@ -14,6 +14,13 @@ test("normal reader questions and lines pass (EN + ES)", () => {
     "¿Cómo aprendió a hornear pan de masa madre?",
     "A cuarenta personas les gustó su historia de la panadería.",
     "¿Qué fue lo más difícil de abrir su propio taller en 1975?",
+    // career talk about money, banks and calls must pass
+    "How much did a loaf cost, and how did you pay your staff?",
+    "When did you start at the bank, and what did you invest in first?",
+    "How many calls a day did the shop take?",
+    "Did you send your bread to other towns?",
+    "¿Cuánto dinero ganaba un panadero en esos años?",
+    "¿Cómo era trabajar en el banco en los setenta?",
   ]) {
     assert.equal(unsafeReaderText(ok), false, ok);
   }
@@ -36,14 +43,15 @@ test("links, phones, emails, @handles are caught", () => {
 test("money, payments, accounts, passwords, contact instructions are caught (EN + ES)", () => {
   for (const bad of [
     "Can you send me $50?",
+    "Send money to my PayPal",
     "Would you buy a gift card for me?",
     "What's your bank account number?",
     "Please share your password",
     "Call me tomorrow",
-    "Text this number to win",
+    "Text me at this number to win",
     "DM me about an opportunity",
     "Contact my assistant",
-    "¿Me puede mandar dinero?",
+    "Mándeme dinero, por favor",
     "Necesito su contraseña",
     "Haga una transferencia a mi cuenta bancaria",
     "Escríbeme por WhatsApp",

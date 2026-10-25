@@ -6,6 +6,9 @@
 // Whole words in any script (\b doesn't know accents).
 const word = (alts: string) => new RegExp(`(?<![\\p{L}\\p{N}_])(?:${alts})(?![\\p{L}\\p{N}_])`, "iu");
 
+// Career questions talk about money, prices, banks and calls all the time ("How did you price
+// bread?", "When did you start at the bank?"), so plain words pass. Blocked: anything to click
+// or dial, and the shapes scams take: payment apps, credentials, "send me / call me".
 const RULES: RegExp[] = [
   // links: scheme, www., or a bare domain
   /https?:\/\/|www\.|\b[a-z0-9-]+\.(?:com|net|org|io|co|me|ly|app|xyz|info|biz|link|site|online|shop|store|us|uk|mx|es|ar|gl|gg|to|tv|tk)\b/i,
@@ -13,21 +16,21 @@ const RULES: RegExp[] = [
   /[\w.+-]+@[\w-]+\.[\w.-]+/,
   // @handles
   /(?:^|[^\w])@[A-Za-z0-9_][A-Za-z0-9_.-]*/,
-  // money symbols, amounts
-  /[$€£¥₿]|\b\d[\d.,]*\s?(?:k|usd|eur|mxn|btc)\b/i,
-  // EN money, payments, accounts, passwords
+  // EN payment apps, credentials, account details
   word(
-    "money|cash|dollars?|bucks|euros?|pay|pays|paying|paid|payment|payments|paypal|venmo|zelle|cash ?app|bitcoin|crypto|wire|gift ?cards?|bank|banks|banking|account numbers?|routing|password|passwords|passcode|pin|login|log in|sign in|verify|verification code|credit card|debit card|card number|ssn|social security|invest|investment|donate|donation|fee|fees",
+    "paypal|venmo|zelle|cash ?app|western union|moneygram|bitcoin|btc|crypto|usdt|gift ?cards?|wire transfer|wire me|bank account|account numbers?|routing numbers?|card numbers?|credit card|debit card|password|passwords|passcode|pin code|verification code|one-time code|ssn|social security number|log ?in details|login details",
   ),
-  // ES dinero, pagos, cuentas, contraseñas
-  word(
-    "dinero|efectivo|pesos|dólares?|dolares?|pago|pagos|pagar|paga|págame|pagame|transferencia|transferir|depósito|deposito|depositar|banco|bancos|bancaria|bancario|cuenta bancaria|número de cuenta|numero de cuenta|tu cuenta|contraseña|contrasena|tarjeta|bizum|mercado pago|invertir|inversión|inversion|donar|donación|donacion|comisión|comision",
-  ),
-  // EN instructions to contact anyone
-  word("call|calls|calling|text|texts|texting|send|sends|sending|dm|dms|message me|email|e-mail|whatsapp|telegram|contact|reach out|ring me"),
   // ES
   word(
-    "llama|llamar|llámame|llamame|llámeme|llameme|llámale|llamale|escríbame|escribame|envíeme|envieme|mándeme|mandeme|contácteme|contacteme|escribe|escribir|escríbeme|escribeme|envía|envia|enviar|envíame|enviame|manda|mandar|mándame|mandame|mensaje|contacta|contactar|contáctame|contactame|correo|whatsapp|telegram",
+    "bizum|mercado pago|western union|bitcoin|cripto|tarjeta de regalo|transferencia bancaria|cuenta bancaria|número de cuenta|numero de cuenta|clabe|tarjeta de crédito|tarjeta de credito|tarjeta de débito|tarjeta de debito|datos de (?:su|tu) tarjeta|contraseña|contrasena|código de verificación|codigo de verificacion|nip",
+  ),
+  // EN asks aimed at him: send / pay / contact me
+  word(
+    "send (?:me|us|him|her|them|it|money|cash|\\$)|pay (?:me|us)|(?:call|text|dm|message|email|e-mail|contact|ring|phone) (?:me|us|my)|reach (?:me|us|out to me)|your (?:email|e-mail|phone number|number|home address|address)|whatsapp|telegram|signal me",
+  ),
+  // ES
+  word(
+    "llámame|llamame|llámeme|llameme|llámenos|llamenos|escríbame|escribame|escríbeme|escribeme|envíeme|envieme|envíame|enviame|mándeme|mandeme|mándame|mandame|contácteme|contacteme|contáctame|contactame|depósitame|depositame|deposíteme|depositeme|págame|pagame|págueme|pagueme|mándame dinero|mándeme dinero|mandar dinero|enviar dinero|(?:su|tu) (?:correo|número|numero|teléfono|telefono|dirección|direccion)|whatsapp|telegram",
   ),
 ];
 
@@ -41,7 +44,7 @@ function hasPhone(text: string): boolean {
   return false;
 }
 
-/** True when reader-derived text has a link, phone, email, @handle, money / account / password word, or a contact instruction. */
+/** True when reader-derived text has a link, phone, email, @handle, a payment app or credential, or a send/pay/contact-me ask. */
 export function unsafeReaderText(text: string): boolean {
   return hasPhone(text) || RULES.some((r) => r.test(text));
 }
