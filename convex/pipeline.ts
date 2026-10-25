@@ -14,6 +14,8 @@
 //          post      llm.writePost (may decline: no post) -> one posts row per call
 //                    (posts.by_call) -> linkedapi.createPost, scheduled only for a new row
 //                    and only when AUTO_POST isn't "off" (off = preview-only, for tests)
+//          reply     threadReplies.draftForCall (scheduled; only when the question came from
+//                    an online thread: Bluesky / Discourse / Reddit / Quora)
 //          plan      conversation.refreshQuestionBank (scheduled)
 //     4. status `done` + processedAt; any error (or a failed post / plan step) -> `process_failed`
 //        + error. Memories are best effort: if that step fails the call is still `done`, with
@@ -226,6 +228,14 @@ async function runStoryCall(
         // Posting runs on its own (guard + LinkedAPI + polling) so it can't hold up the rest.
         await ctx.scheduler.runAfter(0, internal.linkedapi.createPost, { postId });
         return `post ${postId} scheduled`;
+      },
+    },
+    {
+      // Answer the online thread this call's question came from (threadReplies.ts; no-op otherwise).
+      step: "reply",
+      run: async () => {
+        await ctx.scheduler.runAfter(0, internal.threadReplies.draftForCall, { callId });
+        return "thread reply draft scheduled";
       },
     },
     {

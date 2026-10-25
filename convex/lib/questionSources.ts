@@ -9,7 +9,7 @@
 
 import { cleanText, hash16, isRecord, parseTimestamp, pick, pickNumber } from "./text.ts";
 
-export type SourceKind = "apify" | "stackexchange_api" | "discourse_json";
+export type SourceKind = "apify" | "stackexchange_api" | "discourse_json" | "bluesky_search";
 
 export type FieldMap = {
   title: string[];
@@ -56,6 +56,8 @@ export type AudienceQuestion = {
   fingerprint: string;
   priority: number;
   keywords: string[];
+  /** Bluesky only: the post's at:// uri, so a reply can be threaded under it */
+  atUri?: string;
 };
 
 export type RawItem = Record<string, unknown>;
@@ -123,6 +125,18 @@ export const SOURCES: SourceConfig[] = [
     requireQuestion: false,
   },
   {
+    // His Bluesky session searches (the public AppView refuses unauthenticated search).
+    // Only runs when BLUESKY_HANDLE + BLUESKY_APP_PASSWORD are set (convex/apify.ts).
+    name: "bluesky-search",
+    label: "Bluesky · recent posts by keyword (needs his BLUESKY_HANDLE + app password)",
+    kind: "bluesky_search",
+    source: "bluesky",
+    enabled: true,
+    maxQuestions: 15,
+    maxAgeDays: 30,
+    requireQuestion: true,
+  },
+  {
     name: "discourse-search",
     label: "Discourse forums · /search.json (add forums for his field first)",
     kind: "discourse_json",
@@ -157,6 +171,17 @@ export const DEFAULT_FIELDS: Record<SourceKind, FieldMap> = {
     answers: ["answer_count"],
     postedAt: ["creation_date"],
     tags: ["tags"],
+  },
+  bluesky_search: {
+    title: ["title"],
+    body: [],
+    url: ["url"],
+    id: ["id"],
+    community: ["community"],
+    score: ["score"],
+    answers: ["answers"],
+    postedAt: ["postedAt"],
+    tags: [],
   },
   discourse_json: {
     title: ["title", "fancy_title"],
@@ -523,6 +548,7 @@ export function normalize(item: RawItem, source: SourceConfig): Omit<AudienceQue
       break;
     }
   }
+  if (typeof item.atUri === "string" && item.atUri.startsWith("at://")) question.atUri = item.atUri;
   return question;
 }
 

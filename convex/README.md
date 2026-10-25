@@ -255,6 +255,57 @@ uses the post's elder; `previewText` takes an optional `"language":"es-MX"`.
 
 Unit tests for the formatter and posting decisions (no Convex needed): `node --test "tests/**/*.test.ts"`.
 
+## Thread replies (`threadReplies.ts`, `replyWriter.ts`, Integrations)
+
+When a story call's question came from an online thread (an `audienceQuestions` row), the
+pipeline's `reply` step schedules `threadReplies.draftForCall`: his answer, in his words, first
+person, posted back on that thread from **his own account**, with a one-line AI disclosure and
+no links. One reply per thread. It gets the same fact-check as LinkedIn posts (`postGuard`);
+a failing reply is held as `needs_review`. Drafts and statuses show on the `/posts` page
+("Thread replies": Copy text, Open thread, the posted link).
+
+| Platform | Posting | Why |
+|---|---|---|
+| Bluesky | **auto** (`BLUESKY_HANDLE` + `BLUESKY_APP_PASSWORD`) | Open AT Protocol API; reply threaded under the post, 300 graphemes incl. the disclosure |
+| Discourse forums | **auto** (`DISCOURSE_URL` + `DISCOURSE_USER_API_KEY`, that forum only) | User API keys let him authorize our app on his forum account |
+| Reddit | **gated**: auto only with `REDDIT_POSTING=on` + the credentials below, else a draft to post by hand | New API apps need Reddit's approval (Responsible Builder Policy, Nov 2025); many subreddits ban AI-written replies, so check the subreddit's rules |
+| Quora | draft only (post by hand) | No posting API; browser automation breaks Quora's rules |
+| Stack Exchange | skipped | The network bans AI-generated content, even pasted by hand |
+
+`AUTO_POST=off` keeps every reply a draft (nothing is posted). Bluesky is also a question
+**source** (`bluesky-search` in `lib/questionSources.ts`): with his login set, the weekly
+audience-question search includes recent Bluesky posts that read like questions (the public
+Bluesky search API refuses unauthenticated requests, so it searches through his session).
+
+```bash
+npx convex env set BLUESKY_HANDLE walter.bsky.social
+npx convex env set BLUESKY_APP_PASSWORD <app password>   # Bluesky: Settings -> Privacy and security -> App passwords
+npx convex env set DISCOURSE_URL https://forum.example.com
+npx convex env set DISCOURSE_USER_API_KEY <key>           # see 'Discourse user API key' below
+npx convex run threadReplies:draftForCall '{"callId":"<calls id>"}'     # draft (again) for a call
+npx convex run threadReplies:postReply '{"replyId":"<id>"}'             # post a draft now
+npx convex run threadReplies:postReply '{"replyId":"<id>","approve":true}'   # post one the fact-check held
+npx convex run threadReplies:markPostedByHand '{"replyId":"<id>","postedUrl":"https://..."}'
+```
+
+Optional: `BLUESKY_SERVICE` (his PDS, default `https://bsky.social`).
+
+**Reddit credentials (needed before `REDDIT_POSTING=on`):**
+1. Log in as his Reddit account and open https://www.reddit.com/prefs/apps -> "create another app" ->
+   type **script**, any name, redirect uri `http://localhost:8080` (unused). Note the client id
+   (under the app name) and the secret.
+2. Request Data API access for that app under Reddit's Responsible Builder Policy (Reddit's developer
+   support / API access request form). New OAuth apps don't work until Reddit approves them.
+3. Once approved, set: `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USERNAME`, `REDDIT_PASSWORD`
+   (his account; if it uses 2FA, script-app password logins need it off or an app-specific setup),
+   optional `REDDIT_USER_AGENT` (default `web:frontporch:v1 (by /u/<username>)`), then
+   `npx convex env set REDDIT_POSTING on`.
+
+**Discourse user API key:** he generates it on each forum via the forum's `/user-api-key/new`
+flow (scope `write`), per the Discourse "User API keys specification". We send it as the
+`User-Api-Key` header to `POST /posts.json` with `topic_id` + `raw`. One forum per key
+(`DISCOURSE_URL`); replies to other forums become drafts.
+
 ## Memory, engagement, scheduling (Core: Data)
 
 Env: `OPENAI_API_KEY` (embeddings for `memories.ts`; `addMany` and `search` throw a

@@ -143,10 +143,17 @@ Daily cron → `apify.scrapeEngagement` → `engagement.upsert`. The next `planN
 `engagement.recentFeedback`; `llm.summarizeFeedback` turns it into "what resonated" + reader
 questions worth asking him.
 
-**Audience questions:** weekly `apify.findAudienceQuestions` searches Reddit, Stack Exchange
-and (once enabled) Quora and Discourse for real questions people in his field ask, filters,
+**Audience questions:** weekly `apify.findAudienceQuestions` searches Reddit, Stack Exchange,
+Bluesky (with his login) and (once enabled) Quora and Discourse for real questions people in his field ask, filters,
 dedupes and ranks them into `audienceQuestions`. `planNextCall` takes one from
 `apify.topAudienceQuestions` and calls `apify.markAudienceQuestionUsed`.
+
+**Thread replies:** when the call's question came from an online thread, `pipeline.processCall`'s
+`reply` step schedules `threadReplies.draftForCall`: `replyWriter.writeReply` (his words, first
+person, from his own account) -> AI disclosure line -> `postGuard.checkPost` -> one row per thread
+in `threadReplies`. Bluesky and Discourse post automatically (`threadReplies.postReply`); Reddit
+only with `REDDIT_POSTING=on` + approved API credentials; Quora is a draft posted by hand; Stack
+Exchange is skipped (it bans AI-generated content). Setup: convex/README.md "Thread replies".
 
 ### ⑤ He calls in (inbound)
 Our one number routes to one Cartesia agent: the bilingual inbound agent
@@ -338,6 +345,7 @@ tests/                          node --test + fixtures/
 | Var | Provided by |
 |---|---|
 | `CARTESIA_API_KEY`, `CARTESIA_FROM_NUMBER_ID`, `CARTESIA_VOICE_ID` (optional, Pip), `CARTESIA_VOICE_ID_ES` (Juanito), `CARTESIA_MODEL` (optional). Agent ids live in the `characterAgents` table, not env. Inbound: `CARTESIA_INBOUND_AGENT_ID` + `CARTESIA_LOOKUP_TOOL_ID` (printed by `syncAgent '{"inbound":true}'`), `CARTESIA_TOOL_SECRET` (bearer for the lookup tool), `CARTESIA_INBOUND_LANGUAGE` (optional, default `en`), `INBOUND_SITE_URL` (only if `CONVEX_SITE_URL` isn't available) | Voice |
+| `BLUESKY_HANDLE`, `BLUESKY_APP_PASSWORD`, `BLUESKY_SERVICE` (optional), `DISCOURSE_URL`, `DISCOURSE_USER_API_KEY`, `REDDIT_POSTING` (optional, default off), `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USERNAME`, `REDDIT_PASSWORD`, `REDDIT_USER_AGENT` (optional): thread replies (his accounts) | Integrations |
 | `LINKEDAPI_TOKEN`, `LINKEDAPI_ID_TOKEN`, `APIFY_TOKEN`, `STACKEXCHANGE_KEY` (optional), `POST_GUARD_MODE` (optional, default `enforce`), `AUTO_POST` (optional, default `on`; `off` = preview-only for tests) | Integrations |
 | `OPENAI_API_KEY` | Data (embeddings), Brain (LLM), Integrations (post guard) |
 | `OPENAI_MODEL` | optional, default `gpt-6-luna` |

@@ -17,6 +17,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { errorMessage, runActor, sleep } from "./lib/apifyClient";
+import { blueskyService, createSession, searchPosts, type FetchFn } from "./lib/blueskyClient";
 import {
   type AudienceQuestion,
   type SourceConfig,
@@ -216,6 +217,31 @@ async function fetchSource(source: SourceConfig, keywords: string[]): Promise<Fe
     });
   }
 
+  if (source.kind === "bluesky_search") {
+    // His session (the public AppView refuses unauthenticated search). One failing keyword
+    // doesn't lose the others. Never logs the password or the token.
+    const handle = process.env.BLUESKY_HANDLE;
+    const password = process.env.BLUESKY_APP_PASSWORD;
+    if (!handle || !password) return { items: [], errors: ["Bluesky isn't configured (BLUESKY_HANDLE, BLUESKY_APP_PASSWORD)"] };
+    const fetchFn = fetch as unknown as FetchFn;
+    const session = await createSession(fetchFn, {
+      service: blueskyService(process.env.BLUESKY_SERVICE),
+      identifier: handle,
+      password,
+    });
+    const since = source.maxAgeDays ? new Date(Date.now() - source.maxAgeDays * 86_400_000).toISOString() : undefined;
+    const items: unknown[] = [];
+    const errors: string[] = [];
+    for (const query of keywords.slice(0, 2)) {
+      try {
+        items.push(...(await searchPosts(fetchFn, session, query, { limit: 25, ...(since ? { since } : {}) })));
+      } catch (error) {
+        errors.push(`Bluesky "${query}": ${errorMessage(error)}`);
+      }
+    }
+    return { items, errors };
+  }
+
   // discourse_json: one failing forum/query doesn't lose the others
   const items: unknown[] = [];
   const errors: string[] = [];
@@ -257,7 +283,11 @@ export const findAudienceQuestions = internalAction({
     const keywords = given.length ? given.slice(0, 5) : (elder?.keywords ?? deriveKeywords(null));
     const now = Date.now();
 
-    const sources = enabledSources(args.sources);
+    // Bluesky needs his login: skip it unless it's configured (or asked for by name).
+    const blueskyReady = Boolean(process.env.BLUESKY_HANDLE && process.env.BLUESKY_APP_PASSWORD);
+    const sources = enabledSources(args.sources).filter(
+      (s) => s.kind !== "bluesky_search" || blueskyReady || Boolean(args.sources?.includes(s.name)),
+    );
     if (sources.length === 0) throw new Error("No audience-question sources enabled or matched");
 
     const reports: Record<string, SourceReport> = {};
@@ -312,6 +342,7 @@ const audienceQuestionInput = v.object({
   fingerprint: v.string(),
   priority: v.number(),
   keywords: v.array(v.string()),
+  atUri: v.optional(v.string()), // Bluesky post uri (for threaded replies)
 });
 
 /** Insert new questions; for ones we already have (same fingerprint), refresh the ranking if unused. */
