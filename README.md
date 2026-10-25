@@ -75,6 +75,10 @@ work, but X's docs don't say so. So on X the AI note goes in the **first** post.
 self-reply, we stop, keep what went out, and the error says so (then use `X_THREAD=off`). We **never** reply to, mention or quote other people on X:
 X's automation rules forbid unsolicited automated mentions and keyword-triggered replies.
 
+**Threads** connects with a "Connect Threads" button (Meta's own consent page, no password
+typed here). The Meta app is in **development mode**, so only people added as Threads testers
+can connect. Setup: [ARCHITECTURE.md → Threads](ARCHITECTURE.md#threads-oauth-connect).
+
 ## Safety
 
 - Posts use **only what the person said**; the prompt forbids adding facts or advice.

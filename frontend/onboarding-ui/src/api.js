@@ -78,6 +78,11 @@ export const signupApi = {
    * The app password is sent once and never kept here.
    */
   connectBluesky: (elderId, token, handle, appPassword) => call('action', 'connectBluesky', { elderId, token, handle, appPassword }),
+  /**
+   * OAuth connect (Threads; X later): { ok: true, url } (send the browser there) | { ok: false, error }
+   * with error one of: not_found, locked, rate_limited, not_configured, failed.
+   */
+  startOAuthConnect: (elderId, token, platform) => call('action', 'startOAuthConnect', { elderId, token, platform }),
   /** { ok: true, callId } | { ok: false, reason: 'disabled' | 'rate_limited' | 'already_onboarded' | 'failed', message, callId? } */
   requestCall: (elderId, token) => call('action', 'requestCall', { elderId, token }),
   /** { state, canRetry, retryAt? } for the call requestCall placed (convex/lib/callStatus.ts states) */
