@@ -1,4 +1,4 @@
-// OAuth connects (Threads; X later): the database side. Internal functions only.
+// OAuth connects (Threads; X keeps its own rows in xAuth.ts but shares reserveConnect): the database side. Internal functions only.
 //   reserveConnect  count a "Connect" click (sign-up token, rate limit, locked once active)
 //   createState     store the random state (+ PKCE verifier) for the callback
 //   consumeState    single use, at most 15 minutes old, same platform (lib/oauthFlow.checkState)

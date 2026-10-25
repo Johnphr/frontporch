@@ -2,8 +2,10 @@
 
 All of Front Porch's backend: tables, vector memory, crons, the question
 planner, the post writer, and the actions that call OpenAI, Cartesia,
-LinkedAPI and Apify. See `../ARCHITECTURE.md` for the loop,
-contracts and who owns which file.
+Bluesky, Threads, X, Reddit, LinkedAPI and Apify. See `../ARCHITECTURE.md` for the loop,
+contracts and who owns which file. Where posts go (and each switch):
+[`../README.md` → Where posts go](../README.md#where-posts-go); every env var:
+[`../ARCHITECTURE.md` → Env vars](../ARCHITECTURE.md#env-vars-all-in-convex).
 
 ## Run
 
@@ -95,7 +97,8 @@ npx convex env remove CALL_INTERVAL_MINUTES       # stop
 
 ## Review generated posts (temporary page)
 
-Read every post as it would be published, before LinkedIn is connected:
+Read every post as it would be published, and where each platform stands (Bluesky, Threads, X,
+Reddit, LinkedIn: status + link):
 
 ```bash
 npx convex env set POSTS_PAGE_KEY <long random string>   # off without it
@@ -105,7 +108,7 @@ npx convex env get POSTS_PAGE_KEY                        # then open:
 
 Newest first, with the call's question and why the fact-check held a post. "Fact-check now"
 reruns the check (nothing is posted). Temporary: remove `postsPage.ts`, `lib/postsPage.ts` and the
-route in `http.ts` once posts are reviewed on LinkedIn.
+route in `http.ts` once posts are reviewed on the platforms themselves.
 
 ## Try the after-call flow without a phone
 
@@ -250,17 +253,20 @@ Pure logic is unit-tested without Convex: `npm test` (Node's test runner, files 
 ## Publishing story posts (Integrations)
 
 `publish.publishPost({ postId })` (scheduled by `pipeline.insertPost` in the same mutation
-that saves the post) fact-checks the post once, then posts it to each platform that's on, one
-`postPublications` row per platform: Bluesky as a 3-5 post thread (his login), Reddit on his
-profile (only with `REDDIT_POSTING=on`), LinkedIn (only with `LINKEDIN_POSTING=on`, below).
-Off platforms get a `skipped` row.
+that saves the post) fact-checks the post once, then posts it to each platform that's on, in
+this order, one `postPublications` row per platform: Bluesky as a 3-5 post thread (his login),
+Threads as a 2-5 post thread (when he connected Threads), X as a self-thread (only with
+`X_POSTING=on` and his X login; `X_THREAD=off` = one post), Reddit on his profile (only with
+`REDDIT_POSTING=on`), LinkedIn (only with `LINKEDIN_POSTING=on`, below). Off platforms get a
+`skipped` row.
 Row statuses: `pending` → `posting` → `posted` | `failed` (nothing went out, unless `records`
-is set: a Bluesky thread that stopped partway) | `maybe_posted` (unclear: check his profile
-first) | `skipped`; undo adds `removing` / `removed`. A Reddit or LinkedIn run that stopped
-mid-post (claim older than 15 min) becomes `maybe_posted`; Bluesky retries look in his repo
-first (only posts made after the row existed count).
-`posts.status`: `published` (a platform posted) | `partly_posted` (only part of a Bluesky
-thread is out) | `failed` (nothing went out) | `needs_review` (`heldFor`: `quality`,
+is set: a thread that stopped partway) | `maybe_posted` (unclear: check his profile
+first) | `skipped`; undo adds `removing` / `removed`. A Threads, X, Reddit or LinkedIn run that
+stopped mid-post (claim older than 15 min) becomes `maybe_posted`; Bluesky retries look in his
+repo first (only posts made after the row existed count), Threads retries in his recent posts.
+A Threads / X retry continues after the posts in `records`.
+`posts.status`: `published` (a platform posted) | `partly_posted` (only part of a thread is
+out, any platform) | `failed` (nothing went out) | `needs_review` (`heldFor`: `quality`,
 `thread_fit` or `guard`). The disclosure language is decided once, on `posts.language`.
 A Bluesky login that's refused marks his account invalid (`lib/logins.reportBlueskyLoginError`).
 
@@ -399,13 +405,17 @@ clear error without it).
 | `memories.search({ elderId, text, k, kinds? })` | `conversation.planNextCall` | memories closest to a text (e.g. the next question) |
 | `memories.listForElder({ elderId, kinds?, status?, limit? })` | planner | e.g. all active open threads |
 | `blueskyEngagement.scrapeForElder({ elderId })` | `schedule.dailyEngagement` | his Bluesky threads from the last 30 days: likes + reposts on the root post, replies by others (oldest 20, not hidden or labelled) → `engagement:upsert`; a deleted thread → `engagement:markGone` (his session if connected, else the public AppView). Returns `{ threads, upserted, likes, reposts, replies, gone, errors }` |
-| `engagement.upsert(...)` | `blueskyEngagement.scrapeForElder`, `apify.scrapeEngagement` | latest reactions + comments per post per platform (`platform`, default linkedin); schedules a question-bank refresh when something changed |
+| `threadsEngagement.scrapeForElder({ elderId })` | `schedule.dailyEngagement` (always) | his Threads threads from the last 30 days: likes + reposts on the root, replies by others → `engagement:upsert` (`platform: "threads"`). Nothing to do without Threads posts |
+| `xEngagement.scrapeForElder({ elderId })` | `schedule.dailyEngagement` (only `X_READ_FEEDBACK=on`) | his X posts from the last 30 days: likes + retweets + quotes; reply texts only with `X_READ_REPLIES=on` → `engagement:upsert` (`platform: "x"`). Logs `estimatedReads` |
+| `engagement.upsert(...)` | the three scrapers above, `apify.scrapeEngagement` | latest reactions + comments per post per platform (`platform`: bluesky / threads / x / linkedin, default linkedin; only LinkedIn links get the LinkedIn URL cleanup); schedules a question-bank refresh when something changed |
 | `engagement.recentFeedback({ elderId, sinceDays? })` | planner | posts with reactions + comments, newest first |
 | `schedule.tick` | hourly cron | `conversation.prepareCall` ~1h before his call, `cartesia.startCall` at the call hour |
 
 Crons (`crons.ts`, UTC): hourly `schedule.tick`; daily 13:15 `schedule.dailyEngagement`
-(→ `blueskyEngagement.scrapeForElder` per active elder, and `apify.scrapeEngagement` per
-active elder with a `linkedinUrl` only when `LINKEDIN_POSTING=on`); weekly Monday 14:30
+(→ per active elder `blueskyEngagement.scrapeForElder`, `threadsEngagement.scrapeForElder`
+10 s later, `xEngagement.scrapeForElder` 20 s later only with `X_READ_FEEDBACK=on`; then
+`apify.scrapeEngagement` per active elder with a `linkedinUrl` only when `LINKEDIN_POSTING=on`,
+after the whole batch); weekly Monday 14:30
 `schedule.weeklyAudienceQuestions` (→ `apify.findAudienceQuestions`). `tick` only acts
 on elders with `stage`, `timezone`, `callDay` and `callHour` set, and skips a target
 that isn't deployed yet (that slot is NOT retried: start that week's call by hand).
@@ -423,7 +433,9 @@ npx convex run schedule:tick '{"now": 1792944000000}'   # Sunday 2026-10-25 09:0
 
 ## Notes
 
-- Calls run on Cartesia Managed Agents; transcripts are polled, so `http.ts` has no routes yet.
+- Calls run on Cartesia Managed Agents; transcripts are polled. `http.ts` serves the inbound
+  lookup tool, the temporary `/posts` page and the OAuth callbacks (`/oauth/threads/callback`,
+  `/oauth/x/callback`: one per platform).
 - `http.ts` and `crons.ts` must keep their default exports, even when empty.
 - Vector search (`ctx.vectorSearch`) only works inside actions.
 - Files with `"use node"` at the top may only export actions.
