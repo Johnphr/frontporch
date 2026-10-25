@@ -12,23 +12,18 @@ import {
   PorchArt,
   SelfAvatar,
 } from '../../art/setup'
-import { Button, Card, ChoiceCard, ErrorText, PillChoices, SelectField, TextField } from '../../ui/controls'
+import { Button, Card, ChoiceCard, ErrorText, PillChoices, SelectField, TextField, cx } from '../../ui/controls'
 
 export const ART = 'w-full max-w-[13rem] self-center'
 const AVATAR = 'h-14 w-14 flex-none rounded-full sm:h-[4.5rem] sm:w-[4.5rem]'
 
-/** The card every step sits in. Extra `actions` go after the submit button. */
-export function StepCard({ step, art, title, headingRef, onSubmit, nextLabel, busy, busyLabel, actions, footnote, children }) {
-  return (
-    <Card
-      as="form"
-      noValidate
-      className="shadow-card"
-      onSubmit={(e) => {
-        e.preventDefault()
-        onSubmit()
-      }}
-    >
+/**
+ * The card every step sits in. Extra `actions` go after the submit button. An `aside` (step 3's host)
+ * sits on the left from md up, like the product on a shop page, with the form on the right.
+ */
+export function StepCard({ step, art, aside, title, headingRef, onSubmit, nextLabel, busy, busyLabel, actions, footnote, children }) {
+  const body = (
+    <>
       {art}
       <h1 ref={headingRef} tabIndex={-1} className="text-title">
         {step && <span className="sr-only">{SETUP.stepOf(step)}. </span>}
@@ -46,6 +41,20 @@ export function StepCard({ step, art, title, headingRef, onSubmit, nextLabel, bu
           {footnote}
         </p>
       )}
+    </>
+  )
+  return (
+    <Card
+      as="form"
+      noValidate
+      className={cx('shadow-card', aside && 'md:grid md:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] md:items-start md:gap-10')}
+      onSubmit={(e) => {
+        e.preventDefault()
+        onSubmit()
+      }}
+    >
+      {aside}
+      {aside ? <div className="flex w-full min-w-0 flex-col items-start gap-5">{body}</div> : body}
     </Card>
   )
 }

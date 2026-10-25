@@ -17,7 +17,7 @@ import { ACCOUNTS_STEP, DONE_STEP, loadProgress, saveProgress } from '../../lib/
 import { loadCallId } from '../../lib/useCallStatus'
 import { BackChevron } from '../../art/setup'
 import { Header } from '../../ui/Header'
-import { Button } from '../../ui/controls'
+import { Button, cx } from '../../ui/controls'
 import AccountsStep from './Accounts'
 import Done from './Done'
 import Review from './Review'
@@ -134,7 +134,8 @@ export default function Onboarding() {
   return (
     <>
       <Header />
-      <main id="main" className="mx-auto w-full max-w-[40rem] overflow-x-clip px-4 pb-16 pt-6 sm:px-6">
+      {/* Step 3 is two columns (host left, choices right), so it gets a wider page. */}
+      <main id="main" className={cx('mx-auto w-full overflow-x-clip px-4 pb-16 pt-6 sm:px-6', step === 3 ? 'max-w-[66rem]' : 'max-w-[40rem]')}>
         {step <= TOTAL_STEPS && (
           <>
             <div className="flex min-h-touch-sm flex-wrap items-center justify-between gap-x-4 gap-y-1">
