@@ -135,6 +135,6 @@ test("client: login failure surfaces only the status", async () => {
   const fetchFn: FetchFn = async () => ({ ok: false, status: 401, json: async () => ({ error: "AuthFactorTokenRequired" }) });
   await assert.rejects(
     createSession(fetchFn, { service: "https://bsky.social", identifier: "x", password: "secret-pass" }),
-    (e: Error) => e.message === "Bluesky login HTTP 401" && !e.message.includes("secret"),
+    (e: Error) => e.message === "Bluesky login HTTP 401 (AuthFactorTokenRequired)" && !e.message.includes("secret"),
   );
 });

@@ -17,7 +17,9 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { errorMessage, runActor, sleep } from "./lib/apifyClient";
-import { blueskyService, createSession, searchPosts, type FetchFn } from "./lib/blueskyClient";
+import { blueskySearchPlan } from "./lib/bluesky";
+import { searchPosts, sharedSessionCache, withSession, type FetchFn } from "./lib/blueskyClient";
+import { blueskyLoginForElder, type BlueskyLogin } from "./lib/logins";
 import {
   type AudienceQuestion,
   type SourceConfig,
@@ -196,7 +198,7 @@ type SourceReport = {
 
 type Fetched = { items: unknown[]; errors: string[] };
 
-async function fetchSource(source: SourceConfig, keywords: string[]): Promise<Fetched> {
+async function fetchSource(source: SourceConfig, keywords: string[], bluesky: BlueskyLogin | null): Promise<Fetched> {
   if (source.kind === "apify") {
     if (!source.actor) throw new Error(`source ${source.name} has no actor`);
     const items = await runActor(source.actor, buildApifyInput(source, keywords), {
@@ -218,23 +220,21 @@ async function fetchSource(source: SourceConfig, keywords: string[]): Promise<Fe
   }
 
   if (source.kind === "bluesky_search") {
-    // His session (the public AppView refuses unauthenticated search). One failing keyword
+    // His session (the public AppView refuses unauthenticated search), reused across keywords
+    // and runs (lib/blueskyClient.ts). Every keyword, a few posts each. One failing keyword
     // doesn't lose the others. Never logs the password or the token.
-    const handle = process.env.BLUESKY_HANDLE;
-    const password = process.env.BLUESKY_APP_PASSWORD;
-    if (!handle || !password) return { items: [], errors: ["Bluesky isn't configured (BLUESKY_HANDLE, BLUESKY_APP_PASSWORD)"] };
+    if (!bluesky) return { items: [], errors: ["His Bluesky account isn't connected (see lib/logins.ts)"] };
     const fetchFn = fetch as unknown as FetchFn;
-    const session = await createSession(fetchFn, {
-      service: blueskyService(process.env.BLUESKY_SERVICE),
-      identifier: handle,
-      password,
-    });
     const since = source.maxAgeDays ? new Date(Date.now() - source.maxAgeDays * 86_400_000).toISOString() : undefined;
+    const { queries, limit } = blueskySearchPlan(keywords);
     const items: unknown[] = [];
     const errors: string[] = [];
-    for (const query of keywords.slice(0, 2)) {
+    for (const query of queries) {
       try {
-        items.push(...(await searchPosts(fetchFn, session, query, { limit: 25, ...(since ? { since } : {}) })));
+        const found = await withSession(fetchFn, sharedSessionCache(), bluesky, (session) =>
+          searchPosts(fetchFn, session, query, { limit, ...(since ? { since } : {}) }),
+        );
+        items.push(...found);
       } catch (error) {
         errors.push(`Bluesky "${query}": ${errorMessage(error)}`);
       }
@@ -284,9 +284,9 @@ export const findAudienceQuestions = internalAction({
     const now = Date.now();
 
     // Bluesky needs his login: skip it unless it's configured (or asked for by name).
-    const blueskyReady = Boolean(process.env.BLUESKY_HANDLE && process.env.BLUESKY_APP_PASSWORD);
+    const bluesky = await blueskyLoginForElder(args.elderId);
     const sources = enabledSources(args.sources).filter(
-      (s) => s.kind !== "bluesky_search" || blueskyReady || Boolean(args.sources?.includes(s.name)),
+      (s) => s.kind !== "bluesky_search" || bluesky !== null || Boolean(args.sources?.includes(s.name)),
     );
     if (sources.length === 0) throw new Error("No audience-question sources enabled or matched");
 
@@ -296,7 +296,7 @@ export const findAudienceQuestions = internalAction({
     await Promise.all(
       sources.map(async (source) => {
         try {
-          const { items, errors } = await fetchSource(source, keywords);
+          const { items, errors } = await fetchSource(source, keywords, bluesky);
           const result = processItems(items, source, keywords, now);
           reports[source.name] = {
             fetched: items.length,

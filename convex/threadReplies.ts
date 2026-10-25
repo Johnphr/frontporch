@@ -8,30 +8,35 @@
 //                              -> row: draft | needs_review
 //                              -> postReply scheduled for "draft" when AUTO_POST isn't off
 //   postReply({ replyId, approve? })   claim (no double replies) -> Bluesky / Reddit -> posted
-//                              (+ link) | failed. approve:true posts a reply the fact-check held.
+//                              (+ link) | failed (nothing went out) | maybe_posted (unclear:
+//                              check the thread, then approve:true). approve:true also posts a
+//                              reply the fact-check held. Bluesky first looks for his existing
+//                              reply under the post, so a retry never answers twice.
+//   postDrafts({ maxAgeDays? })   posts every "draft" reply newer than maxAgeDays (default 7):
+//                              the way to send drafts written while AUTO_POST was off.
 //
 // Platform rules: lib/threadReplies.ts (Bluesky auto with his app password; Reddit auto only
-// when REDDIT_POSTING=on + credentials; every other source gets no reply).
+// when REDDIT_POSTING=on + credentials; every other source gets no reply). HTTP side:
+// lib/replyPosting.ts. His logins come ONLY from lib/logins.ts.
 // Never log tokens, keys, reply text or transcripts; ids and statuses only.
-// Env: BLUESKY_HANDLE, BLUESKY_APP_PASSWORD, BLUESKY_SERVICE (optional), REDDIT_POSTING,
-//      REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USERNAME, REDDIT_PASSWORD,
-//      REDDIT_USER_AGENT, AUTO_POST, POST_GUARD_MODE.
+// Env: AUTO_POST, POST_GUARD_MODE (+ the login variables listed in lib/logins.ts).
 // Owner: Integrations.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
-import { postWebUrl, replyRefFor } from "./lib/bluesky";
-import { blueskyService, createReply, createSession, getPost, type FetchFn } from "./lib/blueskyClient";
+import { sharedSessionCache, type FetchFn } from "./lib/blueskyClient";
+import { blueskyLoginForElder, redditLoginForElder } from "./lib/logins";
 import { parseAutoPost } from "./lib/postFlow";
+import { postBlueskyReply, postRedditReply, runPostReply, type PostOutcome } from "./lib/replyPosting";
 import {
   audienceIdForCall,
   canClaimReply,
+  draftCutoff,
   draftStatus,
   finalReplyText,
-  parseRedditComment,
-  redditThingId,
+  guardContextForReply,
   replyBody,
   replyLanguage,
   replyTarget,
@@ -42,16 +47,21 @@ declare const process: { env: Record<string, string | undefined> };
 
 const HTTP_TIMEOUT_MS = 20_000;
 
-function replyEnv(): ReplyEnv {
-  const e = process.env;
+/** Which platforms he can reply on, from his logins (lib/logins.ts). */
+async function replyEnvFor(elderId: Id<"elders">): Promise<ReplyEnv> {
+  const [bluesky, reddit] = await Promise.all([blueskyLoginForElder(elderId), redditLoginForElder(elderId)]);
   return {
-    blueskyHandle: e.BLUESKY_HANDLE,
-    blueskyPassword: e.BLUESKY_APP_PASSWORD,
-    redditPosting: e.REDDIT_POSTING,
-    redditClientId: e.REDDIT_CLIENT_ID,
-    redditClientSecret: e.REDDIT_CLIENT_SECRET,
-    redditUsername: e.REDDIT_USERNAME,
-    redditPassword: e.REDDIT_PASSWORD,
+    blueskyHandle: bluesky?.identifier,
+    blueskyPassword: bluesky?.password,
+    ...(reddit
+      ? {
+          redditPosting: "on",
+          redditClientId: reddit.clientId,
+          redditClientSecret: reddit.clientSecret,
+          redditUsername: reddit.username,
+          redditPassword: reddit.password,
+        }
+      : {}),
   };
 }
 
@@ -70,12 +80,14 @@ export const getDraftContext = internalQuery({
     const audienceId = audienceRef ? ctx.db.normalizeId("audienceQuestions", audienceRef) : null;
     const question = audienceId ? await ctx.db.get(audienceId) : null;
     if (!question || question.elderId !== call.elderId) return null;
+    const elder = await ctx.db.get(call.elderId);
     const existing = await ctx.db
       .query("threadReplies")
       .withIndex("by_audience", (q) => q.eq("audienceQuestionId", question._id))
       .first();
     return {
       elderId: call.elderId,
+      callLanguage: elder?.language ?? "en",
       turns: call.transcript,
       question: {
         _id: question._id,
@@ -123,6 +135,7 @@ export const getReplyForPosting = internalQuery({
     if (!reply) return null;
     return {
       _id: reply._id,
+      elderId: reply.elderId,
       platform: reply.platform,
       threadUrl: reply.threadUrl,
       ...(reply.threadRef ? { threadRef: reply.threadRef } : {}),
@@ -146,7 +159,7 @@ export const claimReply = internalMutation({
       status: "posting",
       claimedAt: now,
       error: undefined,
-      ...(approve && reply.status === "needs_review" ? { approvedAt: now } : {}),
+      ...(approve && reply.status !== "draft" && reply.status !== "failed" ? { approvedAt: now } : {}),
     });
     return { ok: true };
   },
@@ -155,7 +168,7 @@ export const claimReply = internalMutation({
 export const finishReply = internalMutation({
   args: {
     replyId: v.id("threadReplies"),
-    status: v.union(v.literal("posted"), v.literal("failed")),
+    status: v.union(v.literal("posted"), v.literal("failed"), v.literal("maybe_posted")),
     postedUrl: v.optional(v.string()),
     error: v.optional(v.string()),
   },
@@ -166,6 +179,19 @@ export const finishReply = internalMutation({
       ...(postedUrl ? { postedUrl } : {}),
       ...(status === "posted" ? { postedAt: Date.now(), error: undefined } : { error: error ?? "Posting failed." }),
     });
+  },
+});
+
+/** Drafts waiting to be posted (AUTO_POST was off), oldest first, newer than `since`. */
+export const draftIdsToPost = internalQuery({
+  args: { since: v.number(), limit: v.number() },
+  handler: async (ctx, { since, limit }): Promise<Id<"threadReplies">[]> => {
+    const rows = await ctx.db
+      .query("threadReplies")
+      .withIndex("by_status", (q) => q.eq("status", "draft"))
+      .filter((q) => q.gte(q.field("_creationTime"), since))
+      .take(limit);
+    return rows.map((r) => r._id);
   },
 });
 
@@ -208,7 +234,7 @@ export const draftForCall = internalAction({
     if (data.existingReplyId) return { status: "exists", replyId: data.existingReplyId };
     const { question } = data;
     // No reply (and no row) where we can't post: other sources, or Bluesky/Reddit not set up.
-    const target = replyTarget(question, replyEnv());
+    const target = replyTarget(question, await replyEnvFor(data.elderId));
     if (!target.ok) return { status: "none", reason: target.reason };
     const { platform } = target;
     const base = {
@@ -234,8 +260,14 @@ export const draftForCall = internalAction({
 
     const lang = replyLanguage(written.language);
     const text = finalReplyText(written.text, lang, platform);
-    // Same fact-check as LinkedIn posts, on the body (our disclosure line isn't his claim).
-    const guard = await ctx.runAction(internal.postGuard.checkPost, { postText: replyBody(text), turns: data.turns });
+    // Same fact-check as story posts, on the body (our disclosure line isn't his claim). A reply
+    // translated into the thread's language gets a note so it's judged on meaning, not wording.
+    const context = guardContextForReply(lang, data.callLanguage);
+    const guard = await ctx.runAction(internal.postGuard.checkPost, {
+      postText: replyBody(text),
+      turns: data.turns,
+      ...(context ? { context } : {}),
+    });
     const status = draftStatus(guard);
     const saved = await ctx.runMutation(internal.threadReplies.saveReply, {
       ...base,
@@ -252,7 +284,8 @@ export const draftForCall = internalAction({
   },
 });
 
-async function timedFetch(url: string, init: RequestInit): Promise<Response> {
+/** fetch with a timeout (AbortController); a timeout surfaces as a thrown error. */
+const timedFetch: FetchFn = async (url, init) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
   try {
@@ -260,75 +293,62 @@ async function timedFetch(url: string, init: RequestInit): Promise<Response> {
   } finally {
     clearTimeout(timer);
   }
-}
+};
 
-async function postToReddit(threadUrl: string, text: string): Promise<{ url?: string; error?: string }> {
-  const e = process.env;
-  const thingId = redditThingId(threadUrl);
-  if (!thingId) return { error: "Couldn't find the Reddit post id in the thread link." };
-  if (!e.REDDIT_CLIENT_ID || !e.REDDIT_CLIENT_SECRET || !e.REDDIT_USERNAME || !e.REDDIT_PASSWORD) {
-    return { error: "Reddit credentials are missing." };
-  }
-  const userAgent = e.REDDIT_USER_AGENT || `web:frontporch:v1 (by /u/${e.REDDIT_USERNAME})`;
-  const basic = btoa(`${e.REDDIT_CLIENT_ID}:${e.REDDIT_CLIENT_SECRET}`); // default Convex runtime: no Buffer
-  const tokenRes = await timedFetch("https://www.reddit.com/api/v1/access_token", {
-    method: "POST",
-    headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/x-www-form-urlencoded", "User-Agent": userAgent },
-    body: new URLSearchParams({ grant_type: "password", username: e.REDDIT_USERNAME, password: e.REDDIT_PASSWORD }).toString(),
-  });
-  if (!tokenRes.ok) return { error: `Reddit token HTTP ${tokenRes.status}` };
-  const token = ((await tokenRes.json().catch(() => null)) as { access_token?: unknown } | null)?.access_token;
-  if (typeof token !== "string" || !token) return { error: "Reddit returned no access token." };
-  const res = await timedFetch("https://oauth.reddit.com/api/comment", {
-    method: "POST",
-    headers: { Authorization: `bearer ${token}`, "Content-Type": "application/x-www-form-urlencoded", "User-Agent": userAgent },
-    body: new URLSearchParams({ api_type: "json", thing_id: thingId, text }).toString(),
-  });
-  if (!res.ok) return { error: `Reddit HTTP ${res.status}` };
-  const parsed = parseRedditComment(await res.json().catch(() => null));
-  if (parsed.errors.length) return { error: `Reddit: ${parsed.errors.join(", ")}` };
-  return parsed.url ? { url: parsed.url } : {};
-}
-
-async function postToBluesky(threadRef: string | undefined, text: string, lang: string): Promise<{ url?: string; error?: string }> {
-  const handle = process.env.BLUESKY_HANDLE;
-  const password = process.env.BLUESKY_APP_PASSWORD;
-  if (!handle || !password) return { error: "Bluesky login isn't set." };
-  if (!threadRef) return { error: "No Bluesky post uri to reply under." };
-  const fetchFn = timedFetch as unknown as FetchFn;
-  const session = await createSession(fetchFn, { service: blueskyService(process.env.BLUESKY_SERVICE), identifier: handle, password });
-  const question = await getPost(fetchFn, session, threadRef);
-  if (!question) return { error: "The Bluesky post is gone (deleted or hidden)." };
-  const reply = replyRefFor(question);
-  if (!reply) return { error: "Couldn't read the Bluesky post to reply under." };
-  const created = await createReply(fetchFn, session, { text, langs: [lang === "es" ? "es" : "en"], reply });
-  return { url: postWebUrl(created.uri, session.handle) };
-}
-
-/** Post a reply (one run at a time). approve:true posts a reply the fact-check held. */
+/** Post a reply (one run at a time). approve:true posts a held or "maybe posted" reply. */
 export const postReply = internalAction({
   args: { replyId: v.id("threadReplies"), approve: v.optional(v.boolean()) },
   handler: async (ctx, { replyId, approve }): Promise<{ status: string; url?: string; reason?: string }> => {
-    const reply = await ctx.runQuery(internal.threadReplies.getReplyForPosting, { replyId });
-    if (!reply) return { status: "failed", reason: "Reply not found." };
-    const claim = await ctx.runMutation(internal.threadReplies.claimReply, { replyId, approve: approve ?? false });
-    if (!claim.ok) return { status: reply.status, reason: claim.reason };
+    let elderId: Id<"elders"> | null = null;
+    const result = await runPostReply(
+      {
+        load: async () => {
+          const reply = await ctx.runQuery(internal.threadReplies.getReplyForPosting, { replyId });
+          elderId = reply?.elderId ?? null;
+          return reply;
+        },
+        claim: (ok) => ctx.runMutation(internal.threadReplies.claimReply, { replyId, approve: ok }),
+        post: async (reply) => {
+          if (reply.platform === "bluesky") {
+            const login = await blueskyLoginForElder(elderId);
+            return postBlueskyReply(timedFetch, sharedSessionCache(), login, { threadRef: reply.threadRef, text: reply.text, lang: reply.language });
+          }
+          if (reply.platform === "reddit") {
+            return postRedditReply(timedFetch, await redditLoginForElder(elderId), { threadUrl: reply.threadUrl, text: reply.text });
+          }
+          return { status: "failed", error: `No posting integration for ${reply.platform}.` } satisfies PostOutcome;
+        },
+        finish: async (outcome) => {
+          await ctx.runMutation(
+            internal.threadReplies.finishReply,
+            outcome.status === "posted"
+              ? { replyId, status: "posted", ...(outcome.url ? { postedUrl: outcome.url } : {}) }
+              : { replyId, status: outcome.status, error: outcome.error },
+          );
+        },
+      },
+      approve ?? false,
+    );
+    if (result.status === "posted") console.log(`threadReplies.postReply: reply ${replyId} posted`);
+    else console.warn(`threadReplies.postReply: reply ${replyId} ${result.status} (${result.reason ?? ""})`);
+    return result;
+  },
+});
 
-    let result: { url?: string; error?: string };
-    try {
-      if (reply.platform === "bluesky") result = await postToBluesky(reply.threadRef, reply.text, reply.language);
-      else if (reply.platform === "reddit") result = await postToReddit(reply.threadUrl, reply.text);
-      else result = { error: `No posting integration for ${reply.platform}.` };
-    } catch {
-      result = { error: "Network error or timeout while posting." }; // the reply may have gone out: check the thread
+/**
+ * Post the drafts written while AUTO_POST was off (status "draft", newer than maxAgeDays,
+ * default 7). Each goes through postReply (claimed, so nothing posts twice), a few seconds
+ * apart. Held (needs_review) and maybe_posted replies are never touched here.
+ *   npx convex run threadReplies:postDrafts '{"maxAgeDays": 7}'
+ */
+export const postDrafts = internalAction({
+  args: { maxAgeDays: v.optional(v.number()) },
+  handler: async (ctx, { maxAgeDays }): Promise<{ scheduled: number; replyIds: Id<"threadReplies">[] }> => {
+    const replyIds = await ctx.runQuery(internal.threadReplies.draftIdsToPost, { since: draftCutoff(Date.now(), maxAgeDays), limit: 20 });
+    for (const [i, replyId] of replyIds.entries()) {
+      await ctx.scheduler.runAfter(i * 5_000, internal.threadReplies.postReply, { replyId });
     }
-    if (result.error) {
-      await ctx.runMutation(internal.threadReplies.finishReply, { replyId, status: "failed", error: result.error });
-      console.warn(`threadReplies.postReply: reply ${replyId} failed (${result.error})`);
-      return { status: "failed", reason: result.error };
-    }
-    await ctx.runMutation(internal.threadReplies.finishReply, { replyId, status: "posted", ...(result.url ? { postedUrl: result.url } : {}) });
-    console.log(`threadReplies.postReply: reply ${replyId} posted`);
-    return { status: "posted", ...(result.url ? { url: result.url } : {}) };
+    console.log(`threadReplies.postDrafts: ${replyIds.length} scheduled`);
+    return { scheduled: replyIds.length, replyIds };
   },
 });

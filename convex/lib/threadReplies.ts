@@ -15,8 +15,13 @@ export type ReplyPlatform = "bluesky" | "reddit";
 export type ReplyMode = "auto" | "none";
 export type ReplyLanguage = "en" | "es";
 
-/** threadReplies.status values (schema stores a string). */
-export const REPLY_STATUSES = ["draft", "needs_review", "posting", "posted", "failed"] as const;
+/**
+ * threadReplies.status values (schema stores a string).
+ *   failed        nothing was posted (refused before or by the platform): safe to retry
+ *   maybe_posted  the post request went out but we don't know if it landed (timeout, 5xx):
+ *                 a person checks the thread, then retries with approve: true
+ */
+export const REPLY_STATUSES = ["draft", "needs_review", "posting", "posted", "failed", "maybe_posted"] as const;
 export type ReplyStatus = (typeof REPLY_STATUSES)[number];
 
 /** A posting claim older than this is assumed crashed and can be retaken. */
@@ -107,7 +112,7 @@ export function replyMode(platform: ReplyPlatform | null, env: ReplyEnv): { mode
         ? { mode: "auto", reason: "Posted on Bluesky from his account, threaded under the question." }
         : { mode: "none", reason: "Bluesky login isn't set (BLUESKY_HANDLE, BLUESKY_APP_PASSWORD)." };
     case "reddit": {
-      if (!redditPostingOn(env.redditPosting)) return { mode: "none", reason: "Reddit posting is off (REDDIT_POSTING)." };
+      if (!redditPostingOn(env.redditPosting)) return { mode: "none", reason: "Reddit posting is off or his Reddit login isn't set (REDDIT_POSTING)." };
       const creds = [env.redditClientId, env.redditClientSecret, env.redditUsername, env.redditPassword];
       if (creds.some((c) => !c)) return { mode: "none", reason: "Reddit credentials are missing." };
       return { mode: "auto", reason: "Posted through Reddit's API as his account." };
@@ -202,16 +207,32 @@ export function replyLanguage(value: unknown): ReplyLanguage {
   return typeof value === "string" && value.trim().toLowerCase().startsWith("es") ? "es" : "en";
 }
 
+const LANGUAGE_NAME: Record<ReplyLanguage, string> = { en: "English", es: "Spanish" };
+
+/**
+ * The writer answers in the thread's language, so a reply can be a translation of the call.
+ * Tell the fact-check (postGuard `context`) so it compares meaning, not wording. Undefined when
+ * the reply is in the call's language. Holds no facts about him, only how to read the reply.
+ */
+export function guardContextForReply(replyLang: ReplyLanguage, callLanguage: string | undefined): string | undefined {
+  const call = replyLanguage(callLanguage);
+  if (call === replyLang) return undefined;
+  return `How to read this reply (not a fact about him): it is written in ${LANGUAGE_NAME[replyLang]}, translated from the phone call, which was in ${LANGUAGE_NAME[call]}. Compare meaning, not wording: a faithful translation of what he said counts as his words.`;
+}
+
 // ---------- posting claims ----------
 
 export type ReplyState = { status: string; claimedAt?: number };
 
 /**
  * May this run post the reply now? One run at a time (claim -> `posting`), never twice.
- *   draft / failed -> yes
+ *   draft / failed -> yes (failed means nothing went out)
  *   needs_review   -> only when a person approves it (approve: true)
- *   posting        -> only if the earlier claim is stale (crashed run)
+ *   maybe_posted   -> only with approve: true, after a person checked the thread
+ *   posting        -> only if the earlier claim is stale (crashed run) AND approve: true,
+ *                     since the crashed run may have posted
  *   posted         -> no
+ * (On Bluesky, posting also checks for his existing reply under the post first.)
  */
 export function canClaimReply(reply: ReplyState, now: number, approve: boolean): { ok: true } | { ok: false; reason: string } {
   switch (reply.status) {
@@ -220,15 +241,36 @@ export function canClaimReply(reply: ReplyState, now: number, approve: boolean):
       return { ok: true };
     case "needs_review":
       return approve ? { ok: true } : { ok: false, reason: "Held by the fact-check: approve it to post." };
-    case "posting":
-      return reply.claimedAt !== undefined && now - reply.claimedAt > STALE_CLAIM_MS
+    case "maybe_posted":
+      return approve
         ? { ok: true }
-        : { ok: false, reason: "Already being posted." };
+        : { ok: false, reason: "It may already be on the thread: check it, then retry with approve: true." };
+    case "posting":
+      if (reply.claimedAt === undefined || now - reply.claimedAt <= STALE_CLAIM_MS) return { ok: false, reason: "Already being posted." };
+      return approve
+        ? { ok: true }
+        : { ok: false, reason: "An earlier run stopped mid-post: check the thread, then retry with approve: true." };
     case "posted":
       return { ok: false, reason: "Already posted." };
     default:
       return { ok: false, reason: `Unknown status ${reply.status}.` };
   }
+}
+
+/**
+ * After the post request itself failed: "failed" when the platform clearly refused it (4xx,
+ * nothing was posted), "maybe_posted" when we can't tell (no response / timeout, 408, 5xx, or a
+ * 2xx we couldn't read).
+ */
+export function writeFailureStatus(httpStatus: number | undefined): "failed" | "maybe_posted" {
+  if (httpStatus === undefined || httpStatus === 408 || httpStatus >= 500 || (httpStatus >= 200 && httpStatus < 300)) return "maybe_posted";
+  return "failed";
+}
+
+/** postDrafts: drafts newer than this many days (default 7, 1-60) get posted. */
+export function draftCutoff(now: number, maxAgeDays: number | undefined): number {
+  const days = maxAgeDays === undefined || !Number.isFinite(maxAgeDays) ? 7 : Math.min(60, Math.max(1, maxAgeDays));
+  return now - days * 86_400_000;
 }
 
 /** Status for a fresh draft: held by the fact-check, or ready to auto-post. */

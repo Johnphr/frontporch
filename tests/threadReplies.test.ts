@@ -140,7 +140,10 @@ test("draftStatus + canClaimReply", () => {
   assert.equal(canClaimReply({ status: "needs_review" }, now, false).ok, false);
   assert.equal(canClaimReply({ status: "needs_review" }, now, true).ok, true);
   assert.equal(canClaimReply({ status: "posting", claimedAt: now - 1000 }, now, false).ok, false);
-  assert.equal(canClaimReply({ status: "posting", claimedAt: now - STALE_CLAIM_MS - 1 }, now, false).ok, true);
+  assert.equal(canClaimReply({ status: "posting", claimedAt: now - STALE_CLAIM_MS - 1 }, now, false).ok, false, "a crashed run may have posted");
+  assert.equal(canClaimReply({ status: "posting", claimedAt: now - STALE_CLAIM_MS - 1 }, now, true).ok, true);
+  assert.equal(canClaimReply({ status: "maybe_posted" }, now, false).ok, false, "unclear: a person checks first");
+  assert.equal(canClaimReply({ status: "maybe_posted" }, now, true).ok, true);
   assert.equal(canClaimReply({ status: "posted" }, now, true).ok, false);
 });
 

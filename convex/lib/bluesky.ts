@@ -14,6 +14,19 @@ import { cleanText } from "./text.ts";
 export const POST_COLLECTION = "app.bsky.feed.post";
 export const MAX_POST_GRAPHEMES = 300;
 
+/** About this many Bluesky posts per question search, spread over all his keywords. */
+export const BLUESKY_SEARCH_TOTAL = 50;
+
+/**
+ * Every keyword gets searched (up to 8), each with a small limit so the total stays near
+ * BLUESKY_SEARCH_TOTAL: 1 keyword -> 25, 5 -> 10, 8 -> 7 (never below 5).
+ */
+export function blueskySearchPlan(keywords: string[], total = BLUESKY_SEARCH_TOTAL): { queries: string[]; limit: number } {
+  const queries = [...new Set(keywords.map((k) => k.trim()).filter(Boolean))].slice(0, 8);
+  const limit = queries.length ? Math.min(25, Math.max(5, Math.ceil(total / queries.length))) : 0;
+  return { queries, limit };
+}
+
 export type StrongRef = { uri: string; cid: string };
 
 /** Grapheme count (what Bluesky limits). Falls back to code points, which never undercounts. */

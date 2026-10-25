@@ -14,6 +14,7 @@ import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { labelledTranscript } from "./lib/linkedinPost";
 import { structuredOutput } from "./lib/openai";
+import { neutralizeFences } from "./lib/text";
 
 const REPLY_SYSTEM = `You write a reply on an online discussion thread, in the first person, as an older professional (ELDER) answering the thread's question from his own account. PIP is the AI interviewer who talked with him on the phone.
 
@@ -49,9 +50,7 @@ const SCHEMA = {
 
 const turnValidator = v.object({ role: v.string(), text: v.string() });
 
-function neutralize(text: string): string {
-  return text.replace(/<\/?(thread|transcript)\b[^>]*>/gi, (m) => m.replace(/</g, "‹").replace(/>/g, "›"));
-}
+const neutralize = (text: string) => neutralizeFences(text, ["thread", "transcript"]);
 
 export type WrittenReply = { skip: boolean; reason: string; text: string; language: string };
 

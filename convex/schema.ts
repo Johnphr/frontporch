@@ -286,8 +286,8 @@ export default defineSchema({
   // His answer, posted back on the online thread a story call's question came from (an
   // audienceQuestions row). One reply per thread (by_audience).
   // Only Bluesky (auto) and Reddit (once REDDIT_POSTING=on); no row for any other source.
-  // status: draft (ready to auto-post) | needs_review (held by the fact-check) | posting
-  //       | posted | failed
+  // status: draft (ready to post) | needs_review (held by the fact-check) | posting
+  //       | posted | failed (nothing went out) | maybe_posted (unclear: check the thread)
   threadReplies: defineTable({
     elderId: v.id("elders"),
     callId: v.id("calls"),
