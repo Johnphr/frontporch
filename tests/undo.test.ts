@@ -7,13 +7,16 @@ import { blueskyDeleteOrder, deleteBlueskyThread } from "../convex/lib/blueskyDe
 import { TAKE_DOWN_LINE, KEEP_UP_LINE, TODAY_LINE } from "../convex/lib/prompts/principles.ts";
 import { canClaimReply, callLanguageOf } from "../convex/lib/threadReplies.ts";
 import {
+  BLUESKY_NOT_FOUND_NOTE,
   HOLD_REASON,
   STALE_REMOVE_MS,
   STUCK_NOTE,
   claimPatch,
   deleteRedditThing,
+  deleteUnsavedBluesky,
   detectTakeDown,
   finishPatch,
+  needsBlueskyLookup,
   ownsClaim,
   pickLatestPost,
   planPostRemoval,
@@ -206,7 +209,8 @@ test("removePost: every platform sorted into removed / manual / waiting, post ma
   const r = await s.run(NOW, OK);
   assert.equal(s.db.post.status, "removed");
   assert.equal(s.db.post.removedAt, NOW);
-  assert.deepEqual(r.removed, ["bluesky https://bsky.app/p/1", "reddit"]);
+  assert.deepEqual(r.removed, ["bluesky https://bsky.app/p/1"]);
+  assert.deepEqual(r.cleared, ["reddit"], "never went out: cleared, not counted as removed");
   assert.deepEqual(r.manual, ["linkedin https://www.linkedin.com/feed/update/urn:li:activity:1"]);
   assert.equal(r.failed.length, 0);
   assert.equal(r.waiting.length, 1);
@@ -214,7 +218,45 @@ test("removePost: every platform sorted into removed / manual / waiting, post ma
   assert.equal(s.db.rows.get("fl")!.status, "posting", "in-flight row left alone");
   assert.equal(s.db.rows.get("li")!.status, "posted");
   assert.match(String(s.db.rows.get("li")!.error), /by hand/);
-  assert.equal(summaryLine(r), "2 removed, 1 to remove by hand, 1 waiting");
+  assert.equal(summaryLine(r), "1 removed, 1 never went out, 1 to remove by hand, 1 waiting");
+  // On a second run the cleared row stays cleared, the deleted one stays removed.
+  const again = await s.run(NOW + 1000, OK);
+  assert.deepEqual(again.cleared, ["reddit"]);
+  assert.deepEqual(again.removed, ["bluesky https://bsky.app/p/1"]);
+});
+
+test("removePost: a Bluesky row that may have gone out with no ids is looked for in his repo", async () => {
+  const s = store([{ _id: "bs", platform: "bluesky", status: "maybe_posted", _creationTime: NOW - 60_000 }]);
+  const plan = planPostRemoval({}, [{ _id: "bs", platform: "bluesky", status: "maybe_posted", _creationTime: NOW - 60_000 }], undefined, NOW);
+  assert.equal(needsBlueskyLookup(plan.entries[0]), true);
+  assert.equal(plan.entries[0].since, NOW - 60_000);
+  const texts = ["one", "two"];
+  const listed = [
+    { uri: R2, cid: "c2", text: "two", parentUri: ROOT, createdAt: NOW - 50_000 },
+    { uri: ROOT, cid: "c1", text: "one", createdAt: NOW - 55_000 },
+    { uri: R3, cid: "c3", text: "one", createdAt: NOW - 10 * DAY }, // an older post with the same text
+  ];
+  let removed: string[] = [];
+  const found = await deleteUnsavedBluesky(
+    { list: async () => listed, remove: async (uris) => ((removed = uris), { ok: true, deleted: uris.length, alreadyGone: 0 }) },
+    texts,
+    NOW - 60_000,
+  );
+  assert.equal(found.ok, true);
+  assert.deepEqual(removed, [ROOT, R2]);
+  // Not there: manual (check his profile), never a retried failure.
+  const none = await deleteUnsavedBluesky({ list: async () => [], remove: async () => assert.fail("nothing to delete") }, texts, NOW - 60_000);
+  assert.deepEqual(none, { ok: false, error: BLUESKY_NOT_FOUND_NOTE, manual: true });
+  const r = await s.run(NOW, async () => none);
+  assert.deepEqual(r.manual, ["bluesky"]);
+  assert.equal(r.failed.length, 0);
+  assert.equal(retryDelay(r, 1), null, "not retried");
+  assert.equal(s.db.rows.get("bs")!.status, "maybe_posted");
+  assert.equal(s.db.rows.get("bs")!.error, BLUESKY_NOT_FOUND_NOTE);
+  // His posts couldn't be read: a normal failure (retried).
+  const down = await deleteUnsavedBluesky({ list: async () => Promise.reject(new Error("x")), remove: OK }, texts, NOW);
+  assert.equal(down.ok, false);
+  assert.ok(!("manual" in down));
 });
 
 test("removePost: running twice is safe (no second platform delete)", async () => {
@@ -461,15 +503,26 @@ test("retries: failed or waiting runs again with backoff, 3 tries in all", () =>
   assert.equal(retryDelay({ ...done, waiting: ["bluesky (in flight)"] }, 1), 60_000);
 });
 
-test("removeLatest: a removed post counts at its creation time; a post held on its own call doesn't", () => {
-  const removedByFamily = { ...cand("fam", "c2", [{ status: "removed" }], NOW - DAY), removedAt: NOW - DAY / 2, removedReason: "family request" };
+test("removeLatest: a removed post that went out still counts; a post held on its own call doesn't", () => {
+  // Deleted rows keep postedAt / records.
+  const removedByFamily = { ...cand("fam", "c2", [{ status: "removed", postedAt: NOW - DAY, hasCopy: true }], NOW - DAY), removedAt: NOW - DAY / 2, removedReason: "family request" };
   const older = cand("older", "c1", [{ status: "posted", postedAt: NOW - 5 * DAY }]);
   assert.equal(pickLatestPost([older, removedByFamily], NOW)?.postId, "fam");
+  // A legacy post (no rows) taken down counts at its creation time.
+  const legacy = { ...cand("legacy", "c5", [], NOW - DAY), status: "removed", removedAt: NOW - DAY / 2, removedReason: "family request" };
+  assert.equal(pickLatestPost([older, legacy], NOW)?.postId, "legacy");
   const held = { ...cand("held", "c3", [{ status: "removed" }], NOW - DAY), removedAt: NOW - DAY, removedReason: HOLD_REASON };
   assert.equal(pickLatestPost([older, held], NOW)?.postId, "older", "never went out: not 'that last post'");
   // A half-posted thread (failed with records) went out.
   const partial = cand("partial", "c4", [{ status: "failed", hasCopy: true }], NOW - 2 * DAY);
   assert.equal(pickLatestPost([older, partial], NOW)?.postId, "partial");
+});
+
+test("removeLatest: a newer post removed before it ever went out is skipped (S2)", () => {
+  // B: taken down while its rows were still pending (marked removed, no postedAt, no ids).
+  const b = { ...cand("B", "c2", [{ status: "removed" }, { status: "removed" }], NOW - DAY), status: "removed", removedAt: NOW - DAY, removedReason: "family request" };
+  const a = cand("A", "c1", [{ status: "posted", postedAt: NOW - 3 * DAY, hasCopy: true }], NOW - 3 * DAY);
+  assert.equal(pickLatestPost([b, a], NOW)?.postId, "A");
 });
 
 test("bluesky: only post records are deleted (collection checked)", async () => {
