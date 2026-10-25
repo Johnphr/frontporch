@@ -503,7 +503,7 @@ test("hardChecks: a post that can't be a 5-post Bluesky thread is a blocker (hoo
   const hook = `${words(70, "longword")} and more.`;
   const badHook = [hook, "Short story.", "What about you?"].join("\n\n");
   const fit = hardChecks(badHook, "en").find((i) => i.id === "thread_fit");
-  assert.match(fit?.message ?? "", /opening line/);
+  assert.match(fit?.message ?? "", /opening sentence is \d+ characters/);
   assert.ok(!hardChecks(EN_POST, "en").some((i) => i.id === "thread_fit"));
 });
 

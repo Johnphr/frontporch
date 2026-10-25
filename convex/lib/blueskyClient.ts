@@ -8,7 +8,7 @@
 // renewed with refreshSession before falling back to a new login.
 
 import { POST_COLLECTION, blueskyItemsFromSearch, searchPostsQuery, type StrongRef } from "./bluesky.ts";
-import type { ListedPost } from "./blueskyThread.ts";
+import { tidTimestampMs, type ListedPost } from "./blueskyThread.ts";
 
 export type FetchFn = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => Promise<{
   ok: boolean;
@@ -278,10 +278,11 @@ export async function createPost(
  * so a retry continues the thread instead of posting it twice.
  *   sent: the failing request was a createRecord (it may have landed unless the status says
  *   it was refused); false = it failed before posting (login), nothing new went out.
+ *   loginError: the raw login error when sent is false (for lib/logins.reportBlueskyLoginError).
  */
 export type ThreadOutcome =
   | { ok: true; records: StrongRef[]; handle: string }
-  | { ok: false; records: StrongRef[]; handle?: string; error: string; sent: boolean; httpStatus?: number };
+  | { ok: false; records: StrongRef[]; handle?: string; error: string; sent: boolean; httpStatus?: number; loginError?: unknown };
 
 /**
  * Post a thread: texts[0] is the root, each next post replies with root = the first post and
@@ -327,7 +328,15 @@ export async function createThread(
           : sent
             ? "Network error, timeout or unreadable answer while posting to Bluesky"
             : "Network error or timeout logging in to Bluesky";
-      return { ok: false, records, ...(handle ? { handle } : {}), error: message, sent, ...(httpStatus !== undefined ? { httpStatus } : {}) };
+      return {
+        ok: false,
+        records,
+        ...(handle ? { handle } : {}),
+        error: message,
+        sent,
+        ...(httpStatus !== undefined ? { httpStatus } : {}),
+        ...(sent ? {} : { loginError: error }),
+      };
     }
   }
   if (!handle) {
@@ -346,7 +355,10 @@ export function loginRefusedMessage(error: BlueskyHttpError): string {
   return `Bluesky login refused: HTTP ${error.status}${error.xrpcError ? ` (${error.xrpcError})` : ""}`;
 }
 
-/** His newest posts (straight from his repo, so the cid is there), for finding an earlier run's thread. */
+/**
+ * His newest posts (straight from his repo, so the cid is there), for finding an earlier run's
+ * thread. createdAt: the record's createdAt, else the time in its TID record key.
+ */
 export async function listOwnPosts(fetchFn: FetchFn, s: BlueskySession, limit = 50): Promise<ListedPost[]> {
   const q = new URLSearchParams({ repo: s.did, collection: POST_COLLECTION, limit: String(Math.min(100, Math.max(1, limit))) });
   const res = await fetchFn(`${s.service}/xrpc/com.atproto.repo.listRecords?${q.toString()}`, { headers: auth(s) });
@@ -355,10 +367,18 @@ export async function listOwnPosts(fetchFn: FetchFn, s: BlueskySession, limit = 
   if (!Array.isArray(records)) return [];
   const out: ListedPost[] = [];
   for (const r of records) {
-    const x = (r ?? {}) as { uri?: unknown; cid?: unknown; value?: { text?: unknown; reply?: { parent?: { uri?: unknown } } } };
+    const x = (r ?? {}) as { uri?: unknown; cid?: unknown; value?: { text?: unknown; createdAt?: unknown; reply?: { parent?: { uri?: unknown } } } };
     if (typeof x.uri !== "string" || typeof x.cid !== "string" || typeof x.value?.text !== "string") continue;
     const parentUri = x.value.reply?.parent?.uri;
-    out.push({ uri: x.uri, cid: x.cid, text: x.value.text, ...(typeof parentUri === "string" ? { parentUri } : {}) });
+    const stamped = typeof x.value.createdAt === "string" ? Date.parse(x.value.createdAt) : NaN;
+    const createdAt = Number.isFinite(stamped) ? stamped : tidTimestampMs(x.uri.split("/").pop() ?? "");
+    out.push({
+      uri: x.uri,
+      cid: x.cid,
+      text: x.value.text,
+      ...(typeof parentUri === "string" ? { parentUri } : {}),
+      ...(createdAt !== undefined ? { createdAt } : {}),
+    });
   }
   return out;
 }
