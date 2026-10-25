@@ -168,6 +168,16 @@ each one (taken down meanwhile → `undo:removePost`):
 The writer keeps posts short enough for a 5-post thread (`lib/postQuality.ts`); one that still
 doesn't fit is held as `thread_fit`.
 
+**Posts that answer a question.** When the call started from a question a real person asked (a
+bank row with source `audience` → its `audienceQuestions` title, or `reader` → the row's question),
+`pipeline.getAskedQuestion` passes `llm.writePost` an `askedQuestion` (text only, cleaned of
+links, handles and u/ r/ names, ≤200 characters; `lib/postQuality.askedQuestionForCall`). The
+hook then frames that question in his voice and the post's language ("People often ask how…",
+"Me preguntan mucho cómo…") and the story answers it; the judge's hook score checks that. It never
+quotes, tags or links the person or thread, so on X, Threads and Bluesky it reads as his own post,
+not an automated reply: an `@handle` or a link in any post, or the question quoted word for word
+(8+ words in a row), is a blocker in `hardChecks`. Other calls keep the usual hooks.
+
 ### ④ Feedback loop (slice 3)
 Daily cron → `schedule.dailyEngagement` → `blueskyEngagement.scrapeForElder` per active elder
 (staggered 30 s). For each Bluesky thread he posted in the last 30 days (`postPublications`

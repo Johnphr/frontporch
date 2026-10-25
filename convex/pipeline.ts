@@ -12,7 +12,8 @@
 //          memories  llm.extractKnowledge -> memories.addMany (+ resolve the open threads he
 //                    finished; only thread ids we sent are passed back)
 //          post      llm.writePost, given the time left of the 10-min action limit
-//                    (lib/postQuality.postBudgetMs; may decline: no post) -> insertPost: one
+//                    (lib/postQuality.postBudgetMs; may decline: no post; opens with the question
+//                    when an audience / reader question started the call: getAskedQuestion) -> insertPost: one
 //                    posts row per call (posts.by_call) with its language; below the quality
 //                    bar (heldFor "quality") or too long for a 5-post Bluesky thread ("thread_fit")
 //                    -> needs_review, not posted; else publish.publishPost (Bluesky thread,
@@ -49,7 +50,7 @@ import { canClaimProcessing, finishPatch, isProfileUsable, mergeProfile, type Pr
 import { runSteps, type StepReport } from "./lib/planner";
 import { threadFitProblem } from "./lib/blueskyThread";
 import { parseAutoPost } from "./lib/postFlow";
-import { MIN_POST_BUDGET_MS, holdDecision, postBudgetMs } from "./lib/postQuality";
+import { MIN_POST_BUDGET_MS, askedQuestionForCall, holdDecision, postBudgetMs, type AskedQuestion } from "./lib/postQuality";
 import { postLanguage } from "./publish";
 import { CALL_REASON, detectTakeDown, type TakeDownHow } from "./lib/undo";
 import { postQuality } from "./schema";
@@ -170,6 +171,30 @@ export const findPostForCall = internalQuery({
 });
 
 /**
+ * The question this call answered, when a real person asked it: the audience question (its
+ * title) or the reader question behind the plan's bank row. Text only, cleaned and clipped
+ * (lib/postQuality.askedQuestionForCall); never a name, url or community. null otherwise.
+ */
+export const getAskedQuestion = internalQuery({
+  args: { callId: v.id("calls") },
+  handler: async (ctx, { callId }): Promise<AskedQuestion | null> => {
+    const call = await ctx.db.get(callId);
+    if (!call) return null;
+    const bankId = (call.plan as { bankId?: unknown } | undefined)?.bankId;
+    const bankDocId = typeof bankId === "string" ? ctx.db.normalizeId("questionBank", bankId) : null;
+    const bankRow = bankDocId ? await ctx.db.get(bankDocId) : null;
+    if (!bankRow || bankRow.elderId !== call.elderId) return null;
+    const audienceId = bankRow.source === "audience" && bankRow.sourceRef ? ctx.db.normalizeId("audienceQuestions", bankRow.sourceRef) : null;
+    const audience = audienceId ? await ctx.db.get(audienceId) : null;
+    return askedQuestionForCall(
+      call.plan,
+      { _id: bankRow._id, source: bankRow.source, sourceRef: bankRow.sourceRef, question: bankRow.question },
+      audience && audience.elderId === call.elderId ? { _id: audience._id, title: audience.title } : null,
+    );
+  },
+});
+
+/**
  * Dev/testing: a finished call from a fixture (tests/fixtures/onboarding_call.json,
  * story_call.json), so the whole post-call flow runs without a phone. Use a throwaway seeded
  * elder: fixture facts merge into his profile and memories. A story fixture would post to his
@@ -254,12 +279,20 @@ async function runStoryCall(
         if (budgetMs < MIN_POST_BUDGET_MS) throw new Error("not enough time left in this run for the post step");
         // The language it goes out in (the same one insertPost saves), for the writer's fit check.
         const language = await ctx.runQuery(internal.publish.languageForElder, { elderId: elder._id });
+        // A question a real person asked (audience / reader): the post opens with it. Best effort.
+        let askedQuestion: AskedQuestion | null = null;
+        try {
+          askedQuestion = await ctx.runQuery(internal.pipeline.getAskedQuestion, { callId });
+        } catch {
+          // usual hooks
+        }
         const post = await ctx.runAction(internal.llm.writePost, {
           turns,
           ...(profile ? { profile } : {}),
           ...(feedback ? { feedback } : {}),
           budgetMs,
           language,
+          ...(askedQuestion ? { askedQuestion } : {}),
         });
         if (post.skip) return `no post: ${post.reason}`;
         // insertPost holds it (below the quality bar, or too long for a Bluesky thread: shown on
