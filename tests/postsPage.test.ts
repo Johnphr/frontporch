@@ -109,3 +109,22 @@ test("a thread-fit hold is labelled as one, not as a quality hold", async () => 
   assert.match(html, /Held: too long for a Bluesky thread/);
   assert.doesNotMatch(html, /below the quality bar/);
 });
+
+test("renderPostsPage: Threads and X rows show their name, status and link", () => {
+  const html = renderPostsPage(
+    [
+      {
+        ...post,
+        status: "published",
+        publications: [
+          { id: "t1", platform: "threads", status: "posted", url: "https://www.threads.com/@walter/post/p1", posts: 3 },
+          { id: "x1", platform: "x", status: "failed", error: "X HTTP 403.", posts: 1 },
+        ],
+      },
+    ],
+    { key: "k" },
+  );
+  assert.match(html, /<strong>Threads<\/strong>: <span class="pstatus s-posted">Posted<\/span> \(3 posts\) <a href="https:\/\/www\.threads\.com\/@walter\/post\/p1"/);
+  assert.match(html, /<strong>X<\/strong>: <span class="pstatus s-failed">Partly posted \(1 post out\)<\/span>/);
+  assert.match(html, /publish:retryPublication &#39;\{&quot;publicationId&quot;:&quot;x1&quot;\}&#39;/);
+});
