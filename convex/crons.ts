@@ -8,6 +8,7 @@ import { internal } from "./_generated/api";
 //           (+ LinkedIn reactions/comments if LINKEDIN_POSTING=on)  -> internal.apify.scrapeEngagement
 //   30 s    replies on his Bluesky + Threads posts (last 2h)        -> internal.schedule.recentEngagement
 //   5 min   replies on his Bluesky + Threads posts (2 to 48h old)   -> internal.schedule.recentEngagement
+//           (+ X posts < 48h old with FAST_POST + X_READ_FEEDBACK on)
 //   weekly  find audience questions for each active elder           -> internal.apify.findAudienceQuestions
 //   10 min  record inbound calls the lookup tool missed             -> internal.inbound.syncInboundCalls
 //   1 min   repeat calls every CALL_INTERVAL_MINUTES (testing)      -> internal.callLoop.tick
@@ -25,7 +26,8 @@ crons.daily("scrape reader engagement", { hourUTC: 13, minuteUTC: 15 }, internal
 
 // Likes + replies on his Bluesky and Threads posts: every 30 s for posts from the last 2h (a
 // reply reaches his question bank and feedback line in about a minute), every 5 min for posts
-// 2 to 48h old. Never X (paid reads; X stays on the daily job). One indexed query when idle.
+// 2 to 48h old. X joins the 5-min run (posts < 48h) only with FAST_POST=on and X_READ_FEEDBACK=on
+// (X bills a post once per UTC day); otherwise X stays on the daily job. One indexed query when idle.
 crons.interval("fresh engagement", { seconds: 30 }, internal.schedule.recentEngagement, { tier: "fast" });
 crons.interval("recent engagement", { minutes: 5 }, internal.schedule.recentEngagement, { tier: "slow" });
 

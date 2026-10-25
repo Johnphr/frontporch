@@ -1,7 +1,8 @@
 // How readers reacted to his X posts (only when X_READ_FEEDBACK=on: X bills every read).
 //
-//   scrapeForElder       daily (schedule.dailyEngagement): his posted X publications from the
-//                        last 30 days (not removed) -> likes + retweets + quotes on the root post;
+//   scrapeForElder       daily (schedule.dailyEngagement), and every 5 min with days: 2 when
+//                        FAST_POST=on (schedule.recentEngagement): his posted X publications from
+//                        the window (default 30 days, not removed) -> likes + retweets + quotes on the root post;
 //                        reply texts too only with X_READ_REPLIES=on (posts < 7 days old, max 10
 //                        each) -> engagement:upsert with platform "x". Logs the estimated reads.
 //   publicationsForElder his X postPublications rows (read only; publish.ts writes them)
@@ -14,6 +15,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalAction, internalQuery } from "./_generated/server";
+import { scrapeDays } from "./lib/blueskyEngagement";
 import { readXEngagement, xFeedbackOn, xPublicationsToRead, xRepliesOn, type XPublication } from "./lib/xEngagement";
 import { xLoginForElder } from "./lib/xLogin";
 import type { FetchFn } from "./lib/xOAuth";
@@ -71,12 +73,13 @@ export const publicationsForElder = internalQuery({
 type ScrapeResult = { skipped?: string; posts: number; upserted: number; reactions: number; replies: number; gone: number; reads: number; errors: string[] };
 
 export const scrapeForElder = internalAction({
-  args: { elderId: v.id("elders") },
-  handler: async (ctx, { elderId }): Promise<ScrapeResult> => {
+  // days: only posts from the last `days` (the 5-min recent cron passes 2). Default 30.
+  args: { elderId: v.id("elders"), days: v.optional(v.number()) },
+  handler: async (ctx, { elderId, days }): Promise<ScrapeResult> => {
     const result: ScrapeResult = { posts: 0, upserted: 0, reactions: 0, replies: 0, gone: 0, reads: 0, errors: [] };
     if (!xFeedbackOn(process.env)) return { ...result, skipped: "X_READ_FEEDBACK is off" };
     const rows = await ctx.runQuery(internal.xEngagement.publicationsForElder, { elderId });
-    const pubs = xPublicationsToRead(rows, Date.now());
+    const pubs = xPublicationsToRead(rows, Date.now(), scrapeDays(days));
     result.posts = pubs.length;
     if (!pubs.length) return result;
     const login = await xLoginForElder(ctx, elderId, { fetchFn: timedFetch });

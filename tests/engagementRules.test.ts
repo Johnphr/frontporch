@@ -21,6 +21,9 @@ import {
   planDailyEngagement,
   planRecentEngagement,
   platformOf,
+  recentQueryWindow,
+  recentWindow,
+  xRecentOn,
 } from "../convex/lib/engagementRules.ts";
 import { canonicalLinkedInPostUrl } from "../convex/lib/linkedinUrl.ts";
 
@@ -98,14 +101,14 @@ test("isRecentPost: posts rows from the last 48h", () => {
   assert.equal(isRecentPost(undefined, now), false);
 });
 
-test("planRecentEngagement: Bluesky + Threads only, one run per elder and platform, staggered, by tier", () => {
+test("planRecentEngagement: Bluesky + Threads (+ X on the 5-min tier when on), one run per elder and platform, staggered, by tier", () => {
   const now = Date.parse("2026-10-24T12:00:00Z");
   const H = 3_600_000;
   const pubs = [
     { elderId: "a", platform: "bluesky", status: "posted", postedAt: now - 0.5 * H },
     { elderId: "a", platform: "bluesky", status: "posted", postedAt: now - 1 * H }, // same elder: one run
     { elderId: "a", platform: "threads", status: "posted", postedAt: now - 1.5 * H },
-    { elderId: "b", platform: "x", status: "posted", postedAt: now - 1 * H }, // never X (reads cost money)
+    { elderId: "b", platform: "x", status: "posted", postedAt: now - 1 * H }, // X only when on (below)
     { elderId: "c", platform: "linkedin", status: "posted", postedAt: now - 1 * H },
     { elderId: "d", platform: "bluesky", status: "posted", postedAt: now - 1 * H, removedAt: now }, // taken down
     { elderId: "e", platform: "bluesky", status: "removed", postedAt: now - 1 * H },
@@ -123,6 +126,28 @@ test("planRecentEngagement: Bluesky + Threads only, one run per elder and platfo
     { kind: "threads", elderId: "i", delayMs: 5000 },
   ]);
   assert.deepEqual(planRecentEngagement([], now, 1000, "fast"), []);
+  // X on (FAST_POST + X_READ_FEEDBACK): only the 5-min tier, over the whole 48h
+  const xPubs = [
+    ...pubs,
+    { elderId: "j", platform: "x", status: "posted", postedAt: now - 30 * H },
+    { elderId: "k", platform: "x", status: "posted", postedAt: now - 49 * H }, // daily job only
+  ];
+  assert.deepEqual(planRecentEngagement(xPubs, now, 1000, "fast", true), [
+    { kind: "bluesky", elderId: "a", delayMs: 0 },
+    { kind: "threads", elderId: "a", delayMs: 1000 },
+  ]);
+  assert.deepEqual(planRecentEngagement(xPubs, now, 5000, "slow", true), [
+    { kind: "x", elderId: "b", delayMs: 0 },
+    { kind: "bluesky", elderId: "h", delayMs: 5000 },
+    { kind: "threads", elderId: "i", delayMs: 10000 },
+    { kind: "x", elderId: "j", delayMs: 15000 },
+  ]);
+  assert.deepEqual(recentQueryWindow("slow", now, true), { from: now - 48 * H });
+  assert.deepEqual(recentQueryWindow("slow", now, false), recentWindow("slow", now));
+  assert.deepEqual(recentQueryWindow("fast", now, true), recentWindow("fast", now));
+  assert.equal(xRecentOn({ FAST_POST: "on", X_READ_FEEDBACK: "on" }), true);
+  assert.equal(xRecentOn({ FAST_POST: "on" }), false);
+  assert.equal(xRecentOn({ X_READ_FEEDBACK: "on" }), false);
   assert.equal(FAST_POST_WINDOW_MS, 2 * H);
   assert.equal(RECENT_POST_WINDOW_MS, 48 * H);
   assert.equal(recentScrapeDays("fast") * 24, 2, "fast reads only the last 2h of threads");

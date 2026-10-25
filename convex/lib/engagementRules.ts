@@ -3,6 +3,7 @@
 // No Convex imports: tested with Node.
 
 import { canonicalLinkedInPostUrl } from "./linkedinUrl.ts";
+import { isSwitchOn } from "./postFlow.ts";
 
 export type Comment = { author: string; text: string };
 export type Snapshot = { reactions: number; comments: Comment[] };
@@ -179,7 +180,7 @@ export function planDailyEngagement<Id extends string>(
 
 // ---------- recent posts (30-s and 5-min crons) ----------
 
-/** Posts this recent are re-read every 30 s (Bluesky + Threads only; X reads cost money). */
+/** Posts this recent are re-read every 30 s (Bluesky + Threads only; X joins the 5-min tier). */
 export const FAST_POST_WINDOW_MS = 2 * 60 * 60 * 1000;
 /** Posts up to this old (and past the fast window) are re-read every 5 min. */
 export const RECENT_POST_WINDOW_MS = 48 * 60 * 60 * 1000;
@@ -198,24 +199,39 @@ export function recentScrapeDays(tier: RecentTier): number {
   return (tier === "fast" ? FAST_POST_WINDOW_MS : RECENT_POST_WINDOW_MS) / 86_400_000;
 }
 
-export type RecentJob<Id extends string> = { kind: "bluesky" | "threads"; elderId: Id; delayMs: number };
+/**
+ * X replies every 5 min (posts up to 48h old) only with FAST_POST=on and X_READ_FEEDBACK=on;
+ * otherwise X stays on the daily job. X bills a post once per UTC day, so re-reads are ~free.
+ */
+export function xRecentOn(env: Record<string, string | undefined>): boolean {
+  return isSwitchOn(env.FAST_POST) && isSwitchOn(env.X_READ_FEEDBACK);
+}
+
+/** The postedAt range recentEngagement queries: the 5-min tier with X covers all 48h. */
+export function recentQueryWindow(tier: RecentTier, nowMs: number, x: boolean): { from: number; to?: number } {
+  return x && tier === "slow" ? { from: nowMs - RECENT_POST_WINDOW_MS } : recentWindow(tier, nowMs);
+}
+
+export type RecentJob<Id extends string> = { kind: "bluesky" | "threads" | "x"; elderId: Id; delayMs: number };
 
 /**
  * From posted publications (by_status_posted, newest first): one Bluesky or Threads scrape per
- * elder with such a post in the tier's window, not taken down. Staggered. Never X.
+ * elder with such a post in the tier's window, not taken down. With `x`, the 5-min tier also
+ * gets one X scrape per elder with an X post from the last 48h. Staggered.
  */
 export function planRecentEngagement<Id extends string>(
   pubs: { elderId: Id; platform: string; status: string; postedAt?: number; removedAt?: number }[],
   nowMs: number,
   staggerMs: number,
   tier: RecentTier,
+  x = false,
 ): RecentJob<Id>[] {
-  const { from, to } = recentWindow(tier, nowMs);
   const seen = new Set<string>();
   const jobs: RecentJob<Id>[] = [];
   for (const p of pubs) {
-    const kind = p.platform === "bluesky" || p.platform === "threads" ? p.platform : null;
+    const kind = p.platform === "bluesky" || p.platform === "threads" || (p.platform === "x" && x && tier === "slow") ? p.platform : null;
     if (!kind) continue;
+    const { from, to } = kind === "x" ? recentQueryWindow(tier, nowMs, true) : recentWindow(tier, nowMs);
     if (p.status !== "posted" || p.removedAt !== undefined) continue;
     if (p.postedAt === undefined || p.postedAt < from || (to !== undefined && p.postedAt >= to)) continue;
     const key = `${kind}|${p.elderId}`;

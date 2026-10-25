@@ -13,8 +13,9 @@
 //   recentEngagement          Bluesky + Threads scrapes for each elder with a recent post, so a
 //                             reply reaches his question bank before he calls back:
 //                             { tier: "fast" } every 30 s for posts from the last 2h,
-//                             { tier: "slow" } every 5 min for posts 2 to 48h old.
-//                             Never X (X reads cost money). One indexed query when idle.
+//                             { tier: "slow" } every 5 min for posts 2 to 48h old, plus X posts
+//                             from the last 48h only with FAST_POST=on and X_READ_FEEDBACK=on
+//                             (else X stays daily). One indexed query when idle.
 //   weeklyAudienceQuestions   weekly: apify.findAudienceQuestions for every active elder
 //
 // Time math (timezones, DST) lives in lib/schedule.ts.
@@ -30,8 +31,9 @@ import {
   linkedinEngagementOn,
   planDailyEngagement,
   planRecentEngagement,
+  recentQueryWindow,
   recentScrapeDays,
-  recentWindow,
+  xRecentOn,
   type EngagementJob,
 } from "./lib/engagementRules";
 import { xFeedbackOn } from "./lib/xEngagement";
@@ -146,9 +148,10 @@ const RECENT_STAGGER_MS = { fast: 1000, slow: 5000 } as const;
 
 export const recentEngagement = internalMutation({
   args: { tier: v.union(v.literal("fast"), v.literal("slow")) },
-  handler: async (ctx, { tier }): Promise<{ bluesky: number; threads: number }> => {
+  handler: async (ctx, { tier }): Promise<{ bluesky: number; threads: number; x: number }> => {
     const now = Date.now();
-    const { from, to } = recentWindow(tier, now);
+    const x = xRecentOn(process.env);
+    const { from, to } = recentQueryWindow(tier, now, x);
     const pubs = await ctx.db
       .query("postPublications")
       .withIndex("by_status_posted", (q) => {
@@ -157,14 +160,16 @@ export const recentEngagement = internalMutation({
       })
       .order("desc")
       .take(MAX_RECENT_PUBLICATIONS);
-    const counts = { bluesky: 0, threads: 0 };
+    const counts = { bluesky: 0, threads: 0, x: 0 };
     const days = recentScrapeDays(tier);
-    for (const job of planRecentEngagement(pubs, now, RECENT_STAGGER_MS[tier], tier)) {
+    for (const job of planRecentEngagement(pubs, now, RECENT_STAGGER_MS[tier], tier, x)) {
       // He started over (signup.startOver): his old posts stay up, but we stop reading them.
       if ((await ctx.db.get(job.elderId))?.stage === "archived") continue;
       // Bluesky: public reads only (no login every 30 s; Bluesky limits logins per day).
       if (job.kind === "bluesky") {
         await ctx.scheduler.runAfter(job.delayMs, SCRAPERS.bluesky, { elderId: job.elderId, days, publicOnly: true });
+      } else if (job.kind === "x") {
+        await ctx.scheduler.runAfter(job.delayMs, SCRAPERS.x, { elderId: job.elderId, days });
       } else {
         await ctx.scheduler.runAfter(job.delayMs, SCRAPERS.threads, { elderId: job.elderId, days });
       }
