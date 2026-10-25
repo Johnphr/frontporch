@@ -93,6 +93,15 @@ test("bluesky: failures before the post request are failed (nothing went out)", 
   });
 });
 
+test("bluesky: a refused login is failed with loginRefused (the caller marks his account invalid)", async () => {
+  const refused = fakeFetch([{ match: "createSession", respond: () => ({ status: 401, json: { error: "AuthenticationRequired" } }) }]);
+  const out = await post(refused.fetchFn);
+  assert.deepEqual(out, { status: "failed", error: "Bluesky login HTTP 401 (AuthenticationRequired)", loginRefused: true });
+  assert.equal(refused.count("createRecord"), 0);
+  const busy = await post(fakeFetch([{ match: "createSession", respond: () => ({ status: 503 }) }]).fetchFn);
+  assert.equal((busy as { loginRefused?: boolean }).loginRefused, undefined, "Bluesky down isn't a refusal");
+});
+
 test("bluesky: his existing reply under the post counts as posted (retry never answers twice)", async () => {
   const mine = ok({ thread: { replies: [{ post: { uri: "at://did:plc:him/app.bsky.feed.post/old", author: { did: "did:plc:him" } } }] } });
   const f = fakeFetch(blueskyRoutes(CREATED, mine));

@@ -3,7 +3,7 @@
 // No runtime imports: unit-tested directly with Node (tests/signup.test.ts).
 
 import type { CallLanguage } from "./prompts/principles.ts";
-import { localParts, type Weekday } from "./schedule.ts";
+import { WEEKDAYS, localParts, type Weekday } from "./schedule.ts";
 
 export const MAX_NAME_CHARS = 100;
 export const CALLS_PER_DAY = 3;
@@ -83,7 +83,9 @@ export function publicCallAllowed(mode: string | undefined, allowlist: string | 
 
 // ---------- Connect Bluesky (signup.connectBluesky) ----------
 
-export const CONNECT_ATTEMPTS_PER_HOUR = 5;
+export const CONNECT_ATTEMPTS_PER_HOUR = 5; // per sign-up
+export const HANDLE_CONNECTS_PER_HOUR = 5; // per Bluesky handle, across sign-ups
+export const GLOBAL_CONNECTS_PER_HOUR = 60; // all sign-ups together
 export const CONNECT_COOLDOWN_MS = 5_000;
 const HOUR_MS = 60 * 60_000;
 
@@ -131,8 +133,23 @@ export function connectRateLimit(attemptTimes: number[], now: number): { ok: tru
 }
 
 /** The attempt list to store after one more attempt: only the ones the limit still looks at. */
-export function recordAttempt(attemptTimes: number[], now: number): number[] {
-  return [...attemptTimes.filter((t) => now - t < HOUR_MS), now].slice(-CONNECT_ATTEMPTS_PER_HOUR);
+export function recordAttempt(attemptTimes: number[], now: number, max = CONNECT_ATTEMPTS_PER_HOUR): number[] {
+  return [...attemptTimes.filter((t) => now - t < HOUR_MS), now].slice(-max);
+}
+
+/**
+ * Caps on Bluesky logins through our server. register makes sign-ups freely, so the
+ * per-sign-up limit alone doesn't stop guessing one handle's password from many sign-ups.
+ * At most HANDLE_CONNECTS_PER_HOUR tries per handle, GLOBAL_CONNECTS_PER_HOUR in all.
+ */
+export function connectCaps(
+  times: { handle: number[]; global: number[] },
+  now: number,
+): { ok: true } | { ok: false; error: "rate_limited" | "busy" } {
+  const lastHour = (list: number[]) => list.filter((t) => now - t < HOUR_MS).length;
+  if (lastHour(times.handle) >= HANDLE_CONNECTS_PER_HOUR) return { ok: false, error: "rate_limited" };
+  if (lastHour(times.global) >= GLOBAL_CONNECTS_PER_HOUR) return { ok: false, error: "busy" };
+  return { ok: true };
 }
 
 // ---------- Weekly call defaults (register) ----------
@@ -163,9 +180,26 @@ export function signupTimezone(raw: string | undefined, phone: string): string {
   return zone && isIanaZone(zone) ? zone : zoneFromPhone(phone);
 }
 
-/** Default weekly slot (lib/schedule.ts format): the sign-up weekday in his zone, 10:00. */
+/**
+ * Default weekly slot (lib/schedule.ts format): the day after sign-up in his zone, 10:00.
+ * Tomorrow, so signing up at 9:55 never brings a surprise call five minutes later.
+ */
 export function defaultCallSlot(nowMs: number, timeZone: string): { callDay: Weekday; callHour: number } {
-  return { callDay: localParts(nowMs, timeZone).weekday, callHour: DEFAULT_CALL_HOUR };
+  const today = WEEKDAYS.indexOf(localParts(nowMs, timeZone).weekday);
+  return { callDay: WEEKDAYS[(today + 1) % 7], callHour: DEFAULT_CALL_HOUR };
+}
+
+/**
+ * May the hourly cron (schedule.runTick) ring him? A website sign-up (has signupTokenHash)
+ * still in onboarding gets the same PUBLIC_CALLS gate as "Call me now": the SMS check is
+ * fake, so anyone can type any number. Seeded or hand-made elders, and active ones, always may.
+ */
+export function cronMayCall(
+  elder: { stage?: string; phone: string; signupTokenHash?: string },
+  env: { PUBLIC_CALLS?: string; CALL_ALLOWLIST?: string },
+): boolean {
+  if (elder.stage !== "onboarding" || !elder.signupTokenHash) return true;
+  return publicCallAllowed(env.PUBLIC_CALLS, env.CALL_ALLOWLIST, elder.phone);
 }
 
 // ---------- Sign-up token ----------

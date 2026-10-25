@@ -53,10 +53,10 @@ Local backend + `"use node"` files need Node 20–24: `npx -p node@24 -c 'npx co
 | `APIFY_TOKEN` | optional: prefill his LinkedIn background (needs `linkedinUrl` on the elder) |
 | `AUTO_POST` | optional, default `on`. `off` = story posts are saved but not posted anywhere (for tests); post one with `publish:publishPost` |
 | `LINKEDIN_POSTING` | optional, default off. `on` also posts to LinkedIn through LinkedAPI (needs the LinkedAPI tokens) |
-| `PUBLIC_CALLS` | optional, default off. Lets the sign-up page start his first call (`signup:requestCall`; max 3 a day, 10 min apart). `on` = only `CALL_ALLOWLIST` numbers; `all` = anyone (only once SMS is real) |
+| `PUBLIC_CALLS` | optional, default off. Lets the sign-up page start his first call (`signup:requestCall`; max 3 a day, 10 min apart), and lets the hourly cron call a website sign-up still in onboarding. `on` = only `CALL_ALLOWLIST` numbers; `all` = anyone (only once SMS is real) |
 | `CALL_ALLOWLIST` | comma-separated E.164 test numbers the sign-up page may call when `PUBLIC_CALLS=on` |
 | `ACCOUNTS_ENC_KEY` | encrypts connected Bluesky app passwords (`accounts.ts`, `lib/accountCrypto.ts`). Base64 of 32 bytes: `openssl rand -base64 32` |
-| `DEMO_ACCOUNT_FALLBACK` | optional, default off. `on` = elders without a connected account use the env demo account (`BLUESKY_HANDLE` / `BLUESKY_APP_PASSWORD`) |
+| `DEMO_ACCOUNT_FALLBACK` | optional, default off. `on` = elders who never connected an account use the env demo account (`BLUESKY_HANDLE` / `BLUESKY_APP_PASSWORD`); an invalid or disconnected account of his never does |
 
 Agent ids are not env vars: `syncAgent` saves one row per character in the `characterAgents`
 table (`characterId`, `agentId`, `syncedAt`), and `startCall` reads it. If his character has no

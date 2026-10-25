@@ -11,13 +11,14 @@
 // Remaining risk: the SMS check is fake for now, so anyone can sign up a NEW number and make it
 // ring (onboarding only, at most CALLS_PER_DAY a day, 10 min apart; no global cap). That's why
 // `requestCall` is off by default: PUBLIC_CALLS=on rings only CALL_ALLOWLIST numbers,
-// PUBLIC_CALLS=all rings anyone (lib/signupRules.publicCallAllowed). LinkedIn and Bluesky are
-// locked once he's active.
+// PUBLIC_CALLS=all rings anyone (lib/signupRules.publicCallAllowed). The weekly cron uses the
+// same gate for website sign-ups in onboarding (lib/signupRules.cronMayCall), and their first
+// weekly slot is tomorrow. LinkedIn and Bluesky are locked once he's active.
 
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { action, internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import { action, internalMutation, internalQuery, query } from "./_generated/server";
 import { callState, retryOffer, type CallState } from "./lib/callStatus";
 import { getCharacter, publicCharacters, type Character } from "./lib/characters";
 import { connectBlueskyAccount, type ConnectResult } from "./lib/accountConnect";
@@ -34,7 +35,6 @@ import {
   publicCallAllowed,
   sameTokenHash,
   signupTokenHash,
-  tokenMatches,
 } from "./lib/signupRules";
 import { asElderV2 } from "./lib/v2Fields";
 
@@ -61,6 +61,8 @@ export const listCharacters = query({
  * New elder in onboarding -> { elderId, token }. A known phone -> already_signed_up (his row
  * isn't touched and no id or token is given out). An action so the token comes from real
  * randomness. `timeZone` is the browser's (checked; else from the phone's country).
+ * Known, accepted leak: already_signed_up tells anyone whether a number is signed up. Hiding
+ * it would mean telling a real person "done" when nothing happened; nothing else is revealed.
  */
 export const register = action({
   args: { name: v.string(), phone: v.string(), language, timeZone: v.optional(v.string()) },
@@ -97,29 +99,57 @@ export const createElder = internalMutation({
   },
 });
 
-export const setCharacter = mutation({
+// setCharacter / setLinkedin are actions: the token is hashed here (Web Crypto), then an
+// internal mutation checks the hash, like reserveConnect / callCheck.
+
+type Saved = { ok: true } | { ok: false; error: "not_found" | "locked" };
+
+export const setCharacter = action({
   args: { elderId: v.id("elders"), token: v.string(), characterId: v.string() },
   handler: async (ctx, { elderId, token, characterId }): Promise<null> => {
     if (!getCharacter(characterId)) throw new ConvexError("Unknown character.");
-    if (!(await tokenMatches(await ctx.db.get(elderId), token))) throw new ConvexError(NOT_FOUND);
-    await ctx.db.patch(elderId, { characterId });
+    const tokenHash = (await signupTokenHash(token)) ?? "";
+    const saved: Saved = await ctx.runMutation(internal.signup.saveCharacter, { elderId, tokenHash, characterId });
+    if (!saved.ok) throw new ConvexError(NOT_FOUND);
     return null;
   },
 });
 
+/** For setCharacter: check the token hash, then save his character. */
+export const saveCharacter = internalMutation({
+  args: { elderId: v.id("elders"), tokenHash: v.string(), characterId: v.string() },
+  handler: async (ctx, { elderId, tokenHash, characterId }): Promise<Saved> => {
+    const elder = await ctx.db.get(elderId);
+    if (!elder || !sameTokenHash(elder.signupTokenHash, tokenHash)) return { ok: false, error: "not_found" };
+    await ctx.db.patch(elderId, { characterId });
+    return { ok: true };
+  },
+});
+
 /** Retired from the website (it connects Bluesky now); kept for old clients and scripts. */
-export const setLinkedin = mutation({
+export const setLinkedin = action({
   args: { elderId: v.id("elders"), token: v.string(), url: v.string() },
   handler: async (ctx, { elderId, token, url }): Promise<null> => {
     const linkedinUrl = canonicalLinkedInProfileUrl(url);
     if (!linkedinUrl) throw new ConvexError("Please enter a LinkedIn profile link, e.g. linkedin.com/in/your-name.");
+    const tokenHash = (await signupTokenHash(token)) ?? "";
+    const saved: Saved = await ctx.runMutation(internal.signup.saveLinkedin, { elderId, tokenHash, linkedinUrl });
+    if (!saved.ok) throw new ConvexError(saved.error === "locked" ? "Your LinkedIn is already set up." : NOT_FOUND);
+    return null;
+  },
+});
+
+/** For setLinkedin: check the token hash, then save the (already canonical) profile URL. */
+export const saveLinkedin = internalMutation({
+  args: { elderId: v.id("elders"), tokenHash: v.string(), linkedinUrl: v.string() },
+  handler: async (ctx, { elderId, tokenHash, linkedinUrl }): Promise<Saved> => {
     const elder = await ctx.db.get(elderId);
-    if (!elder || !(await tokenMatches(elder, token))) throw new ConvexError(NOT_FOUND);
-    if (elder.stage === "active") throw new ConvexError("Your LinkedIn is already set up.");
-    if (elder.linkedinUrl === linkedinUrl) return null;
+    if (!elder || !sameTokenHash(elder.signupTokenHash, tokenHash)) return { ok: false, error: "not_found" };
+    if (elder.stage === "active") return { ok: false, error: "locked" };
+    if (elder.linkedinUrl === linkedinUrl) return { ok: true };
     // A cached background came from the old profile: drop it so onboarding scrapes the new one.
     await ctx.db.patch(elderId, { linkedinUrl, knownBackground: undefined });
-    return null;
+    return { ok: true };
   },
 });
 
@@ -136,7 +166,7 @@ const timedFetch: FetchFn = async (url, init) => {
 /**
  * Connect his own Bluesky account (needs his sign-up token): handle + an app password (never his real password: an app
  * password can't change his password or delete his account, and he can revoke it any time). Logs in once to check it,
- * then saves it encrypted (convex/accounts.ts). Rate limited, and locked once he's active.
+ * then saves it encrypted (convex/accounts.ts). Rate limited (his tries, per handle, and in all), and locked once he's active.
  * Returns { ok, handle } or { ok: false, error: code }; never echoes the password.
  */
 export const connectBluesky = action({
@@ -148,7 +178,7 @@ export const connectBluesky = action({
       {
         fetchFn: timedFetch,
         env: process.env,
-        reserve: () => ctx.runMutation(internal.accounts.reserveConnect, { elderId, tokenHash, platform: "bluesky", now }),
+        reserve: (h) => ctx.runMutation(internal.accounts.reserveConnect, { elderId, tokenHash, platform: "bluesky", handle: h, now }),
         save: ({ handle: h, did, secret }) =>
           ctx.runMutation(internal.accounts.saveAccount, { elderId, platform: "bluesky", handle: h, did, secret, now, signup: true }),
         warn: (message) => console.warn(message),

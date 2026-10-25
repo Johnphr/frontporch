@@ -11,6 +11,9 @@ import { blueskyLoginForElder, isBlueskyLoginRefused, redditLoginForElder, repor
 import {
   CONNECT_ATTEMPTS_PER_HOUR,
   CONNECT_COOLDOWN_MS,
+  GLOBAL_CONNECTS_PER_HOUR,
+  HANDLE_CONNECTS_PER_HOUR,
+  connectCaps,
   connectRateLimit,
   isBlueskyHandle,
   normalizeAppPassword,
@@ -105,11 +108,28 @@ test("connect rate limit: 5 s cooldown, at most 5 an hour", () => {
   for (let i = 0; i < 10; i++) times = recordAttempt(times, NOW - (10 - i) * 60_000);
   assert.equal(times.length, CONNECT_ATTEMPTS_PER_HOUR, "only what the limit needs is kept");
   assert.deepEqual(recordAttempt([NOW - 2 * 60 * 60_000], NOW), [NOW]);
+  assert.equal(recordAttempt(Array.from({ length: 80 }, (_, i) => NOW - i * 1000), NOW, GLOBAL_CONNECTS_PER_HOUR).length, GLOBAL_CONNECTS_PER_HOUR);
+});
+
+test("connect caps: per handle across sign-ups, and in all", () => {
+  const recent = (n: number) => Array.from({ length: n }, (_, i) => NOW - (i + 1) * 30_000);
+  assert.deepEqual(connectCaps({ handle: [], global: [] }, NOW), { ok: true });
+  assert.deepEqual(connectCaps({ handle: recent(HANDLE_CONNECTS_PER_HOUR - 1), global: recent(10) }, NOW), { ok: true });
+  assert.deepEqual(connectCaps({ handle: recent(HANDLE_CONNECTS_PER_HOUR), global: [] }, NOW), { ok: false, error: "rate_limited" });
+  assert.deepEqual(connectCaps({ handle: [], global: recent(GLOBAL_CONNECTS_PER_HOUR) }, NOW), { ok: false, error: "busy" });
+  const old = Array.from({ length: 100 }, () => NOW - 61 * 60_000);
+  assert.deepEqual(connectCaps({ handle: old, global: old }, NOW), { ok: true }, "older than an hour doesn't count");
 });
 
 // ---------- logins lookup ----------
 
-type Row = { status: string; handle: string | null; did: string | null; secret: { ciphertext: string; iv: string } | null } | null;
+type Row = {
+  status: string;
+  handle: string | null;
+  did: string | null;
+  secret: { ciphertext: string; iv: string } | null;
+  connectedAt?: number | null;
+} | null;
 
 function fakeCtx(rows: Record<string, Row>) {
   const queries: Array<{ args: { elderId: string; platform: string } }> = [];
@@ -126,7 +146,19 @@ function fakeCtx(rows: Record<string, Row>) {
 
 async function connectedRow(elderId: string, password = APP_PASSWORD, key = KEY): Promise<Row> {
   const secret = await encryptSecret(await loadAccountKey(key), password, elderId, "bluesky");
-  return { status: "connected", handle: "walter.bsky.social", did: "did:plc:walter", secret };
+  return { status: "connected", handle: "walter.bsky.social", did: "did:plc:walter", secret, connectedAt: NOW };
+}
+
+/** Run `fn` with console.warn captured. */
+async function withWarnings<T>(fn: () => Promise<T>): Promise<{ result: T; warnings: string[] }> {
+  const warn = console.warn;
+  const warnings: string[] = [];
+  console.warn = (m: string) => warnings.push(m);
+  try {
+    return { result: await fn(), warnings };
+  } finally {
+    console.warn = warn;
+  }
 }
 
 const DEMO = { BLUESKY_HANDLE: "demo.bsky.social", BLUESKY_APP_PASSWORD: "demo-pass" };
@@ -148,32 +180,51 @@ test("logins: no account -> null; the demo account only with DEMO_ACCOUNT_FALLBA
   assert.equal((await blueskyLoginForElder(null, null, DEMO))?.identifier, "demo.bsky.social", "pure tests: no ctx, no elder");
 });
 
-test("logins: invalid or disconnected accounts aren't used", async () => {
+test("logins: invalid or disconnected accounts aren't used, and never fall back to the demo one", async () => {
   const row = await connectedRow("e1");
+  const flagOn = { ACCOUNTS_ENC_KEY: KEY, ...DEMO, DEMO_ACCOUNT_FALLBACK: "on" };
   for (const status of ["invalid", "disconnected"]) {
     const { ctx } = fakeCtx({ "e1/bluesky": { ...row!, status } });
     assert.equal(await blueskyLoginForElder(ctx, "e1", { ACCOUNTS_ENC_KEY: KEY }), null, status);
+    assert.equal(await blueskyLoginForElder(ctx, "e1", flagOn), null, `${status}, flag on`);
   }
   const { ctx } = fakeCtx({ "e1/bluesky": { ...row!, secret: null } });
-  assert.equal(await blueskyLoginForElder(ctx, "e1", { ACCOUNTS_ENC_KEY: KEY }), null);
+  assert.equal(await blueskyLoginForElder(ctx, "e1", flagOn), null);
+});
+
+test("logins: a row with only failed connect attempts (never connected) may use the demo account", async () => {
+  const { ctx } = fakeCtx({ "e1/bluesky": { status: "disconnected", handle: null, did: null, secret: null, connectedAt: null } });
+  assert.equal((await blueskyLoginForElder(ctx, "e1", { ...DEMO, DEMO_ACCOUNT_FALLBACK: "on" }))?.identifier, "demo.bsky.social");
+  assert.equal(await blueskyLoginForElder(ctx, "e1", DEMO), null, "flag off");
 });
 
 test("logins: a secret that won't decrypt -> null, never the demo account", async () => {
   const { ctx } = fakeCtx({ "e1/bluesky": await connectedRow("e2") }); // moved from e2
-  const warn = console.warn;
-  const warnings: string[] = [];
-  console.warn = (m: string) => warnings.push(m);
-  try {
-    assert.equal(await blueskyLoginForElder(ctx, "e1", { ACCOUNTS_ENC_KEY: KEY, ...DEMO, DEMO_ACCOUNT_FALLBACK: "on" }), null);
-  } finally {
-    console.warn = warn;
-  }
+  const { result, warnings } = await withWarnings(() =>
+    blueskyLoginForElder(ctx, "e1", { ACCOUNTS_ENC_KEY: KEY, ...DEMO, DEMO_ACCOUNT_FALLBACK: "on" }),
+  );
+  assert.equal(result, null);
   assert.ok(warnings.length === 1 && !warnings[0].includes(APP_PASSWORD));
 });
 
-test("logins: his account but no ACCOUNTS_ENC_KEY is a clear error", async () => {
+test("logins: missing or bad ACCOUNTS_ENC_KEY -> a fixed warning and null, not a throw, not the demo account", async () => {
   const { ctx } = fakeCtx({ "e1/bluesky": await connectedRow("e1") });
-  await assert.rejects(blueskyLoginForElder(ctx, "e1", { ...DEMO, DEMO_ACCOUNT_FALLBACK: "on" }), AccountKeyError);
+  for (const key of [undefined, "short", OTHER_KEY]) {
+    const { result, warnings } = await withWarnings(() =>
+      blueskyLoginForElder(ctx, "e1", { ...DEMO, DEMO_ACCOUNT_FALLBACK: "on", ...(key ? { ACCOUNTS_ENC_KEY: key } : {}) }),
+    );
+    assert.equal(result, null, String(key));
+    assert.equal(warnings.length, 1);
+    assert.ok(!warnings[0].includes(APP_PASSWORD) && !warnings[0].includes(OTHER_KEY));
+  }
+});
+
+test("logins: a failed account lookup -> null, not a throw, not the demo account", async () => {
+  const ctx = { runQuery: async () => Promise.reject(new Error("database said no")) };
+  const { result, warnings } = await withWarnings(() => blueskyLoginForElder(ctx, "e1", { ...DEMO, DEMO_ACCOUNT_FALLBACK: "on" }));
+  assert.equal(result, null);
+  assert.equal(warnings.length, 1);
+  assert.ok(!warnings[0].includes("database said no"));
 });
 
 test("logins: Reddit is per-elder coming soon: off unless REDDIT_POSTING, demo only with the flag", async () => {
@@ -195,6 +246,9 @@ test("logins: a refused Bluesky login marks his account invalid; other errors do
   assert.equal(await reportBlueskyLoginError(ctx, null, refused), false);
   assert.equal(await reportBlueskyLoginError(ctx, "e1", refused), true);
   assert.deepEqual(calls, [{ elderId: "e1", platform: "bluesky", error: "Bluesky login HTTP 401 (AuthenticationRequired)" }]);
+  const failing = { runMutation: async () => Promise.reject(new Error("boom")) };
+  const { result } = await withWarnings(() => reportBlueskyLoginError(failing, "e1", refused));
+  assert.equal(result, false, "a failed mark never throws");
 });
 
 // ---------- connectBluesky ----------
@@ -206,14 +260,19 @@ function jwt(payload: object): string {
 
 function sessionFetch(respond: () => { status: number; json?: unknown } | "throw") {
   const bodies: string[] = [];
+  const deleted: string[] = []; // Authorization headers sent to deleteSession
   const fetchFn: FetchFn = async (url, init) => {
+    if (url.endsWith("/xrpc/com.atproto.server.deleteSession")) {
+      deleted.push(init?.headers?.Authorization ?? "");
+      return { ok: true, status: 200, json: async () => ({}) };
+    }
     assert.ok(url.endsWith("/xrpc/com.atproto.server.createSession"), url);
     bodies.push(init?.body ?? "");
     const out = respond();
     if (out === "throw") throw new Error("The operation was aborted");
     return { ok: out.status >= 200 && out.status < 300, status: out.status, json: async () => out.json ?? {} };
   };
-  return { fetchFn, bodies };
+  return { fetchFn, bodies, deleted };
 }
 
 const APP_SESSION = () => ({
@@ -225,11 +284,13 @@ function deps(over: Partial<ConnectDeps> = {}) {
   const saved: Array<{ handle: string; did: string; secret: { ciphertext: string; iv: string } }> = [];
   const warnings: string[] = [];
   let reserves = 0;
+  const reservedHandles: string[] = [];
   const d: ConnectDeps = {
     fetchFn: sessionFetch(APP_SESSION).fetchFn,
     env: { ACCOUNTS_ENC_KEY: KEY },
-    reserve: async () => {
+    reserve: async (handle) => {
       reserves++;
+      reservedHandles.push(handle);
       return { ok: true };
     },
     save: async (account) => {
@@ -239,14 +300,16 @@ function deps(over: Partial<ConnectDeps> = {}) {
     warn: (m) => warnings.push(m),
     ...over,
   };
-  return { d, saved, warnings, reserves: () => reserves };
+  return { d, saved, warnings, reserves: () => reserves, reservedHandles };
 }
 
 test("connect: verifies with Bluesky, saves encrypted with did + handle, returns only ok + handle", async () => {
   const f = sessionFetch(APP_SESSION);
-  const { d, saved } = deps({ fetchFn: f.fetchFn });
+  const { d, saved, reservedHandles } = deps({ fetchFn: f.fetchFn });
   const out = await connectBlueskyAccount(d, "e1", { handle: "@Walter", appPassword: "ABCD-EFGH-IJKL-MNOP" });
   assert.deepEqual(out, { ok: true, handle: "walter.bsky.social" });
+  assert.deepEqual(reservedHandles, ["walter.bsky.social"], "the attempt is counted against the tidied handle");
+  assert.equal(f.deleted.length, 0, "a good session is kept");
   assert.deepEqual(JSON.parse(f.bodies[0]), { identifier: "walter.bsky.social", password: APP_PASSWORD });
   assert.equal(saved.length, 1);
   assert.equal(saved[0].did, "did:plc:walter");
@@ -263,7 +326,7 @@ test("connect: bad handle or a real password are refused before anything else", 
 });
 
 test("connect: rate limited, locked when active, unknown sign-up", async () => {
-  for (const error of ["rate_limited", "locked", "not_found"] as const) {
+  for (const error of ["rate_limited", "busy", "locked", "not_found"] as const) {
     const { d, saved } = deps({ reserve: async () => ({ ok: false, error }), fetchFn: async () => assert.fail("no request") });
     assert.deepEqual(await connectBlueskyAccount(d, "e1", { handle: "walter", appPassword: APP_PASSWORD }), { ok: false, error });
     assert.equal(saved.length, 0);
@@ -281,11 +344,30 @@ test("connect: wrong password -> a friendly code, nothing saved, password never 
   assert.ok(![JSON.stringify(out), ...warnings].some((s) => s.includes(APP_PASSWORD)));
 });
 
-test("connect: main password session (scope com.atproto.access) is refused", async () => {
-  const f = sessionFetch(() => ({ status: 200, json: { accessJwt: jwt({ scope: "com.atproto.access" }), did: "did:plc:w", handle: "walter.bsky.social" } }));
-  const { d, saved } = deps({ fetchFn: f.fetchFn });
-  assert.deepEqual(await connectBlueskyAccount(d, "e1", { handle: "walter", appPassword: APP_PASSWORD }), { ok: false, error: "not_app_password" });
-  assert.equal(saved.length, 0);
+test("connect: main password (com.atproto.access) or a DM-access app password is logged out, then refused", async () => {
+  const cases = [
+    ["com.atproto.access", "not_app_password"],
+    ["com.atproto.appPassPrivileged", "privileged_app_password"],
+  ] as const;
+  for (const [scope, error] of cases) {
+    const f = sessionFetch(() => ({
+      status: 200,
+      json: { accessJwt: jwt({ scope }), refreshJwt: "refresh-1", did: "did:plc:w", handle: "walter.bsky.social" },
+    }));
+    const { d, saved } = deps({ fetchFn: f.fetchFn });
+    assert.deepEqual(await connectBlueskyAccount(d, "e1", { handle: "walter", appPassword: APP_PASSWORD }), { ok: false, error }, scope);
+    assert.equal(saved.length, 0);
+    assert.deepEqual(f.deleted, ["Bearer refresh-1"], "the session is ended with its refresh token");
+  }
+  // A failing logout doesn't change the answer.
+  const failing: FetchFn = async (url) => {
+    if (url.endsWith("deleteSession")) throw new Error("network");
+    return { ok: true, status: 200, json: async () => ({ accessJwt: jwt({ scope: "com.atproto.access" }), refreshJwt: "r", did: "did:plc:w" }) };
+  };
+  assert.deepEqual(await connectBlueskyAccount(deps({ fetchFn: failing }).d, "e1", { handle: "walter", appPassword: APP_PASSWORD }), {
+    ok: false,
+    error: "not_app_password",
+  });
 });
 
 test("connect: Bluesky down or slow -> bluesky_busy; missing key -> failed before any request", async () => {

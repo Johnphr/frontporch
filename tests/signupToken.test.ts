@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { dueActions } from "../convex/lib/schedule.ts";
 import {
   DEFAULT_CALL_HOUR,
+  cronMayCall,
   defaultCallSlot,
   isIanaZone,
   newElderFields,
@@ -33,10 +34,33 @@ test("timezone: the browser's zone when it's real, else from the phone's country
   }
 });
 
-test("default slot: the sign-up weekday in his zone, at 10", () => {
-  assert.deepEqual(defaultCallSlot(NOW, "America/Los_Angeles"), { callDay: "saturday", callHour: DEFAULT_CALL_HOUR });
+test("default slot: the day after sign-up in his zone, at 10", () => {
+  assert.deepEqual(defaultCallSlot(NOW, "America/Los_Angeles"), { callDay: "sunday", callHour: DEFAULT_CALL_HOUR });
   // 12:00 UTC Saturday is already Sunday morning in Kiritimati (UTC+14)
-  assert.deepEqual(defaultCallSlot(NOW, "Pacific/Kiritimati"), { callDay: "sunday", callHour: 10 });
+  assert.deepEqual(defaultCallSlot(NOW, "Pacific/Kiritimati"), { callDay: "monday", callHour: 10 });
+  // Saturday wraps to Sunday
+  assert.equal(defaultCallSlot(Date.parse("2026-10-31T18:00:00Z"), "America/Los_Angeles").callDay, "sunday");
+});
+
+test("default slot: signing up just before 10 never rings the same day", () => {
+  const nineFiftyFive = Date.parse("2026-10-24T16:55:00Z"); // Saturday 9:55 PDT
+  const row = newElderFields({ name: "W", phone: "+14155550123", language: "en", timeZone: "America/Los_Angeles" }, nineFiftyFive, "ab".repeat(32));
+  for (let h = 0; h < 20; h++) {
+    assert.equal(dueActions(row, nineFiftyFive + h * 3_600_000).call, undefined, `hour +${h}`);
+  }
+  assert.ok(dueActions(row, Date.parse("2026-10-25T17:00:00Z")).call, "Sunday 10:00 PDT");
+});
+
+test("cronMayCall: website sign-ups in onboarding need PUBLIC_CALLS; others always", () => {
+  const phone = "+14155550123";
+  const signup = { stage: "onboarding", phone, signupTokenHash: "ab".repeat(32) };
+  assert.equal(cronMayCall(signup, {}), false, "off by default");
+  assert.equal(cronMayCall(signup, { PUBLIC_CALLS: "on" }), false, "on, not on the list");
+  assert.equal(cronMayCall(signup, { PUBLIC_CALLS: "on", CALL_ALLOWLIST: phone }), true);
+  assert.equal(cronMayCall(signup, { PUBLIC_CALLS: "off", CALL_ALLOWLIST: phone }), false);
+  assert.equal(cronMayCall(signup, { PUBLIC_CALLS: "all" }), true);
+  assert.equal(cronMayCall({ stage: "onboarding", phone }, {}), true, "seeded / hand-made elder");
+  assert.equal(cronMayCall({ ...signup, stage: "active" }, {}), true, "past onboarding");
 });
 
 test("newElderFields: onboarding row with timezone, callDay, callHour and only the token hash", () => {
@@ -48,7 +72,7 @@ test("newElderFields: onboarding row with timezone, callDay, callHour and only t
     stage: "onboarding",
     expertise: [],
     timezone: "America/Mexico_City",
-    callDay: "saturday",
+    callDay: "sunday",
     callHour: 10,
     signupTokenHash: "ab".repeat(32),
   });

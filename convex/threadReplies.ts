@@ -19,7 +19,8 @@
 //
 // Platform rules: lib/threadReplies.ts (Bluesky auto with his app password; Reddit auto only
 // when REDDIT_POSTING=on + credentials; every other source gets no reply). HTTP side:
-// lib/replyPosting.ts. His logins come ONLY from lib/logins.ts.
+// lib/replyPosting.ts. His logins come ONLY from lib/logins.ts (null, never a throw, when
+// unreadable). A refused Bluesky login marks his account invalid (logins.markBlueskyLoginInvalid).
 // Never log tokens, keys, reply text or transcripts; ids and statuses only.
 // Env: AUTO_POST, POST_GUARD_MODE (+ the login variables listed in lib/logins.ts).
 // Owner: Integrations.
@@ -29,7 +30,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery, type QueryCtx } from "./_generated/server";
 import { sharedSessionCache, type FetchFn } from "./lib/blueskyClient";
-import { blueskyLoginForElder, redditLoginForElder, type LoginCtx } from "./lib/logins";
+import { blueskyLoginForElder, redditLoginForElder, markBlueskyLoginInvalid, type LoginCtx } from "./lib/logins";
 import { parseAutoPost } from "./lib/postFlow";
 import { postBlueskyReply, postRedditReply, runPostReply, type PostOutcome } from "./lib/replyPosting";
 import {
@@ -331,7 +332,12 @@ export const postReply = internalAction({
         post: async (reply) => {
           if (reply.platform === "bluesky") {
             const login = await blueskyLoginForElder(ctx, elderId);
-            return postBlueskyReply(timedFetch, sharedSessionCache(), login, { threadRef: reply.threadRef, text: reply.text, lang: reply.language });
+            const outcome = await postBlueskyReply(timedFetch, sharedSessionCache(), login, { threadRef: reply.threadRef, text: reply.text, lang: reply.language });
+            // Bluesky refused his app password: mark his account invalid until he reconnects.
+            if (outcome.status === "failed" && outcome.loginRefused) {
+              await markBlueskyLoginInvalid(ctx, elderId, outcome.error);
+            }
+            return outcome;
           }
           if (reply.platform === "reddit") {
             return postRedditReply(timedFetch, await redditLoginForElder(ctx, elderId), { threadUrl: reply.threadUrl, text: reply.text });

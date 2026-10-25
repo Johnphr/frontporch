@@ -18,12 +18,12 @@ import {
   type FetchFn,
   type SessionCache,
 } from "./blueskyClient.ts";
-import type { BlueskyLogin, RedditLogin } from "./logins.ts";
+import { isBlueskyLoginRefused, type BlueskyLogin, type RedditLogin } from "./logins.ts";
 import { parseRedditComment, redditThingId, writeFailureStatus } from "./threadReplies.ts";
 
 export type PostOutcome =
   | { status: "posted"; url?: string; uri?: string; alreadyThere?: boolean } // uri: Bluesky at:// of his reply
-  | { status: "failed" | "maybe_posted"; error: string };
+  | { status: "failed" | "maybe_posted"; error: string; loginRefused?: boolean }; // loginRefused: Bluesky refused his app password
 
 const failed = (error: string): PostOutcome => ({ status: "failed", error });
 
@@ -58,7 +58,8 @@ export async function postBlueskyReply(
   try {
     ready = await withSession(fetchFn, cache, login, prepare);
   } catch (error) {
-    return failed(lookupError(error));
+    // Refused login (revoked app password): the caller marks his account invalid.
+    return isBlueskyLoginRefused(error) ? { status: "failed", error: lookupError(error), loginRefused: true } : failed(lookupError(error));
   }
   const { session } = ready;
   if (ready.existing) return { status: "posted", url: postWebUrl(ready.existing.uri, session.handle), uri: ready.existing.uri, alreadyThere: true };

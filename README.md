@@ -43,7 +43,10 @@ Demo data (their phone, LinkedIn URL, call time) is added by hand in the Convex 
 Each person posts from **their own** Bluesky account, connected on the sign-up page with an
 app password (never their real password). It's stored encrypted (`ACCOUNTS_ENC_KEY`, make one
 with `openssl rand -base64 32`) and only decrypted inside the action that posts. Reddit is
-coming soon. A shared demo account is used only with `DEMO_ACCOUNT_FALLBACK=on`. Details:
+coming soon. A shared demo account is used only with `DEMO_ACCOUNT_FALLBACK=on`, and only for
+someone who never connected one. A revoked app password marks the account invalid until they
+reconnect. Website sign-ups are called (by the button or the weekly cron) only when
+`PUBLIC_CALLS` allows their number. Details:
 [ARCHITECTURE.md → Accounts](ARCHITECTURE.md#accounts-his-own-bluesky-from-sign-up).
 
 ## Safety
