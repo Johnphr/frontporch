@@ -1,25 +1,22 @@
 // Thread replies: pure rules (no Convex imports; unit-tested in tests/threadReplies.test.ts).
 //
 // When a story call's question came from a thread we found online (an audience question),
-// we answer that thread in his words, from his own account. Which platforms we can post to:
-//   bluesky        auto: his account (BLUESKY_HANDLE + app password), threaded under the post
-//   discourse      auto: a user API key he authorized on that forum (User-Api-Key header)
-//   reddit         auto ONLY when REDDIT_POSTING=on and the script-app credentials are set
-//                  (new Reddit API apps need manual approval since Nov 2025); otherwise manual
-//   quora          manual: no posting API, browser automation breaks Quora's rules
-//   stackexchange  skipped: the network bans AI-generated content, even pasted by hand
-//   anything else  manual
-// "manual" = a teammate posts the draft from the /posts page (Copy text + Open thread).
+// we answer that thread in his words, from his own account. Only platforms with a posting API:
+//   bluesky   auto: his account (BLUESKY_HANDLE + app password), threaded under the post
+//   reddit    auto ONLY when REDDIT_POSTING=on and the script-app credentials are set
+//             (new Reddit API apps need manual approval since Nov 2025)
+//   any other source (forums, Q&A sites, Stack Exchange), and Bluesky/Reddit while
+//   they're not set up: no reply at all. No row, no draft: draftForCall is a no-op.
 
 import { clampGraphemes, graphemeCount, MAX_POST_GRAPHEMES } from "./bluesky.ts";
 import { truncate } from "./linkedinPost.ts";
 
-export type ReplyPlatform = "bluesky" | "discourse" | "reddit" | "quora" | "stackexchange" | "other";
-export type ReplyMode = "auto" | "manual" | "skipped";
+export type ReplyPlatform = "bluesky" | "reddit";
+export type ReplyMode = "auto" | "none";
 export type ReplyLanguage = "en" | "es";
 
 /** threadReplies.status values (schema stores a string). */
-export const REPLY_STATUSES = ["draft", "needs_review", "posting", "posted", "manual", "skipped", "failed"] as const;
+export const REPLY_STATUSES = ["draft", "needs_review", "posting", "posted", "failed"] as const;
 export type ReplyStatus = (typeof REPLY_STATUSES)[number];
 
 /** A posting claim older than this is assumed crashed and can be retaken. */
@@ -29,10 +26,6 @@ export const STALE_CLAIM_MS = 15 * 60_000;
 export const MAX_REPLY_CHARS: Record<ReplyPlatform, number> = {
   bluesky: MAX_POST_GRAPHEMES, // graphemes, disclosure included (lib/bluesky.ts)
   reddit: 10_000,
-  discourse: 32_000,
-  quora: 10_000,
-  stackexchange: 30_000,
-  other: 10_000,
 };
 
 export const REPLY_DISCLOSURE: Record<ReplyLanguage, string> = {
@@ -68,22 +61,16 @@ export function audienceIdForCall(
 
 // ---------- platform rules ----------
 
-/** audienceQuestions.source (+ its url as a fallback) -> platform. */
-export function platformOf(source: string | undefined, url: string | undefined): ReplyPlatform {
+/** audienceQuestions.source (+ its url as a fallback) -> a platform we can reply on, or null. */
+export function platformOf(source: string | undefined, url: string | undefined): ReplyPlatform | null {
   const s = (source ?? "").toLowerCase();
   if (s === "bluesky") return "bluesky";
-  if (s === "discourse") return "discourse";
   if (s === "reddit") return "reddit";
-  if (s === "quora") return "quora";
-  if (s === "stackexchange" || s === "stackoverflow") return "stackexchange";
+  if (s) return null; // any other source: no reply
   const host = hostOf(url);
   if (host === "bsky.app") return "bluesky";
   if (/(^|\.)reddit\.com$|^redd\.it$/.test(host)) return "reddit";
-  if (/(^|\.)quora\.com$/.test(host)) return "quora";
-  if (/(^|\.)(stackexchange|stackoverflow|superuser|serverfault|askubuntu|mathoverflow)\.(com|net)$/.test(host)) {
-    return "stackexchange";
-  }
-  return "other";
+  return null;
 }
 
 export function hostOf(url: string | undefined): string {
@@ -97,8 +84,6 @@ export function hostOf(url: string | undefined): string {
 export type ReplyEnv = {
   blueskyHandle?: string;
   blueskyPassword?: string;
-  discourseUrl?: string;
-  discourseKey?: string;
   redditPosting?: string;
   redditClientId?: string;
   redditClientSecret?: string;
@@ -111,56 +96,42 @@ export function redditPostingOn(value: string | undefined): boolean {
   return ["on", "true", "1", "yes"].includes((value ?? "").trim().toLowerCase());
 }
 
-/** How a reply to this thread gets posted, and why. */
-export function replyMode(platform: ReplyPlatform, threadUrl: string, env: ReplyEnv): { mode: ReplyMode; reason: string } {
+/**
+ * Can we reply on this platform right now? "auto" = draft + post from his account; "none" = no
+ * reply and no row (the reason is only returned to the caller, never stored).
+ */
+export function replyMode(platform: ReplyPlatform | null, env: ReplyEnv): { mode: ReplyMode; reason: string } {
   switch (platform) {
-    case "stackexchange":
-      return { mode: "skipped", reason: "Stack Exchange bans AI-generated answers, so we don't reply there." };
-    case "quora":
-      return { mode: "manual", reason: "Quora has no posting API: post this draft by hand." };
     case "bluesky":
       return env.blueskyHandle && env.blueskyPassword
         ? { mode: "auto", reason: "Posted on Bluesky from his account, threaded under the question." }
-        : { mode: "manual", reason: "Bluesky login isn't set (BLUESKY_HANDLE, BLUESKY_APP_PASSWORD): post this draft by hand." };
+        : { mode: "none", reason: "Bluesky login isn't set (BLUESKY_HANDLE, BLUESKY_APP_PASSWORD)." };
     case "reddit": {
-      if (!redditPostingOn(env.redditPosting)) {
-        return { mode: "manual", reason: "Reddit posting is off (REDDIT_POSTING): post this draft by hand." };
-      }
+      if (!redditPostingOn(env.redditPosting)) return { mode: "none", reason: "Reddit posting is off (REDDIT_POSTING)." };
       const creds = [env.redditClientId, env.redditClientSecret, env.redditUsername, env.redditPassword];
-      if (creds.some((c) => !c)) {
-        return { mode: "manual", reason: "Reddit credentials are missing: post this draft by hand." };
-      }
+      if (creds.some((c) => !c)) return { mode: "none", reason: "Reddit credentials are missing." };
       return { mode: "auto", reason: "Posted through Reddit's API as his account." };
     }
-    case "discourse": {
-      if (!env.discourseUrl || !env.discourseKey) {
-        return { mode: "manual", reason: "No Discourse user API key set: post this draft by hand." };
-      }
-      if (hostOf(env.discourseUrl) !== hostOf(threadUrl)) {
-        return { mode: "manual", reason: "The key in DISCOURSE_URL is for a different forum: post this draft by hand." };
-      }
-      if (discourseTopicId(threadUrl) === undefined) {
-        return { mode: "manual", reason: "Couldn't find the forum topic id in the thread link: post this draft by hand." };
-      }
-      return { mode: "auto", reason: "Posted to the forum with his user API key." };
-    }
     default:
-      return { mode: "manual", reason: "No posting integration for this site: post this draft by hand." };
+      return { mode: "none", reason: "We only reply on Bluesky and Reddit (platforms with a posting API)." };
   }
 }
 
-/** Discourse topic id from a topic URL: /t/<slug>/<id>[/<post>] or /t/<id>. */
-export function discourseTopicId(url: string | undefined): number | undefined {
-  let path = "";
-  try {
-    path = new URL(url ?? "").pathname;
-  } catch {
-    return undefined;
+/**
+ * The one decision draftForCall makes before writing anything: reply on this thread (and on
+ * which platform), or do nothing at all (no row). Bluesky also needs the post's at:// uri.
+ */
+export function replyTarget(
+  question: { source?: string; url?: string; atUri?: string },
+  env: ReplyEnv,
+): { ok: true; platform: ReplyPlatform } | { ok: false; reason: string } {
+  const platform = platformOf(question.source, question.url);
+  const mode = replyMode(platform, env);
+  if (!platform || mode.mode !== "auto") return { ok: false, reason: mode.reason };
+  if (platform === "bluesky" && !question.atUri) {
+    return { ok: false, reason: "This Bluesky question has no post uri to reply under." };
   }
-  const m = /\/t\/(?:[^/]+\/)?(\d+)(?:\/\d+)?\/?$/.exec(path);
-  if (!m) return undefined;
-  const id = Number(m[1]);
-  return Number.isSafeInteger(id) && id > 0 ? id : undefined;
+  return { ok: true, platform };
 }
 
 /** Reddit "fullname" of the post (t3_<id>) from its URL: /comments/<id>/... or redd.it/<id>. */
@@ -240,8 +211,7 @@ export type ReplyState = { status: string; claimedAt?: number };
  *   draft / failed -> yes
  *   needs_review   -> only when a person approves it (approve: true)
  *   posting        -> only if the earlier claim is stale (crashed run)
- *   manual         -> no (a person posts it; record it with markPostedByHand)
- *   posted / skipped -> no
+ *   posted         -> no
  */
 export function canClaimReply(reply: ReplyState, now: number, approve: boolean): { ok: true } | { ok: false; reason: string } {
   switch (reply.status) {
@@ -254,35 +224,20 @@ export function canClaimReply(reply: ReplyState, now: number, approve: boolean):
       return reply.claimedAt !== undefined && now - reply.claimedAt > STALE_CLAIM_MS
         ? { ok: true }
         : { ok: false, reason: "Already being posted." };
-    case "manual":
-      return { ok: false, reason: "This platform is posted by hand." };
     case "posted":
       return { ok: false, reason: "Already posted." };
-    case "skipped":
-      return { ok: false, reason: "Skipped: we don't reply on this platform." };
     default:
       return { ok: false, reason: `Unknown status ${reply.status}.` };
   }
 }
 
-/** Status for a fresh draft: held by the guard, posted by hand, or ready to auto-post. */
-export function draftStatus(mode: ReplyMode, guard: { pass: boolean; mode: string } | null): ReplyStatus {
-  if (mode === "skipped") return "skipped";
+/** Status for a fresh draft: held by the fact-check, or ready to auto-post. */
+export function draftStatus(guard: { pass: boolean; mode: string } | null): ReplyStatus {
   if (guard && !guard.pass && guard.mode === "enforce") return "needs_review";
-  return mode === "auto" ? "draft" : "manual";
+  return "draft";
 }
 
 // ---------- platform responses ----------
-
-/** Link to a new Discourse post from POST /posts.json's response. */
-export function discoursePostUrl(base: string, json: unknown, topicId: number): string | undefined {
-  const j = (json ?? {}) as Record<string, unknown>;
-  const root = base.trim().replace(/\/+$/, "");
-  const topic = typeof j.topic_id === "number" ? j.topic_id : topicId;
-  const slug = typeof j.topic_slug === "string" && j.topic_slug ? j.topic_slug : "topic";
-  const n = typeof j.post_number === "number" ? `/${j.post_number}` : "";
-  return root ? `${root}/t/${slug}/${topic}${n}` : undefined;
-}
 
 /** Link + error codes from POST /api/comment (api_type=json). */
 export function parseRedditComment(json: unknown): { url?: string; errors: string[] } {

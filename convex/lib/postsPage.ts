@@ -24,7 +24,6 @@ export type PageReply = {
   threadUrl: string;
   threadTitle: string;
   text: string;
-  reason?: string;
   guardSummary?: string;
   guardIssues?: string[];
   postedUrl?: string;
@@ -81,18 +80,12 @@ const REPLY_STATUS_LABEL: Record<string, string> = {
   needs_review: "Held by fact-check",
   posting: "Posting",
   posted: "Posted",
-  manual: "Post by hand",
-  skipped: "Skipped",
   failed: "Failed",
 };
 
 const REPLY_PLATFORM_LABEL: Record<string, string> = {
   bluesky: "Bluesky",
-  discourse: "Forum",
   reddit: "Reddit",
-  quora: "Quora",
-  stackexchange: "Stack Exchange",
-  other: "Web",
 };
 
 /** Only http(s) links are rendered as links (the data came from scraped pages). */
@@ -104,7 +97,8 @@ function replyCard(r: PageReply): string {
   const date = new Date(r.createdAt).toISOString().slice(0, 16).replace("T", " ");
   const thread = safeHref(r.threadUrl);
   const posted = safeHref(r.postedUrl);
-  const canCopy = Boolean(r.text) && ["manual", "needs_review", "draft", "failed"].includes(r.status);
+  // Copy text / Open thread only matter for a reply the fact-check held.
+  const canCopy = Boolean(r.text) && r.status === "needs_review";
   const held = r.guardSummary || r.guardIssues?.length
     ? `<div class="check bad"><strong>Held:</strong> ${escapeHtml(r.guardSummary ?? "")}${issuesList(r.guardIssues ?? [])}</div>`
     : "";
@@ -112,17 +106,16 @@ function replyCard(r: PageReply): string {
   <header><span class="who">${escapeHtml(REPLY_PLATFORM_LABEL[r.platform] ?? r.platform)}</span><span class="badge s-${escapeHtml(r.status)}">${escapeHtml(REPLY_STATUS_LABEL[r.status] ?? r.status)}</span><time>${date} UTC</time></header>
   <p class="q">Thread: ${escapeHtml(r.threadTitle)}</p>
   ${r.text ? `<div class="post" id="reply-text-${escapeHtml(r.id)}">${escapeHtml(r.text)}</div>` : ""}
-  ${r.reason ? `<p class="q">${escapeHtml(r.reason)}</p>` : ""}
   ${r.error ? `<p class="err">${escapeHtml(r.error)}</p>` : ""}
   ${held}
-  <footer>${thread ? `<a href="${thread}" target="_blank" rel="noopener noreferrer">Open thread</a>` : ""}${canCopy ? ` <button type="button" data-copy="reply-text-${escapeHtml(r.id)}">Copy text</button>` : ""}${posted ? ` <a href="${posted}" target="_blank" rel="noopener noreferrer">See the reply</a>` : ""} <span class="id">${escapeHtml(r.id)}</span></footer>
+  <footer>${thread && canCopy ? `<a href="${thread}" target="_blank" rel="noopener noreferrer">Open thread</a>` : ""}${canCopy ? ` <button type="button" data-copy="reply-text-${escapeHtml(r.id)}">Copy text</button>` : ""}${posted ? ` <a href="${posted}" target="_blank" rel="noopener noreferrer">See the reply</a>` : ""} <span class="id">${escapeHtml(r.id)}</span></footer>
 </article>`;
 }
 
 /** The "Thread replies" section ("" when there are none). Copy buttons use a tiny inline script. */
 export function renderRepliesSection(replies: PageReply[]): string {
   if (!replies.length) return "";
-  return `<h1>Thread replies</h1><p class="sub">His answers on the threads his call questions came from. "Post by hand": copy the text, open the thread, post from his account.</p>
+  return `<h1>Thread replies</h1><p class="sub">His answers on the Bluesky and Reddit threads his call questions came from, posted from his account. "Held by fact-check": review it, then approve with threadReplies:postReply (approve: true).</p>
 ${replies.map(replyCard).join("\n")}
 <script>document.addEventListener("click",function(e){var b=e.target.closest&&e.target.closest("button[data-copy]");if(!b)return;var t=document.getElementById(b.getAttribute("data-copy"));if(!t||!navigator.clipboard)return;navigator.clipboard.writeText(t.textContent||"").then(function(){b.textContent="Copied";setTimeout(function(){b.textContent="Copy text"},1500)})});</script>`;
 }

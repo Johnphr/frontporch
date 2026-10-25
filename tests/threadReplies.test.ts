@@ -9,8 +9,6 @@ import {
   STALE_CLAIM_MS,
   audienceIdForCall,
   canClaimReply,
-  discoursePostUrl,
-  discourseTopicId,
   draftStatus,
   finalReplyText,
   parseRedditComment,
@@ -20,6 +18,7 @@ import {
   replyBody,
   replyLanguage,
   replyMode,
+  replyTarget,
   stripDisclosure,
 } from "../convex/lib/threadReplies.ts";
 import { renderRepliesSection } from "../convex/lib/postsPage.ts";
@@ -35,23 +34,21 @@ test("audienceIdForCall: only an audience bank row used by this plan", () => {
   assert.equal(audienceIdForCall({ bankId: "qb1" }, { _id: "qb1", source: "audience" }), null, "no sourceRef");
 });
 
-test("platformOf: by source, then by link", () => {
+test("platformOf: only Bluesky and Reddit; every other source is null", () => {
   assert.equal(platformOf("bluesky", ""), "bluesky");
-  assert.equal(platformOf("discourse", ""), "discourse");
   assert.equal(platformOf("reddit", ""), "reddit");
-  assert.equal(platformOf("quora", ""), "quora");
-  assert.equal(platformOf("stackexchange", ""), "stackexchange");
+  assert.equal(platformOf("discourse", "https://forum.example.com/t/x/1"), null);
+  assert.equal(platformOf("quora", "https://www.quora.com/q"), null);
+  assert.equal(platformOf("stackexchange", ""), null);
   assert.equal(platformOf(undefined, "https://www.reddit.com/r/Baking/comments/abc123/x/"), "reddit");
   assert.equal(platformOf(undefined, "https://bsky.app/profile/a/post/b"), "bluesky");
-  assert.equal(platformOf(undefined, "https://cooking.stackexchange.com/questions/1"), "stackexchange");
-  assert.equal(platformOf(undefined, "https://forum.example.com/t/x/1"), "other");
+  assert.equal(platformOf(undefined, "https://cooking.stackexchange.com/questions/1"), null);
+  assert.equal(platformOf(undefined, "https://forum.example.com/t/x/1"), null);
 });
 
 const ENV = {
   blueskyHandle: "walter.bsky.social",
   blueskyPassword: "app-pass",
-  discourseUrl: "https://forum.example.com",
-  discourseKey: "key",
   redditPosting: "on",
   redditClientId: "id",
   redditClientSecret: "secret",
@@ -59,31 +56,37 @@ const ENV = {
   redditPassword: "pw",
 };
 
-test("replyMode: Bluesky + Discourse auto, Reddit gated, Quora manual, Stack Exchange skipped", () => {
-  assert.equal(replyMode("bluesky", "https://bsky.app/profile/a/post/b", ENV).mode, "auto");
-  assert.equal(replyMode("bluesky", "", { ...ENV, blueskyPassword: undefined }).mode, "manual");
-  assert.equal(replyMode("discourse", "https://forum.example.com/t/cakes/42", ENV).mode, "auto");
-  assert.equal(replyMode("discourse", "https://other-forum.org/t/cakes/42", ENV).mode, "manual", "key is for another forum");
-  assert.equal(replyMode("discourse", "https://forum.example.com/latest", ENV).mode, "manual", "no topic id");
-  assert.equal(replyMode("discourse", "https://forum.example.com/t/cakes/42", { ...ENV, discourseKey: undefined }).mode, "manual");
-  assert.equal(replyMode("reddit", "", ENV).mode, "auto");
-  assert.equal(replyMode("reddit", "", { ...ENV, redditPosting: undefined }).mode, "manual", "off by default");
-  assert.equal(replyMode("reddit", "", { ...ENV, redditPassword: undefined }).mode, "manual", "missing creds");
-  assert.equal(replyMode("quora", "", ENV).mode, "manual");
-  assert.equal(replyMode("stackexchange", "", ENV).mode, "skipped");
-  assert.equal(replyMode("other", "", ENV).mode, "manual");
+test("replyMode: Bluesky auto with his login, Reddit only when switched on, nothing else", () => {
+  assert.equal(replyMode("bluesky", ENV).mode, "auto");
+  assert.equal(replyMode("bluesky", { ...ENV, blueskyPassword: undefined }).mode, "none");
+  assert.equal(replyMode("reddit", ENV).mode, "auto");
+  assert.equal(replyMode("reddit", { ...ENV, redditPosting: undefined }).mode, "none", "off by default");
+  assert.equal(replyMode("reddit", { ...ENV, redditPassword: undefined }).mode, "none", "missing creds");
+  assert.equal(replyMode(null, ENV).mode, "none");
   assert.equal(redditPostingOn("ON"), true);
   assert.equal(redditPostingOn("off"), false);
   assert.equal(redditPostingOn(undefined), false);
 });
 
-test("discourseTopicId", () => {
-  assert.equal(discourseTopicId("https://forum.example.com/t/pricing-cakes/42"), 42);
-  assert.equal(discourseTopicId("https://forum.example.com/t/pricing-cakes/42/7"), 42);
-  assert.equal(discourseTopicId("https://forum.example.com/t/42"), 42);
-  assert.equal(discourseTopicId("https://forum.example.com/t/topic/42/"), 42);
-  assert.equal(discourseTopicId("https://forum.example.com/c/baking"), undefined);
-  assert.equal(discourseTopicId("not a url"), undefined);
+test("replyTarget: no reply (no row) for other sources or platforms that aren't set up", () => {
+  assert.deepEqual(replyTarget({ source: "bluesky", url: "https://bsky.app/profile/a/post/b", atUri: "at://did:plc:x/app.bsky.feed.post/b" }, ENV), {
+    ok: true,
+    platform: "bluesky",
+  });
+  assert.deepEqual(replyTarget({ source: "reddit", url: "https://www.reddit.com/r/Baking/comments/1abcde/x/" }, ENV), {
+    ok: true,
+    platform: "reddit",
+  });
+  for (const source of ["discourse", "quora", "stackexchange"]) {
+    assert.equal(replyTarget({ source, url: "https://example.com/t/x/1" }, ENV).ok, false, source);
+  }
+  assert.equal(replyTarget({ source: "reddit", url: "https://www.reddit.com/r/x/comments/1a/" }, { ...ENV, redditPosting: "off" }).ok, false, "Reddit off");
+  assert.equal(replyTarget({ source: "bluesky", url: "https://bsky.app/profile/a/post/b" }, ENV).ok, false, "no at:// uri");
+  assert.equal(
+    replyTarget({ source: "bluesky", url: "https://bsky.app/profile/a/post/b", atUri: "at://x" }, { ...ENV, blueskyHandle: undefined }).ok,
+    false,
+    "no Bluesky login",
+  );
 });
 
 test("redditThingId", () => {
@@ -100,7 +103,7 @@ test("finalReplyText: our disclosure exactly once, in his language", () => {
   assert.equal(en.split(REPLY_DISCLOSURE.en).length, 2);
   const again = finalReplyText(en, "en", "reddit");
   assert.equal(again, en, "idempotent");
-  const es = finalReplyText("Empiece con precios bajos.\n\nEscrito con ayuda de IA.", "es", "discourse");
+  const es = finalReplyText("Empiece con precios bajos.\n\nEscrito con ayuda de IA.", "es", "reddit");
   assert.equal(es, `Empiece con precios bajos.\n\n${REPLY_DISCLOSURE.es}`);
   assert.equal(replyBody(es), "Empiece con precios bajos.");
   assert.equal(stripDisclosure("Keep this line about AI tools at the plant.\n\nAnother paragraph."), "Keep this line about AI tools at the plant.\n\nAnother paragraph.");
@@ -127,12 +130,10 @@ test("finalReplyText clamps to the platform limit", () => {
 });
 
 test("draftStatus + canClaimReply", () => {
-  assert.equal(draftStatus("auto", { pass: true, mode: "enforce" }), "draft");
-  assert.equal(draftStatus("auto", { pass: false, mode: "enforce" }), "needs_review");
-  assert.equal(draftStatus("auto", { pass: false, mode: "warn" }), "draft");
-  assert.equal(draftStatus("manual", { pass: true, mode: "enforce" }), "manual");
-  assert.equal(draftStatus("manual", { pass: false, mode: "enforce" }), "needs_review");
-  assert.equal(draftStatus("skipped", null), "skipped");
+  assert.equal(draftStatus({ pass: true, mode: "enforce" }), "draft");
+  assert.equal(draftStatus({ pass: false, mode: "enforce" }), "needs_review");
+  assert.equal(draftStatus({ pass: false, mode: "warn" }), "draft");
+  assert.equal(draftStatus(null), "draft");
   const now = 1_000_000_000;
   assert.equal(canClaimReply({ status: "draft" }, now, false).ok, true);
   assert.equal(canClaimReply({ status: "failed" }, now, false).ok, true);
@@ -141,16 +142,9 @@ test("draftStatus + canClaimReply", () => {
   assert.equal(canClaimReply({ status: "posting", claimedAt: now - 1000 }, now, false).ok, false);
   assert.equal(canClaimReply({ status: "posting", claimedAt: now - STALE_CLAIM_MS - 1 }, now, false).ok, true);
   assert.equal(canClaimReply({ status: "posted" }, now, true).ok, false);
-  assert.equal(canClaimReply({ status: "manual" }, now, true).ok, false);
-  assert.equal(canClaimReply({ status: "skipped" }, now, true).ok, false);
 });
 
 test("platform responses", () => {
-  assert.equal(
-    discoursePostUrl("https://forum.example.com/", { topic_id: 42, topic_slug: "cakes", post_number: 3 }, 42),
-    "https://forum.example.com/t/cakes/42/3",
-  );
-  assert.equal(discoursePostUrl("https://forum.example.com", null, 42), "https://forum.example.com/t/topic/42");
   assert.deepEqual(parseRedditComment({ json: { errors: [], data: { things: [{ data: { permalink: "/r/Baking/comments/1/x/c1/" } }] } } }), {
     url: "https://www.reddit.com/r/Baking/comments/1/x/c1/",
     errors: [],
@@ -160,12 +154,15 @@ test("platform responses", () => {
   assert.equal(replyLanguage("fr"), "en");
 });
 
-test("review page section: copy button for manual replies, safe links only", () => {
+test("review page section: copy + open thread only for held replies, safe links only", () => {
   const html = renderRepliesSection([
-    { id: "r1", createdAt: 0, platform: "quora", status: "manual", threadUrl: "https://www.quora.com/q", threadTitle: "How <b>?", text: "Answer", reason: "post by hand" },
+    { id: "r1", createdAt: 0, platform: "reddit", status: "needs_review", threadUrl: "https://www.reddit.com/r/x/comments/1a/", threadTitle: "How <b>?", text: "Answer", guardSummary: "unsupported claim" },
     { id: "r2", createdAt: 0, platform: "bluesky", status: "posted", threadUrl: "javascript:alert(1)", threadTitle: "t", text: "x", postedUrl: "https://bsky.app/profile/a/post/b" },
+    { id: "r3", createdAt: 0, platform: "bluesky", status: "draft", threadUrl: "https://bsky.app/profile/a/post/c", threadTitle: "t", text: "y" },
   ]);
   assert.match(html, /data-copy="reply-text-r1"/);
+  assert.ok(!html.includes('data-copy="reply-text-r2"'), "no copy button once posted");
+  assert.ok(!html.includes('data-copy="reply-text-r3"'), "no copy button for a reply that auto-posts");
   assert.match(html, /How &lt;b&gt;\?/);
   assert.ok(!html.includes("javascript:alert"), "non-http links aren't rendered");
   assert.match(html, /See the reply/);

@@ -1,21 +1,21 @@
 // Thread replies: after a story call whose question came from an online thread (an
 // audienceQuestions row), answer that thread in his words, from his own account.
 //
-//   draftForCall({ callId })   scheduled by pipeline.processCall (story calls). No-op unless the
-//                              call's plan used an audience question. One reply per thread:
+//   draftForCall({ callId })   scheduled by pipeline.processCall (story calls). No-op (no row)
+//                              unless the call's plan used an audience question from Bluesky or
+//                              Reddit AND that platform is set up. One reply per thread:
 //                              replyWriter.writeReply -> disclosure line -> postGuard.checkPost
-//                              -> row: draft | needs_review | manual | skipped
+//                              -> row: draft | needs_review
 //                              -> postReply scheduled for "draft" when AUTO_POST isn't off
-//   postReply({ replyId, approve? })   claim (no double replies) -> Discourse / Reddit -> posted
+//   postReply({ replyId, approve? })   claim (no double replies) -> Bluesky / Reddit -> posted
 //                              (+ link) | failed. approve:true posts a reply the fact-check held.
-//   markPostedByHand({ replyId, postedUrl })   record a reply a person posted (Quora, Reddit
-//                              before API approval, other sites)
 //
-// Platform rules: lib/threadReplies.ts (Discourse auto with his user API key; Reddit auto only
-// when REDDIT_POSTING=on + credentials; Quora manual; Stack Exchange skipped).
+// Platform rules: lib/threadReplies.ts (Bluesky auto with his app password; Reddit auto only
+// when REDDIT_POSTING=on + credentials; every other source gets no reply).
 // Never log tokens, keys, reply text or transcripts; ids and statuses only.
-// Env: DISCOURSE_URL, DISCOURSE_USER_API_KEY, REDDIT_POSTING, REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET,
-//      REDDIT_USERNAME, REDDIT_PASSWORD, REDDIT_USER_AGENT, AUTO_POST, POST_GUARD_MODE.
+// Env: BLUESKY_HANDLE, BLUESKY_APP_PASSWORD, BLUESKY_SERVICE (optional), REDDIT_POSTING,
+//      REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USERNAME, REDDIT_PASSWORD,
+//      REDDIT_USER_AGENT, AUTO_POST, POST_GUARD_MODE.
 // Owner: Integrations.
 
 import { v } from "convex/values";
@@ -28,16 +28,13 @@ import { parseAutoPost } from "./lib/postFlow";
 import {
   audienceIdForCall,
   canClaimReply,
-  discoursePostUrl,
-  discourseTopicId,
   draftStatus,
   finalReplyText,
   parseRedditComment,
-  platformOf,
   redditThingId,
   replyBody,
   replyLanguage,
-  replyMode,
+  replyTarget,
   type ReplyEnv,
 } from "./lib/threadReplies";
 
@@ -50,8 +47,6 @@ function replyEnv(): ReplyEnv {
   return {
     blueskyHandle: e.BLUESKY_HANDLE,
     blueskyPassword: e.BLUESKY_APP_PASSWORD,
-    discourseUrl: e.DISCOURSE_URL,
-    discourseKey: e.DISCOURSE_USER_API_KEY,
     redditPosting: e.REDDIT_POSTING,
     redditClientId: e.REDDIT_CLIENT_ID,
     redditClientSecret: e.REDDIT_CLIENT_SECRET,
@@ -108,7 +103,6 @@ export const saveReply = internalMutation({
     text: v.string(),
     language: v.optional(v.string()),
     status: v.string(),
-    reason: v.optional(v.string()),
     guardIssues: v.optional(v.array(v.string())),
     guardSummary: v.optional(v.string()),
   },
@@ -175,18 +169,6 @@ export const finishReply = internalMutation({
   },
 });
 
-/** A person posted it (Quora, Reddit before approval, other sites): record the link. */
-export const markPostedByHand = internalMutation({
-  args: { replyId: v.id("threadReplies"), postedUrl: v.string() },
-  handler: async (ctx, { replyId, postedUrl }) => {
-    const reply = await ctx.db.get(replyId);
-    if (!reply) throw new Error("Reply not found.");
-    if (reply.status === "posted") return { ok: false, reason: "Already marked posted." };
-    await ctx.db.patch(replyId, { status: "posted", postedUrl: postedUrl.trim(), postedAt: Date.now(), claimedAt: undefined });
-    return { ok: true };
-  },
-});
-
 /** Newest replies for the /posts review page (no transcripts, no numbers). */
 export const listForPage = internalQuery({
   args: {},
@@ -203,7 +185,6 @@ export const listForPage = internalQuery({
           threadUrl: r.threadUrl,
           threadTitle: q?.title ?? "",
           text: r.text,
-          ...(r.reason ? { reason: r.reason } : {}),
           ...(r.guardSummary ? { guardSummary: r.guardSummary } : {}),
           ...(r.guardIssues?.length ? { guardIssues: r.guardIssues } : {}),
           ...(r.postedUrl ? { postedUrl: r.postedUrl } : {}),
@@ -226,11 +207,10 @@ export const draftForCall = internalAction({
     if (!data) return { status: "none", reason: "This call's question didn't come from an online thread." };
     if (data.existingReplyId) return { status: "exists", replyId: data.existingReplyId };
     const { question } = data;
-    const platform = platformOf(question.source, question.url);
-    let mode = replyMode(platform, question.url, replyEnv());
-    if (platform === "bluesky" && mode.mode === "auto" && !question.atUri) {
-      mode = { mode: "manual", reason: "This Bluesky question has no post uri to reply under: post this draft by hand." };
-    }
+    // No reply (and no row) where we can't post: other sources, or Bluesky/Reddit not set up.
+    const target = replyTarget(question, replyEnv());
+    if (!target.ok) return { status: "none", reason: target.reason };
+    const { platform } = target;
     const base = {
       elderId: data.elderId,
       callId,
@@ -239,11 +219,6 @@ export const draftForCall = internalAction({
       threadUrl: question.url,
       ...(question.atUri ? { threadRef: question.atUri } : {}),
     };
-
-    if (mode.mode === "skipped") {
-      const saved = await ctx.runMutation(internal.threadReplies.saveReply, { ...base, text: "", status: "skipped", reason: mode.reason });
-      return { status: "skipped", replyId: saved.replyId, reason: mode.reason };
-    }
 
     const written = await ctx.runAction(internal.replyWriter.writeReply, {
       turns: data.turns,
@@ -254,22 +229,19 @@ export const draftForCall = internalAction({
       },
       platform,
     });
-    if (written.skip) {
-      const saved = await ctx.runMutation(internal.threadReplies.saveReply, { ...base, text: "", status: "skipped", reason: written.reason });
-      return { status: "skipped", replyId: saved.replyId, reason: written.reason };
-    }
+    // Nothing in the call answers this thread: no reply, no row.
+    if (written.skip) return { status: "none", reason: written.reason };
 
     const lang = replyLanguage(written.language);
     const text = finalReplyText(written.text, lang, platform);
     // Same fact-check as LinkedIn posts, on the body (our disclosure line isn't his claim).
     const guard = await ctx.runAction(internal.postGuard.checkPost, { postText: replyBody(text), turns: data.turns });
-    const status = draftStatus(mode.mode, guard);
+    const status = draftStatus(guard);
     const saved = await ctx.runMutation(internal.threadReplies.saveReply, {
       ...base,
       text,
       language: lang,
       status,
-      ...(status === "manual" ? { reason: mode.reason } : {}),
       ...(!guard.pass ? { guardIssues: guard.issues, guardSummary: guard.summary } : {}),
     });
     if (saved.created && status === "draft" && parseAutoPost(process.env.AUTO_POST)) {
@@ -288,21 +260,6 @@ async function timedFetch(url: string, init: RequestInit): Promise<Response> {
   } finally {
     clearTimeout(timer);
   }
-}
-
-async function postToDiscourse(threadUrl: string, text: string): Promise<{ url?: string; error?: string }> {
-  const base = (process.env.DISCOURSE_URL ?? "").trim().replace(/\/+$/, "");
-  const key = process.env.DISCOURSE_USER_API_KEY;
-  const topicId = discourseTopicId(threadUrl);
-  if (!base || !key || topicId === undefined) return { error: "Discourse isn't configured for this thread." };
-  const res = await timedFetch(`${base}/posts.json`, {
-    method: "POST",
-    headers: { "User-Api-Key": key, "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ topic_id: topicId, raw: text }),
-  });
-  if (!res.ok) return { error: `Discourse HTTP ${res.status}` };
-  const json = await res.json().catch(() => null);
-  return { url: discoursePostUrl(base, json, topicId) };
 }
 
 async function postToReddit(threadUrl: string, text: string): Promise<{ url?: string; error?: string }> {
@@ -360,9 +317,8 @@ export const postReply = internalAction({
     let result: { url?: string; error?: string };
     try {
       if (reply.platform === "bluesky") result = await postToBluesky(reply.threadRef, reply.text, reply.language);
-      else if (reply.platform === "discourse") result = await postToDiscourse(reply.threadUrl, reply.text);
       else if (reply.platform === "reddit") result = await postToReddit(reply.threadUrl, reply.text);
-      else result = { error: `No posting integration for ${reply.platform}; post it by hand.` };
+      else result = { error: `No posting integration for ${reply.platform}.` };
     } catch {
       result = { error: "Network error or timeout while posting." }; // the reply may have gone out: check the thread
     }

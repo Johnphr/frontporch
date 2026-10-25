@@ -285,20 +285,19 @@ export default defineSchema({
   // ---- Integrations: thread replies (threadReplies.ts) ----
   // His answer, posted back on the online thread a story call's question came from (an
   // audienceQuestions row). One reply per thread (by_audience).
+  // Only Bluesky (auto) and Reddit (once REDDIT_POSTING=on); no row for any other source.
   // status: draft (ready to auto-post) | needs_review (held by the fact-check) | posting
-  //       | posted | manual (a person posts it: Quora, Reddit until approved, other sites)
-  //       | skipped (Stack Exchange, or nothing to answer with) | failed
+  //       | posted | failed
   threadReplies: defineTable({
     elderId: v.id("elders"),
     callId: v.id("calls"),
     audienceQuestionId: v.id("audienceQuestions"),
-    platform: v.string(), // bluesky | discourse | reddit | quora | stackexchange | other
+    platform: v.string(), // bluesky | reddit
     threadUrl: v.string(),
     threadRef: v.optional(v.string()), // Bluesky: the question post's at:// uri
-    text: v.string(), // as posted: body + disclosure line ("" when skipped)
+    text: v.string(), // as posted: body + disclosure line
     language: v.optional(v.string()), // en | es
     status: v.string(),
-    reason: v.optional(v.string()), // why manual / skipped
     guardIssues: v.optional(v.array(v.string())),
     guardSummary: v.optional(v.string()),
     postedUrl: v.optional(v.string()),

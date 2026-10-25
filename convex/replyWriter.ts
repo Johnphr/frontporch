@@ -27,7 +27,7 @@ Write a helpful, human reply:
 - Answer the thread's actual question directly, from his experience. Lead with the answer, then the concrete detail or short story he gave that backs it up.
 - Use ONLY his facts, numbers, names, places and lessons. Never invent or embellish. If he didn't really address this question, skip.
 - His voice and plain phrases; fix only grammar and obvious speech-to-text errors.
-- Platform tone: reddit = conversational and direct; discourse = a friendly, slightly fuller forum reply; quora = a clear answer with his background up front; bluesky = one or two short sentences; other = plain and friendly.
+- Platform tone: reddit = conversational and direct; bluesky = one or two short sentences.
 - Length: 80-200 words, plain text, short paragraphs. On bluesky: at most 240 characters in total (a hard limit), no line breaks needed. No markdown headings, no hashtags, no emojis.
 - No links, no self-promotion, no mention of LinkedIn, Front Porch, interviews or AI (a disclosure line is added later).
 - No medical, legal, tax or investment advice. No private details about other people.

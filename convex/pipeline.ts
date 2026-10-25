@@ -15,7 +15,7 @@
 //                    (posts.by_call) -> linkedapi.createPost, scheduled only for a new row
 //                    and only when AUTO_POST isn't "off" (off = preview-only, for tests)
 //          reply     threadReplies.draftForCall (scheduled; only when the question came from
-//                    an online thread: Bluesky / Discourse / Reddit / Quora)
+//                    a Bluesky thread, or Reddit once REDDIT_POSTING is on)
 //          plan      conversation.refreshQuestionBank (scheduled)
 //     4. status `done` + processedAt; any error (or a failed post / plan step) -> `process_failed`
 //        + error. Memories are best effort: if that step fails the call is still `done`, with
