@@ -13,7 +13,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { shortAccountError } from "./lib/accountConnect";
 import { checkState, STATE_CLEANUP_AFTER_MS, type StateError } from "./lib/oauthFlow";
-import { connectRateLimit, recordAttempt, sameTokenHash } from "./lib/signupRules";
+import { connectLocked, connectRateLimit, recordAttempt, sameTokenHash } from "./lib/signupRules";
 
 const platform = v.union(v.literal("threads"), v.literal("x"));
 const sealed = v.object({ ciphertext: v.string(), iv: v.string() });
@@ -31,8 +31,8 @@ export const reserveConnect = internalMutation({
   handler: async (ctx, { elderId, tokenHash, platform: p, now }): Promise<{ ok: true } | { ok: false; error: "not_found" | "locked" | "rate_limited" }> => {
     const elder = await ctx.db.get(elderId);
     if (!elder || !sameTokenHash(elder.signupTokenHash, tokenHash)) return { ok: false, error: "not_found" };
-    if (elder.stage === "active") return { ok: false, error: "locked" };
     const row = await accountRow(ctx, elderId, p);
+    if (connectLocked(elder.stage, row?.status)) return { ok: false, error: "locked" };
     const times = row?.attemptTimes ?? [];
     if (!connectRateLimit(times, now).ok) return { ok: false, error: "rate_limited" };
     const attemptTimes = recordAttempt(times, now);
@@ -86,7 +86,8 @@ export const saveTokens = internalMutation({
   handler: async (ctx, { elderId, platform: p, handle, externalUserId, secret, tokenExpiresAt, scopes, now, signup }): Promise<{ ok: true } | { ok: false; error: "not_found" | "locked" }> => {
     const elder = await ctx.db.get(elderId);
     if (!elder) return { ok: false, error: "not_found" };
-    if (signup && elder.stage === "active") return { ok: false, error: "locked" };
+    const row = await accountRow(ctx, elderId, p);
+    if (signup && connectLocked(elder.stage, row?.status)) return { ok: false, error: "locked" };
     const fields = {
       handle,
       externalUserId,
@@ -98,7 +99,6 @@ export const saveTokens = internalMutation({
       lastCheckedAt: now,
       lastError: undefined,
     };
-    const row = await accountRow(ctx, elderId, p);
     if (row) await ctx.db.patch(row._id, fields);
     else await ctx.db.insert("elderAccounts", { elderId, platform: p, ...fields });
     return { ok: true };

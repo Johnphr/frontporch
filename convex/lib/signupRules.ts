@@ -209,6 +209,15 @@ export function defaultCallSlot(nowMs: number, timeZone: string): { callDay: Wee
 }
 
 /**
+ * May the website (re)connect this platform for him? Before he's active: always. Once he's
+ * active: only to replace an account that's missing, `invalid` (the platform refused it) or
+ * `disconnected`; a connected account stays locked. Checked at reserve and again at save.
+ */
+export function connectLocked(stage: string | undefined, accountStatus: string | undefined): boolean {
+  return stage === "active" && accountStatus === "connected";
+}
+
+/**
  * May the hourly cron (schedule.runTick) ring him? A website sign-up (has signupTokenHash)
  * still in onboarding gets the same PUBLIC_CALLS gate as "Call me now": the SMS check is
  * fake, so anyone can type any number. Seeded or hand-made elders, and active ones, always may.

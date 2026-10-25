@@ -16,6 +16,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { httpAction, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { encryptSecret, loadAccountKey } from "./lib/accountCrypto";
+import { connectLocked } from "./lib/signupRules";
 import { X_PLATFORM, type XAccountForLogin } from "./lib/xLogin";
 import {
   checkXState,
@@ -94,7 +95,8 @@ export const saveTokens = internalMutation({
   handler: async (ctx, a): Promise<{ ok: true } | { ok: false; error: "not_found" | "locked" }> => {
     const elder = await ctx.db.get(a.elderId);
     if (!elder) return { ok: false, error: "not_found" };
-    if (a.signup && elder.stage === "active") return { ok: false, error: "locked" };
+    const existing = await xRow(ctx, a.elderId);
+    if (a.signup && connectLocked(elder.stage, existing?.status)) return { ok: false, error: "locked" };
     const now = Date.now();
     const fields = {
       secret: a.secret,
@@ -107,7 +109,6 @@ export const saveTokens = internalMutation({
       lastCheckedAt: now,
       lastError: undefined,
     };
-    const existing = await xRow(ctx, a.elderId);
     if (existing) await ctx.db.patch(existing._id, fields);
     else await ctx.db.insert("elderAccounts", { elderId: a.elderId, platform: "x", ...fields });
     return { ok: true };

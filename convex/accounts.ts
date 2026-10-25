@@ -15,6 +15,7 @@ import {
   GLOBAL_CONNECTS_PER_HOUR,
   HANDLE_CONNECTS_PER_HOUR,
   connectCaps,
+  connectLocked,
   connectRateLimit,
   recordAttempt,
   sameTokenHash,
@@ -91,8 +92,8 @@ export const reserveConnect = internalMutation({
   ): Promise<{ ok: true } | { ok: false; error: "not_found" | "locked" | "rate_limited" | "busy" }> => {
     const elder = await ctx.db.get(elderId);
     if (!elder || !sameTokenHash(elder.signupTokenHash, tokenHash)) return { ok: false, error: "not_found" };
-    if (elder.stage === "active") return { ok: false, error: "locked" };
     const row = await accountRow(ctx, elderId, p);
+    if (connectLocked(elder.stage, row?.status)) return { ok: false, error: "locked" };
     const times = row?.attemptTimes ?? [];
     if (!connectRateLimit(times, now).ok) return { ok: false, error: "rate_limited" };
     const handleKey = `${p}:${handle.toLowerCase()}`;
@@ -127,9 +128,9 @@ export const saveAccount = internalMutation({
   handler: async (ctx, { elderId, platform: p, handle, did, secret, now, signup }): Promise<{ ok: true } | { ok: false; error: "not_found" | "locked" }> => {
     const elder = await ctx.db.get(elderId);
     if (!elder) return { ok: false, error: "not_found" };
-    if (signup && elder.stage === "active") return { ok: false, error: "locked" };
-    const fields = { handle, did, secret, status: "connected" as const, connectedAt: now, lastCheckedAt: now, lastError: undefined };
     const row = await accountRow(ctx, elderId, p);
+    if (signup && connectLocked(elder.stage, row?.status)) return { ok: false, error: "locked" };
+    const fields = { handle, did, secret, status: "connected" as const, connectedAt: now, lastCheckedAt: now, lastError: undefined };
     if (row) await ctx.db.patch(row._id, fields);
     else await ctx.db.insert("elderAccounts", { elderId, platform: p, ...fields });
     return { ok: true };

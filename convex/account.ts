@@ -28,7 +28,7 @@ const POSTS_READ = 200;
 
 const hashOf = async (token: string) => (await signupTokenHash(token)) ?? "";
 
-/** { name, characterId, callDay?, callHour?, timezone? }, or null (unknown elder or wrong token). */
+/** { name, characterId, callDay?, callHour?, timezone?, accounts }, or null (unknown elder or wrong token). */
 export const getProfile = action({
   args: { elderId: v.id("elders"), token: v.string() },
   handler: async (ctx, { elderId, token }): Promise<Profile | null> =>
@@ -37,7 +37,19 @@ export const getProfile = action({
 
 export const profileFor = internalQuery({
   args: { elderId: v.id("elders"), tokenHash: v.string() },
-  handler: async (ctx, { elderId, tokenHash }): Promise<Profile | null> => profileView(await ctx.db.get(elderId), tokenHash),
+  handler: async (ctx, { elderId, tokenHash }): Promise<Profile | null> => {
+    const elder = checkedElder(await ctx.db.get(elderId), tokenHash);
+    if (!elder) return null;
+    const rows = await ctx.db
+      .query("elderAccounts")
+      .withIndex("by_elder_platform", (q) => q.eq("elderId", elderId))
+      .collect();
+    return profileView(
+      elder,
+      tokenHash,
+      rows.map((r) => ({ platform: r.platform, status: r.status, ...(r.handle ? { handle: r.handle } : {}) })),
+    );
+  },
 });
 
 /** His weekly call: day (sunday..saturday), hour 0-23 his local time, IANA timezone. */

@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  accountsView,
   checkedElder,
   profileView,
   publishedPosts,
@@ -13,7 +14,7 @@ import {
   type PostForPage,
   type PublicationForPage,
 } from "../convex/lib/accountPage.ts";
-import { newSignupToken, signupTokenHash } from "../convex/lib/signupRules.ts";
+import { connectLocked, newSignupToken, signupTokenHash } from "../convex/lib/signupRules.ts";
 import { NOW } from "./helpers.ts";
 
 async function signedUp() {
@@ -52,12 +53,18 @@ test("getProfile: wrong token or unknown elder -> null; never the phone", async 
     callDay: "tuesday",
     callHour: 11,
     timezone: "America/Chicago",
+    accounts: [
+      { platform: "bluesky", status: "none" },
+      { platform: "threads", status: "none" },
+      { platform: "x", status: "none" },
+    ],
   });
   assert.equal(profileView(elder, (await signupTokenHash(newSignupToken()))!), null);
   assert.equal(profileView(null, hash), null);
   assert.ok(!("phone" in profileView(elder, hash)!));
   // No slot yet: the fields are left out.
-  assert.deepEqual(profileView({ name: "Ann", signupTokenHash: hash }, hash), { name: "Ann", characterId: "pip" });
+  assert.equal(profileView({ name: "Ann", signupTokenHash: hash }, hash)?.characterId, "pip");
+  assert.ok(!("callDay" in profileView({ name: "Ann", signupTokenHash: hash }, hash)!));
 });
 
 test("setSchedule: needs a valid slot and his token", async () => {
@@ -175,4 +182,31 @@ test("posts: newest first, at most max", () => {
   assert.deepEqual(publishedPosts(posts, pubs, []).map((p) => p.id), ["b", "c", "a"]);
   assert.deepEqual(publishedPosts(posts, pubs, [], 2).map((p) => p.id), ["b", "c"]);
   assert.deepEqual(publishedPosts([], [], []), []);
+});
+
+// ---------- his accounts: what the page shows, and reconnecting once active ----------
+
+test("accounts: Bluesky, Threads, X with connected / invalid / none, never a secret", () => {
+  const rows = [
+    { platform: "x", status: "disconnected", handle: "old" },
+    { platform: "bluesky", status: "invalid", handle: "walter.bsky.social", secret: { ciphertext: "c", iv: "i" } },
+    { platform: "threads", status: "connected", handle: "walter" },
+    { platform: "reddit", status: "connected", handle: "w" },
+  ];
+  assert.deepEqual(accountsView(rows), [
+    { platform: "bluesky", status: "invalid", handle: "walter.bsky.social" },
+    { platform: "threads", status: "connected", handle: "walter" },
+    { platform: "x", status: "none" },
+  ]);
+  assert.ok(!JSON.stringify(accountsView(rows)).includes("ciphertext"));
+});
+
+test("connectLocked: once active, only a connected account is locked", () => {
+  for (const status of [undefined, "connected", "invalid", "disconnected"]) {
+    assert.equal(connectLocked("onboarding", status), false, `onboarding ${status}`);
+  }
+  assert.equal(connectLocked("active", "connected"), true);
+  assert.equal(connectLocked("active", "invalid"), false, "revoked: he can reconnect");
+  assert.equal(connectLocked("active", "disconnected"), false);
+  assert.equal(connectLocked("active", undefined), false, "never connected");
 });

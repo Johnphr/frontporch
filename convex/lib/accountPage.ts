@@ -19,13 +19,35 @@ export type ElderForPage = {
   signupTokenHash?: string;
 };
 
+/** One of his posting accounts, as his page shows it: no secret, no ids. */
+export type AccountState = { platform: "bluesky" | "threads" | "x"; status: "connected" | "invalid" | "none"; handle?: string };
+
 export type Profile = {
   name: string;
   characterId: string;
   callDay?: string;
   callHour?: number;
   timezone?: string;
+  accounts: AccountState[];
 };
+
+/** The elderAccounts fields the page reads. */
+export type AccountRowForPage = { platform: string; status: string; handle?: string };
+
+const PAGE_PLATFORMS = ["bluesky", "threads", "x"] as const;
+
+/**
+ * Bluesky, Threads and X, in that order: connected (with the handle), invalid (the platform
+ * refused it: he can reconnect), or none (never connected, or disconnected).
+ */
+export function accountsView(rows: AccountRowForPage[]): AccountState[] {
+  return PAGE_PLATFORMS.map((platform) => {
+    const row = rows.find((r) => r.platform === platform);
+    const status = row?.status === "connected" ? "connected" : row?.status === "invalid" ? "invalid" : "none";
+    const handle = status !== "none" && row?.handle ? row.handle.slice(0, 100) : undefined;
+    return { platform, status, ...(handle ? { handle } : {}) };
+  });
+}
 
 /** His row when the token's hash matches his (constant-time), else null. No row = null too. */
 export function checkedElder<T extends { signupTokenHash?: string }>(elder: T | null, tokenHash: string): T | null {
@@ -33,7 +55,7 @@ export function checkedElder<T extends { signupTokenHash?: string }>(elder: T | 
 }
 
 /** What his page shows about him, or null (unknown elder or wrong token). Never his phone. */
-export function profileView(elder: ElderForPage | null, tokenHash: string): Profile | null {
+export function profileView(elder: ElderForPage | null, tokenHash: string, accountRows: AccountRowForPage[] = []): Profile | null {
   const him = checkedElder(elder, tokenHash);
   if (!him) return null;
   return {
@@ -42,6 +64,7 @@ export function profileView(elder: ElderForPage | null, tokenHash: string): Prof
     ...(him.callDay ? { callDay: him.callDay } : {}),
     ...(him.callHour !== undefined ? { callHour: him.callHour } : {}),
     ...(him.timezone ? { timezone: him.timezone } : {}),
+    accounts: accountsView(accountRows),
   };
 }
 
