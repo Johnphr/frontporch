@@ -1,9 +1,9 @@
-// Sign-up page rules (signup.ts): input checks, language codes, the call and connect rate
-// limits, weekly-call defaults and the sign-up token.
+// Sign-up page rules (signup.ts, account.ts): input checks, language codes, the weekly call slot,
+// the call and connect rate limits, weekly-call defaults and the sign-up token.
 // No runtime imports: unit-tested directly with Node (tests/signup.test.ts).
 
 import type { CallLanguage } from "./prompts/principles.ts";
-import { WEEKDAYS, localParts, type Weekday } from "./schedule.ts";
+import { WEEKDAYS, localParts, normalizeDay, type Weekday } from "./schedule.ts";
 
 export const MAX_NAME_CHARS = 100;
 export const CALLS_PER_DAY = 3;
@@ -25,6 +25,25 @@ export function normalizePhone(raw: string): string | undefined {
 export function normalizeName(raw: string): string | undefined {
   const name = raw.replace(/\s+/g, " ").trim();
   return name && name.length <= MAX_NAME_CHARS ? name : undefined;
+}
+
+export type WeeklySlot = { callDay: Weekday; callHour: number; timezone: string };
+
+/**
+ * His weekly call slot from the web (same rules as elders.seed), or undefined if any part is off:
+ * a weekday name, a whole hour 0-23, and an IANA timezone Intl knows.
+ */
+export function normalizeSchedule(day: string, hour: number, timezone: string): WeeklySlot | undefined {
+  const callDay = normalizeDay(day);
+  if (!callDay || !Number.isInteger(hour) || hour < 0 || hour > 23) return undefined;
+  const tz = timezone.trim();
+  if (!tz) return undefined;
+  try {
+    localParts(Date.now(), tz);
+  } catch {
+    return undefined;
+  }
+  return { callDay, callHour: hour, timezone: tz };
 }
 
 /** Sign-up language -> elders.language (BCP-47; lib/onboarding.callLanguage reads it back). */

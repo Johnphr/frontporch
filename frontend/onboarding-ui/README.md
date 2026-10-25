@@ -1,21 +1,26 @@
-# Onboarding for older adults (sign-up page)
+# Front Porch web app
 
-React 18 + Vite + Tailwind CSS 3. Design by Mafer (`feat/onboarding-ui`), wired to the public
-sign-up API in `convex/signup.ts`. Spanish by default, English toggle in the top right.
+React 18 + Vite + Tailwind CSS 3, plain JSX. "Large & Calm" design: big type, 64px buttons,
+A / A+ / A++ text size. English only. Talks to `convex/signup.ts` and `convex/account.ts`.
 
-Four steps, then a "Call me now" button:
+```
+#/        landing ──► #/signin ──► #/setup ──► #/home  (Home | Posts)
+                       │  already set up on this device ──────▲
+```
 
-| Step | Screen | Convex function (`convex/signup.ts`) |
+| Route | Screen | Convex functions |
 |---|---|---|
-| 1 | Name + call language (Español / English); the language also sets the page language until the toggle is used | none (validated locally, sent in step 2) |
-| 2 | Phone number | `signup:register({ name, phone, language, timeZone })` → `{ elderId, token }`; an existing number gets `already_signed_up` (no id, no token) and a friendly message |
-| 3 | Who calls you (characters in the chosen language) | `signup:listCharacters`, `signup:setCharacter({ elderId, token, characterId })` |
-| 4 | Connect Bluesky, optional ("Skip for now"): handle + app password, link to bsky.app/settings/app-passwords; Reddit shown as "coming soon" | `signup:connectBluesky({ elderId, token, handle, appPassword })` → `{ ok, handle }` or `{ ok: false, error }` (codes → `sBsky.errors` in `i18n.js`) |
-| done | "Call me now" | `signup:requestCall({ elderId, token })`: rings only when the backend allows it (`PUBLIC_CALLS=on` rings numbers in `CALL_ALLOWLIST`, `=all` rings anyone); otherwise the page says calls are turned off |
+| `#/` | Landing | none |
+| `#/signin` | Phone + 6-digit code, or email link | none yet (both mocked in `src/api.js`) |
+| `#/setup` | Who sets up, name, language + host, weekly day + time, LinkedIn, review, Finish, call status | `signup:register`, `signup:setCharacter`, `account:setSchedule`, `signup:setLinkedin`, `signup:requestCall`, `signup:callStatus` |
+| `#/home` | Switch host, change call day/time | `account:getProfile`, `signup:setCharacter`, `account:setSchedule` |
+| `#/posts` | Published posts with reaction/comment counts | `account:listPosts` |
 
-There are no Front Porch logins (the token proves this browser made the sign-up) and no SMS verification yet: the 6-digit code
-screen still exists but is skipped (`VERIFY_PHONE = false` in `src/App.jsx`, mock in
-`src/api.js` `phoneVerification`). Turn it on once real SMS verification exists.
+**No real sign-in yet.** Any code works, except `000000`, which shows the "wrong code" error. The device
+remembers `{ phone, elderId }` in `localStorage` (`src/lib/session.js`). Anyone with the link
+and an elderId can see that page, so keep the link private until real auth exists.
+`requestCall` only rings when the backend allows it (`PUBLIC_CALLS`); otherwise the last screen
+says when Pip will call.
 
 ## Setup
 
@@ -27,34 +32,24 @@ npm run build
 ```
 
 `VITE_CONVEX_URL` is the Convex deployment URL (`https://<name>.convex.cloud`, in the Convex
-dashboard under Settings). That deployment must have `convex/signup.ts` deployed
-(`feat/characters` or later). It's read at build time; without it the page shows a
-"not set up yet" screen instead of the form.
+dashboard under Settings). It's read at build time. Without it, the landing page still shows,
+and the other screens say "not set up yet".
 
 ## Deploy to Vercel
-
-Preview (from the repo root, after `npx vercel login`):
 
 ```bash
 npx vercel deploy --cwd frontend/onboarding-ui --build-env VITE_CONVEX_URL=https://<deployment>.convex.cloud
 ```
 
-The first run links the folder to a Vercel project (it asks which scope and project name).
-For later deploys, set `VITE_CONVEX_URL` once in the Vercel project (Settings → Environment
-Variables, for Preview and Production) so you can drop `--build-env`. Production:
-`npx vercel deploy --prod --cwd frontend/onboarding-ui`. `vercel.json` pins the Vite build;
-there are no client-side routes, so no rewrites are needed.
+Set `VITE_CONVEX_URL` once in the Vercel project (Settings → Environment Variables) to drop
+`--build-env`. Production: `npx vercel deploy --prod --cwd frontend/onboarding-ui`. Routes are
+hash-based, so `vercel.json` needs no rewrites.
 
 ## Where things live
 
-- `tailwind.config.js` palette (rosa, cempasuchil, talavera, lino, tinta), fonts, 20px body size, 60px touch height
-- `src/index.css` Talavera tile band, focus ring, reduced-motion rule
-- `src/i18n.js` all copy in ES and EN, plus the country list. Backend error messages (English only)
-  are mapped to these by `src/api.js`
-- `src/api.js` the Convex calls (`ConvexHttpClient` + `anyApi`, no codegen) and the SMS mock
-- `src/ui.jsx` Button, fields, radio cards, badge, step header, icons
-- `src/App.jsx` the flow and its state
-
-Progress (name, language, phone, chosen character, sign-up id) is saved in `sessionStorage` so a
-refresh doesn't lose it, with the sign-up token `register` returned (every later step sends it).
-The SMS code and the app password are never stored.
+- `tailwind.config.js`: colors (ink, rose, pink, blush, sage), fonts (Literata, Atkinson Hyperlegible), sizes
+- `src/App.jsx`: routes. `src/lib/`: hash routing, session, text size, call-status polling
+- `src/api.js`: Convex calls (`ConvexHttpClient` + `anyApi`, no codegen), error codes, and the sign-in mocks
+- `src/copy.js`: shared copy and error messages. `src/copy/<page>.js` holds each page's copy
+- `src/ui/`: header, buttons, fields, choice cards, toast. `src/art/`: the SVG illustrations
+- `src/pages/`: `Landing`, `SignIn`, `setup/*` (onboarding), `account/*` (Home + Posts)

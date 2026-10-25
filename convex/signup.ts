@@ -121,8 +121,10 @@ export const saveCharacter = internalMutation({
   args: { elderId: v.id("elders"), tokenHash: v.string(), characterId: v.string() },
   handler: async (ctx, { elderId, tokenHash, characterId }): Promise<Saved> => {
     const elder = await ctx.db.get(elderId);
-    if (!elder || !sameTokenHash(elder.signupTokenHash, tokenHash)) return { ok: false, error: "not_found" };
-    await ctx.db.patch(elderId, { characterId });
+    const character = getCharacter(characterId);
+    if (!elder || !character || !sameTokenHash(elder.signupTokenHash, tokenHash)) return { ok: false, error: "not_found" };
+    // One language per character: switching host switches his call language too.
+    await ctx.db.patch(elderId, { characterId, language: languageTag(character.language) });
     return { ok: true };
   },
 });
