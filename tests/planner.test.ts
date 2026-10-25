@@ -304,6 +304,12 @@ test("story call context carries readers' exact words in <reader_comments>, afte
   assert.equal(toPromptVariables(buildCallPlan({ kind: "story" }), { name: "W", profile: null }).context.includes("reader_comments"), false);
 });
 
+test("story plan carries the keys of the comments it shares (marked shared after the call)", () => {
+  assert.deepEqual(buildCallPlan({ kind: "story", commentKeys: ["k1", "k2"] }).commentKeys, ["k1", "k2"]);
+  assert.equal("commentKeys" in buildCallPlan({ kind: "story", commentKeys: [] }), false);
+  assert.equal("commentKeys" in buildCallPlan({ kind: "onboarding", commentKeys: ["k1"] }), false);
+});
+
 test("normalizePostDraft: skip, and the hook appears once despite spacing/punctuation", () => {
   assert.deepEqual(normalizePostDraft({ skip: true, reason: "only small talk", hook: "", text: "" }), {
     skip: true,

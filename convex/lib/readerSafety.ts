@@ -67,6 +67,39 @@ export function quotableComments(comments: { text: string }[], max = MAX_QUOTED_
     .join("\n");
 }
 
+/** Comments already shared on a call are remembered by key; the oldest drop off past this. */
+export const MAX_MENTIONED_COMMENTS = 500;
+
+/** Stable key for one reader comment (author + words, case and spacing ignored). */
+export function commentKey(c: { author: string; text: string }): string {
+  const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+  return `${norm(c.author)}|${norm(c.text)}`;
+}
+
+/**
+ * Only comments no call has shared yet (questionBankMeta.mentionedComments), plus their keys:
+ * the plan carries the keys, and a real conversation marks them shared (markCommentsMentioned).
+ */
+export function newComments<P extends { comments: { author: string; text: string }[] }>(
+  posts: P[],
+  mentioned: string[],
+): { posts: P[]; keys: string[] } {
+  const seen = new Set(mentioned);
+  const keys: string[] = [];
+  const out = posts.map((p) => {
+    const fresh = p.comments.filter((c) => !seen.has(commentKey(c)));
+    for (const c of fresh) keys.push(commentKey(c));
+    return { ...p, comments: fresh };
+  });
+  return { posts: out, keys: [...new Set(keys)] };
+}
+
+/** mentioned + keys, deduped, newest last, capped. */
+export function addMentioned(mentioned: string[], keys: string[], max = MAX_MENTIONED_COMMENTS): string[] {
+  const all = [...mentioned.filter((k) => !keys.includes(k)), ...keys];
+  return all.slice(-max);
+}
+
 export type Feedback = { resonated: string; readerQuestions: string[]; line: string };
 
 /** Drop unsafe reader questions; blank an unsafe line or resonated. */

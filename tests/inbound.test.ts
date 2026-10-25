@@ -408,7 +408,7 @@ test("inbound prompt: next_step talk greets by name, recalls, shares feedback, a
   assert.match(text, /next_step is "callback"[\s\S]*his_host will call them right back[\s\S]*end the call/);
   assert.match(text, /you pass them on; you never become them/);
   assert.match(step(2), /<memories>.*"Last time you told me about\.\.\."/);
-  assert.match(step(3), /If there's <feedback>, share it in one warm sentence/);
+  assert.match(step(3), /If there's <feedback> or <reader_comments>, share it now, before the question/);
   assert.match(step(4), /the question in <question>/);
   assert.match(step(4), /call_kind "onboarding"/);
   assert.match(text, /never claim to be his_host/);
@@ -452,7 +452,7 @@ test("inbound story lookup: today's feedback line, the reader's question and mem
   // The inbound prompt knows the tags and shares the feedback first.
   const p = inboundAgent();
   assert.match(p.instructions, /<feedback> \(what readers said about a recent post\)/);
-  assert.match(p.instructions, /If there's <feedback>, share it in one warm sentence/);
+  assert.match(p.instructions, /If there's <feedback> or <reader_comments>, share it now, before the question/);
 });
 
 test("buildAgentConfig attaches tools by id only when given", () => {

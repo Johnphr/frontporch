@@ -3,7 +3,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { MAX_QUOTED_COMMENTS, quotableComments, safeFeedback, unsafeReaderText } from "../convex/lib/readerSafety.ts";
+import {
+  MAX_QUOTED_COMMENTS,
+  addMentioned,
+  commentKey,
+  newComments,
+  quotableComments,
+  safeFeedback,
+  unsafeReaderText,
+} from "../convex/lib/readerSafety.ts";
 
 test("normal reader questions and lines pass (EN + ES)", () => {
   for (const ok of [
@@ -86,4 +94,30 @@ test("quotableComments: exact words (rude ones too), no links or contact asks, n
   assert.equal(quotableComments(many).split("\n").length, MAX_QUOTED_COMMENTS);
   assert.match(quotableComments(many), /comment h"$/); // newest kept
   assert.equal(quotableComments([]), "");
+});
+
+test("shared comments never come back: only new ones reach a call", () => {
+  const a = { author: "@juan.bsky.social", text: "I dont believe this" };
+  const b = { author: "@ana.bsky.social", text: "How did you price it?" };
+  assert.equal(commentKey(a), commentKey({ author: " @Juan.bsky.social", text: "I  dont believe   THIS " }));
+  assert.notEqual(commentKey(a), commentKey({ ...a, author: "@other" }));
+
+  const posts = [{ postId: "p1", reactions: 3, comments: [a, b] }];
+  const first = newComments(posts, []);
+  assert.deepEqual(first.posts[0].comments, [a, b]);
+  assert.deepEqual(first.keys, [commentKey(a), commentKey(b)]);
+  assert.equal(first.posts[0].reactions, 3); // the rest of the post is untouched
+
+  // after a real conversation shared a: only b is left
+  const mentioned = addMentioned([], [commentKey(a)]);
+  const second = newComments(posts, mentioned);
+  assert.deepEqual(second.posts[0].comments, [b]);
+  assert.deepEqual(second.keys, [commentKey(b)]);
+  // both shared: nothing new
+  assert.deepEqual(newComments(posts, addMentioned(mentioned, [commentKey(b)])).keys, []);
+});
+
+test("addMentioned: deduped, newest last, capped", () => {
+  assert.deepEqual(addMentioned(["x", "y"], ["y", "z"]), ["x", "y", "z"]);
+  assert.deepEqual(addMentioned(["a", "b", "c"], ["d"], 3), ["b", "c", "d"]);
 });

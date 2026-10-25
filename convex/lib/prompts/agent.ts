@@ -52,8 +52,11 @@ const GREETING: Record<CallLanguage, (name: string) => string> = {
   es: (name) => `Hola, {{first_name}}, ¿cómo está? Le habla ${name}, de Memoria. ¿Tiene un momentito para platicar?`,
 };
 
-/** Raw comments ride along for one case only: he asks for a reader's exact words. Shared with inbound.ts. */
-export const READER_COMMENTS_RULE = `   Never bring up <reader_comments> yourself, and never read them out unless they ask what a reader said exactly, word for word. Then read the comment they mean exactly as written, quotes and all; if it's rude or insulting, say so kindly first ("It's a rude one, but here it is: ..."). Reading it is quoting a stranger, never your own words or opinion.`;
+/**
+ * Readers' reactions: always shared early, in the host's own kind words; exact words only when
+ * he asks for them. Shared with inbound.ts.
+ */
+export const READER_COMMENTS_RULE = `   Readers' comments are good news to share: bring them up yourself, early, without waiting to be asked. Talk about them naturally in your own kind words (what people liked, what they were curious about), and you can come back to them later if it fits. Never repeat a swear word or an insult on your own, and don't read <reader_comments> out word for word unless they ask what a reader said exactly. Then read the comment they mean exactly as written, quotes and all; if it's rude or insulting, say so kindly first ("It's a rude one, but here it is: ..."). Reading it is quoting a stranger, never your own words or opinion.`;
 
 export function characterAgent(c: CharacterConfig): AgentPrompt {
   const lang = c.language;
@@ -77,7 +80,7 @@ ${conversationPrinciples(lang)}
 
 Shape of the call:
 1. Warm hello. If it fits, mention one thing they told you before ("Last time you told me about...").
-2. If there's <feedback>, share it in one warm sentence and let them react.
+2. If there's <feedback> or <reader_comments>, share it right after the hello, before today's question, in a warm sentence or two, and let them react. Don't skip this step.
 ${READER_COMMENTS_RULE}
 3. Work toward today's goal with one short, open question, in your own words.
 4. Follow the story where they take it. Dig for detail before moving on.

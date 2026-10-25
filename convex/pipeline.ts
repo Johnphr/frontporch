@@ -401,6 +401,13 @@ export const processCall = internalAction({
         return { status: "no_conversation" };
       }
       if (call.kind === "story") {
+        // Before runStoryCall schedules the plan refresh: that refresh must leave out the reader
+        // comments this conversation already shared.
+        try {
+          await ctx.runMutation(internal.conversation.markCommentsMentioned, { callId });
+        } catch {
+          console.warn(`pipeline.processCall: call ${callId} marking shared comments failed`);
+        }
         const steps = await runStoryCall(ctx, callId, elder, turns, startedAt);
         await holdOwnPost(ctx, callId, takeDown);
         // Memories are best effort (e.g. no OPENAI_API_KEY yet): only the post and the plan refresh

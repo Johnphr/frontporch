@@ -18,6 +18,9 @@
 //                                     Fast: never waits on a refresh or an LLM call.
 //                                     cartesia.startCall's story branch (slice 2) calls it.
 //   markPlanUsed({ elderId, bankId, callId })   cartesia.startCall, once a story call is placed.
+//   markCommentsMentioned({ callId })   pipeline.processCall, once a story call was a real
+//                                     conversation: its plan's reader comments are shared, so
+//                                     refreshes leave them out (only new comments reach a call).
 //
 // Ranking rules live in lib/planner.ts (pure, tested). Owner: Core: Brain.
 
@@ -43,7 +46,7 @@ import {
 } from "./lib/planner";
 import { templateVariables } from "./lib/cartesia";
 import { buildOnboardingVariables, callCharacter } from "./lib/onboarding";
-import { quotableComments } from "./lib/readerSafety";
+import { addMentioned, newComments, quotableComments } from "./lib/readerSafety";
 import { asElderV2, isOnboarding, type ElderV2 } from "./lib/v2Fields";
 
 const bankItemValidator = v.object({
@@ -83,6 +86,8 @@ type PlanningContext = {
   feedbackLine: string;
   resonated: string;
   readerComments: string;
+  pendingCommentKeys: string[];
+  mentionedComments: string[];
 };
 
 const RECENTLY_USED_COUNT = 10;
@@ -129,6 +134,8 @@ export const getPlanningContext = internalQuery({
       feedbackLine: meta?.feedbackLine ?? "",
       resonated: meta?.resonated ?? "",
       readerComments: meta?.readerComments ?? "",
+      pendingCommentKeys: meta?.pendingCommentKeys ?? [],
+      mentionedComments: meta?.mentionedComments ?? [],
     };
   },
 });
@@ -157,10 +164,11 @@ export const replaceQueued = internalMutation({
     feedbackLine: v.optional(v.string()),
     resonated: v.optional(v.string()),
     readerComments: v.optional(v.string()),
+    pendingCommentKeys: v.optional(v.array(v.string())),
     /** when the refresh read its context: rows used since then must not come back queued */
     startedAt: v.optional(v.number()),
   },
-  handler: async (ctx, { elderId, items: ranked, feedbackLine, resonated, readerComments, startedAt }) => {
+  handler: async (ctx, { elderId, items: ranked, feedbackLine, resonated, readerComments, pendingCommentKeys, startedAt }) => {
     const meta = await ctx.db
       .query("questionBankMeta")
       .withIndex("by_elder", (q) => q.eq("elderId", elderId))
@@ -197,6 +205,7 @@ export const replaceQueued = internalMutation({
         feedbackLine: feedbackLine ?? "",
         resonated: resonated ?? "",
         readerComments: readerComments ?? "",
+        pendingCommentKeys: pendingCommentKeys ?? [],
         refreshedAt: Date.now(),
         ...(startedAt !== undefined ? { refreshStartedAt: startedAt } : {}),
       };
@@ -224,6 +233,27 @@ export const listQueued = internalQuery({
 export const markPlanUsed = internalMutation({
   args: { elderId: v.id("elders"), bankId: v.id("questionBank"), callId: v.optional(v.id("calls")) },
   handler: async (ctx, { elderId, bankId, callId }) => markBankRowUsed(ctx, elderId, bankId, callId),
+});
+
+/**
+ * pipeline.processCall, once a story call was a real conversation (before its plan refresh is
+ * scheduled): the reader comments its plan carried were shared, so no call gets them again.
+ */
+export const markCommentsMentioned = internalMutation({
+  args: { callId: v.id("calls") },
+  handler: async (ctx, { callId }) => {
+    const call = await ctx.db.get(callId);
+    const keys = (call?.plan as { commentKeys?: unknown } | undefined)?.commentKeys;
+    if (!call || !Array.isArray(keys) || keys.length === 0) return { marked: 0 };
+    const meta = await ctx.db
+      .query("questionBankMeta")
+      .withIndex("by_elder", (q) => q.eq("elderId", call.elderId))
+      .first();
+    if (!meta) return { marked: 0 };
+    const strKeys = keys.filter((k): k is string => typeof k === "string");
+    await ctx.db.patch(meta._id, { mentionedComments: addMentioned(meta.mentionedComments ?? [], strKeys) });
+    return { marked: strKeys.length };
+  },
 });
 
 /**
@@ -305,12 +335,14 @@ export const refreshQuestionBank = internalAction({
     const recentlyUsed = context.recentlyUsedTopics;
     const avoid = [...memories.filter((m) => m.kind === "avoid").map((m) => m.text), ...(profile?.topicsToAvoid ?? [])];
 
-    const feedbackPosts = await attempt(
+    const allFeedbackPosts = await attempt(
       errors,
       "engagement",
       () => ctx.runQuery(internal.engagement.recentFeedback, { elderId: args.elderId, sinceDays: 14 }),
       [],
     );
+    // Comments a real conversation already shared never come back; only new ones reach a call.
+    const { posts: feedbackPosts, keys: commentKeys } = newComments(allFeedbackPosts, context.mentionedComments);
     const feedback = feedbackPosts.length
       ? await attempt(
           errors,
@@ -397,6 +429,7 @@ export const refreshQuestionBank = internalAction({
       feedbackLine: feedback.line,
       resonated: feedback.resonated,
       readerComments: quotableComments(feedbackPosts.flatMap((p) => p.comments)),
+      pendingCommentKeys: commentKeys,
       items: ranked.map((r) => ({
         question: r.question,
         why: r.why,
@@ -494,7 +527,14 @@ export const planNextCall = internalAction({
     // Worked out by the last refresh (after the previous call / new comments).
     const feedbackLine = context.feedbackLine;
 
-    const plan = buildCallPlan({ kind: "story", bank, memories, feedbackLine, readerComments: context.readerComments });
+    const plan = buildCallPlan({
+      kind: "story",
+      bank,
+      memories,
+      feedbackLine,
+      readerComments: context.readerComments,
+      commentKeys: context.pendingCommentKeys,
+    });
     return { plan, dynamicVariables: templateVariables(toPromptVariables(plan, elder, { avoid: avoidMemories, lang })) };
   },
 });

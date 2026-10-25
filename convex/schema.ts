@@ -442,6 +442,11 @@ export default defineSchema({
     resonated: v.string(), // what readers liked lately ("" when unknown)
     // Readers' exact words (lib/readerSafety.quotableComments), read out only if he asks.
     readerComments: v.optional(v.string()),
+    // lib/readerSafety.commentKey of the comments behind feedbackLine/readerComments (copied
+    // into the next call's plan), and of every comment a real conversation already shared:
+    // shared ones never reach a call again.
+    pendingCommentKeys: v.optional(v.array(v.string())),
+    mentionedComments: v.optional(v.array(v.string())),
     refreshedAt: v.number(), // epoch ms
     refreshStartedAt: v.optional(v.number()), // epoch ms: when the refresh that wrote this began
   }).index("by_elder", ["elderId"]),
