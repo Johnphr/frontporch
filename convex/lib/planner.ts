@@ -249,6 +249,14 @@ export function dropJustUsed<T extends { question: string; topicKey: string }>(
   return items.filter((i) => !keys.has(i.topicKey) && !questions.has(i.question.trim().toLowerCase()));
 }
 
+/**
+ * Refreshes can overlap (one every 30 s for a fresh post). A refresh that began before the one
+ * that last wrote the bank read older replies: replaceQueued drops its write.
+ */
+export function isStaleRefresh(startedAt: number | undefined, lastStartedAt: number | undefined): boolean {
+  return startedAt !== undefined && lastStartedAt !== undefined && startedAt < lastStartedAt;
+}
+
 /** Calls whose plan's bank row may still be marked used (ended = not processed yet). */
 const PLAN_OPEN_STATUSES = new Set(["queued", "in_progress", "ended"]);
 

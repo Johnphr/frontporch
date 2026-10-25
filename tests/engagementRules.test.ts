@@ -3,7 +3,11 @@ import { test } from "node:test";
 import {
   BANK_REFRESH_DELAY_MS,
   BANK_REFRESH_GAP_MS,
+  FAST_POST_WINDOW_MS,
   RECENT_POST_WINDOW_MS,
+  RECENT_REFRESH_GAP_MS,
+  isRecentPost,
+  recentScrapeDays,
   canonicalBlueskyPostUrl,
   canonicalEngagementUrl,
   cleanComments,
@@ -50,61 +54,79 @@ test("engagementChanged: new posts with activity, reaction changes, comment chan
   assert.equal(engagementChanged(two, { reactions: 1, comments: [two.comments[1], two.comments[0]] }), false, "order");
 });
 
-test("planBankRefresh: a minute after a change, at least the gap after the last one, never dropped", () => {
+test("planBankRefresh, older posts: 2 min after a change, 10 min apart, never dropped", () => {
   const now = Date.parse("2026-10-24T12:00:00Z");
   const MIN = 60_000;
-  assert.deepEqual(planBankRefresh(undefined, now), { schedule: true, runAt: now + BANK_REFRESH_DELAY_MS });
-  assert.equal(BANK_REFRESH_DELAY_MS, MIN);
+  assert.equal(BANK_REFRESH_DELAY_MS, 2 * MIN);
+  assert.equal(BANK_REFRESH_GAP_MS, 10 * MIN);
+  assert.deepEqual(planBankRefresh(undefined, now), { schedule: true, runAt: now + 2 * MIN });
   // One is still pending: it hasn't started, so it reads this change too.
   assert.deepEqual(planBankRefresh(now + 30_000, now), { schedule: false });
-  // The last one ran 2 min ago: a trailing one at the end of the gap (the old 10-min debounce dropped it).
-  assert.deepEqual(planBankRefresh(now - 2 * MIN, now), { schedule: true, runAt: now - 2 * MIN + BANK_REFRESH_GAP_MS });
-  // Long ago: just the delay.
-  assert.deepEqual(planBankRefresh(now - 60 * MIN, now), { schedule: true, runAt: now + MIN });
-  // Running right now (started this instant): the next one waits the gap.
-  assert.deepEqual(planBankRefresh(now, now), { schedule: true, runAt: now + BANK_REFRESH_GAP_MS });
+  // The last one ran 3 min ago: a trailing one at the end of the gap (the old debounce dropped it).
+  assert.deepEqual(planBankRefresh(now - 3 * MIN, now), { schedule: true, runAt: now + 7 * MIN });
+  assert.deepEqual(planBankRefresh(now - 60 * MIN, now), { schedule: true, runAt: now + 2 * MIN });
 });
 
-test("planBankRefresh: a reply found by the 5-min cron is in the bank within ~7 minutes", () => {
-  const MIN = 60_000;
-  const posted = Date.parse("2026-10-24T12:00:00Z");
-  // Cron runs every 5 min; a like was found on the previous run and refreshed the bank then.
-  const previousRun = posted + 5 * MIN;
-  const first = planBankRefresh(undefined, previousRun);
-  assert.ok(first.schedule);
-  // The reply comes right after that cron run, so the next run (5 min later) finds it.
-  const reply = previousRun + 1000;
-  const found = previousRun + 5 * MIN;
-  const second = planBankRefresh(first.runAt, found);
-  assert.ok(second.schedule);
-  assert.equal(second.runAt, found + BANK_REFRESH_DELAY_MS, "the gap is shorter than the cron interval: no extra wait");
-  // + about a minute for the refresh itself (feedback summary + question planning).
-  assert.ok(second.runAt + MIN - reply <= 7 * MIN);
-  assert.ok(BANK_REFRESH_GAP_MS < 5 * MIN);
+test("planBankRefresh, posts from the last 48h: right away, at most one start per 30 s, trailing", () => {
+  const now = Date.parse("2026-10-24T12:00:00Z");
+  assert.equal(RECENT_REFRESH_GAP_MS, 30_000);
+  assert.deepEqual(planBankRefresh(undefined, now, true), { schedule: true, runAt: now });
+  assert.deepEqual(planBankRefresh(now - 60_000, now, true), { schedule: true, runAt: now });
+  // Another reply 10 s after a refresh started: a trailing one 30 s after that start.
+  assert.deepEqual(planBankRefresh(now - 10_000, now, true), { schedule: true, runAt: now + 20_000 });
+  // That trailing one is pending: it will read this reply too.
+  assert.deepEqual(planBankRefresh(now + 20_000, now, true), { schedule: false });
+  // A slow refresh (older post) is pending 8 min out: a fresh reply doesn't wait for it.
+  assert.deepEqual(planBankRefresh(now + 8 * 60_000, now, true), { schedule: true, runAt: now });
 });
 
-test("planRecentEngagement: Bluesky + Threads posts from the last 48h, one run per elder and platform, staggered", () => {
+test("a reply on a post from the last 2h reaches the bank in about a minute", () => {
+  const now = Date.parse("2026-10-24T12:00:00Z");
+  // Worst case: the 30-s cron just ran, and a refresh just started.
+  const reply = now;
+  const found = reply + 30_000;
+  const plan = planBankRefresh(found - 1000, found, true);
+  assert.ok(plan.schedule);
+  assert.ok(plan.runAt - reply <= 60_000, `refresh starts ${(plan.runAt - reply) / 1000}s after the reply`);
+});
+
+test("isRecentPost: posts rows from the last 48h", () => {
+  const now = Date.parse("2026-10-24T12:00:00Z");
+  assert.equal(isRecentPost({ _creationTime: now - 3_600_000 }, now), true);
+  assert.equal(isRecentPost({ _creationTime: now - RECENT_POST_WINDOW_MS - 1 }, now), false);
+  assert.equal(isRecentPost(null, now), false);
+  assert.equal(isRecentPost(undefined, now), false);
+});
+
+test("planRecentEngagement: Bluesky + Threads only, one run per elder and platform, staggered, by tier", () => {
   const now = Date.parse("2026-10-24T12:00:00Z");
   const H = 3_600_000;
   const pubs = [
-    { elderId: "a", platform: "bluesky", status: "posted", postedAt: now - 1 * H },
-    { elderId: "a", platform: "bluesky", status: "posted", postedAt: now - 2 * H }, // same elder: one run
-    { elderId: "a", platform: "threads", status: "posted", postedAt: now - 3 * H },
+    { elderId: "a", platform: "bluesky", status: "posted", postedAt: now - 0.5 * H },
+    { elderId: "a", platform: "bluesky", status: "posted", postedAt: now - 1 * H }, // same elder: one run
+    { elderId: "a", platform: "threads", status: "posted", postedAt: now - 1.5 * H },
     { elderId: "b", platform: "x", status: "posted", postedAt: now - 1 * H }, // never X (reads cost money)
     { elderId: "c", platform: "linkedin", status: "posted", postedAt: now - 1 * H },
     { elderId: "d", platform: "bluesky", status: "posted", postedAt: now - 1 * H, removedAt: now }, // taken down
     { elderId: "e", platform: "bluesky", status: "removed", postedAt: now - 1 * H },
-    { elderId: "f", platform: "bluesky", status: "posted", postedAt: now - 49 * H }, // too old: daily job
+    { elderId: "f", platform: "bluesky", status: "posted", postedAt: now - 49 * H }, // daily job only
     { elderId: "g", platform: "bluesky", status: "posted" }, // no postedAt
     { elderId: "h", platform: "bluesky", status: "posted", postedAt: now - 47 * H },
+    { elderId: "i", platform: "threads", status: "posted", postedAt: now - 2.5 * H },
   ];
-  assert.deepEqual(planRecentEngagement(pubs, now, 10_000), [
+  assert.deepEqual(planRecentEngagement(pubs, now, 1000, "fast"), [
     { kind: "bluesky", elderId: "a", delayMs: 0 },
-    { kind: "threads", elderId: "a", delayMs: 10_000 },
-    { kind: "bluesky", elderId: "h", delayMs: 20_000 },
+    { kind: "threads", elderId: "a", delayMs: 1000 },
   ]);
-  assert.deepEqual(planRecentEngagement([], now, 10_000), []);
+  assert.deepEqual(planRecentEngagement(pubs, now, 5000, "slow"), [
+    { kind: "bluesky", elderId: "h", delayMs: 0 },
+    { kind: "threads", elderId: "i", delayMs: 5000 },
+  ]);
+  assert.deepEqual(planRecentEngagement([], now, 1000, "fast"), []);
+  assert.equal(FAST_POST_WINDOW_MS, 2 * H);
   assert.equal(RECENT_POST_WINDOW_MS, 48 * H);
+  assert.equal(recentScrapeDays("fast") * 24, 2, "fast reads only the last 2h of threads");
+  assert.equal(recentScrapeDays("slow"), 2);
 });
 
 test("engagement and posts rows meet on the canonical URL", () => {

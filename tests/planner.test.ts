@@ -14,6 +14,7 @@ import {
   formatMemoriesBrief,
   formatProfile,
   freshReaderSince,
+  isStaleRefresh,
   normalizePlannedCandidates,
   normalizePostDraft,
   normalizeTopicKey,
@@ -412,4 +413,12 @@ test("replaceQueued's rule: a kept row isn't inserted again", () => {
   ];
   const kept = [{ question: "How did you price bread?", topicKey: "bread price" }];
   assert.deepEqual(dropJustUsed(ranked, kept), [ranked[1]]);
+});
+
+test("isStaleRefresh: an overlapping refresh that began earlier doesn't overwrite a newer one", () => {
+  assert.equal(isStaleRefresh(NOW - 30_000, NOW), true);
+  assert.equal(isStaleRefresh(NOW, NOW - 30_000), false);
+  assert.equal(isStaleRefresh(NOW, NOW), false);
+  assert.equal(isStaleRefresh(undefined, NOW), false, "no start time: always writes");
+  assert.equal(isStaleRefresh(NOW, undefined), false, "first refresh");
 });

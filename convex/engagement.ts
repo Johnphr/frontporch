@@ -6,9 +6,9 @@
 //                   apify.scrapeEngagement (LinkedIn): keeps the latest snapshot, links it to
 //                   our posts row (the postId passed in; LinkedIn: by canonical URL), and when
 //                   something changed schedules conversation.refreshQuestionBank
-//                   (lib/engagementRules.planBankRefresh: 1 minute later so the scrape run
-//                   lands first; refreshes at least 4 minutes apart, and a change during
-//                   that gap gets a trailing refresh, never dropped)
+//                   (lib/engagementRules.planBankRefresh: a post from the last 48h right
+//                   away, at most one start per 30 s per elder; older posts 2 min later,
+//                   10 min apart. A change during the gap gets a trailing refresh, never dropped)
 //   markGone        the post was deleted on its platform (he deleted the thread himself):
 //                   sets goneAt so recentFeedback stops using it
 //   recentFeedback  posts whose reactions/comments changed recently, for the planner
@@ -22,6 +22,7 @@ import { internalMutation, internalQuery } from "./_generated/server";
 import {
   canonicalEngagementUrl,
   cleanComments,
+  isRecentPost,
   feedbackVisible,
   feedbackWindowStart,
   nextSnapshot,
@@ -111,7 +112,7 @@ export const upsert = internalMutation({
     let refreshScheduled = false;
     if (changed) {
       const elder = await ctx.db.get(args.elderId);
-      const plan = elder ? planBankRefresh(elder.lastBankRefreshAt, now) : { schedule: false as const };
+      const plan = elder ? planBankRefresh(elder.lastBankRefreshAt, now, isRecentPost(post, now)) : { schedule: false as const };
       if (plan.schedule) {
         try {
           await ctx.scheduler.runAt(plan.runAt, refreshQuestionBank, { elderId: args.elderId });
