@@ -2,7 +2,7 @@
 // one Finish button (finish.js). With no phone yet (email sign-in) the phone editor starts open and
 // Finish needs a valid number.
 import { useEffect, useRef, useState } from 'react'
-import { HOSTS, dayName, errorText, formatHour, hostForLanguage } from '../../copy'
+import { HOSTS, dayName, errorText, formatHour } from '../../copy'
 import { SETUP, zoneName } from '../../copy/setup'
 import { showPhone } from '../../copy/signin'
 import { COUNTRIES, digitsOf, formatNational, splitE164, toE164 } from '../../phone'
@@ -52,7 +52,7 @@ export default function Review({ data, set, words, headingRef, signedInPhone, on
     focusAfter.current = null
   }, [editing])
 
-  const hostId = hostForLanguage(data.language)
+  const hostId = data.host
   const day = dayName(data.callDay)
   const time = formatHour(data.callHour)
   const linkedinUrl = data.liStatus === 'url' ? `https://${data.linkedin.trim().replace(/^https?:\/\//i, '')}` : ''

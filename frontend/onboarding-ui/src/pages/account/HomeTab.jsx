@@ -1,93 +1,17 @@
-// Home tab: greeting, who calls him (Pip or Juanito), and the weekly call day and time.
+// Home tab: greeting, who calls him (his host), and the weekly call day and time.
 import { useState } from 'react'
-import { accountApi, signupApi } from '../../api'
-import { HostAvatar } from '../../art/hosts'
-import { DAYS, HOSTS, TIME_PRESETS, browserTimezone, dayName, errorText, formatHour } from '../../copy'
+import { CallUsLine } from '../../ui/CallUsLine'
+import { accountApi } from '../../api'
+import { DAYS, HOSTS, TIME_PRESETS, browserTimezone, dayName, errorText, formatHour, hostForLanguage } from '../../copy'
 import { HOME } from '../../copy/account'
-import { Button, Card, ErrorText, PillChoices, Toast, cx } from '../../ui/controls'
+import { Button, Card, ErrorText, PillChoices, Toast } from '../../ui/controls'
+import HostCard from './HostCard'
 
 const H2 = 'text-subhead'
 const DAY_OPTIONS = DAYS.map((d) => ({ value: d.id, label: d.short, aria: d.name }))
 
-const hostName = (id) => (HOSTS[id] || HOSTS.pip).name
-
-/** Host cards + an in-page "Switch to …?" confirm before saving. */
-function HostCard({ elderId, current, onSaved }) {
-  const [picked, setPicked] = useState(current)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const changing = picked !== current
-
-  const pick = (id) => {
-    setPicked(id)
-    setError('')
-  }
-
-  async function save() {
-    setBusy(true)
-    setError('')
-    try {
-      await signupApi.setCharacter(elderId, picked)
-      onSaved(picked)
-    } catch (e) {
-      console.error('setCharacter failed', e)
-      setError(errorText(e)) // keep their choice so they can try again
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <Card aria-labelledby="host-title">
-      <h2 id="host-title" className={H2}>
-        {HOME.hostTitle}
-      </h2>
-      <fieldset className="w-full min-w-0">
-        <legend className="sr-only">{HOME.chooseHost}</legend>
-        <div className="grid gap-4 sm:grid-cols-2">
-          {Object.entries(HOSTS).map(([id, host]) => (
-            <label
-              key={id}
-              className={cx(
-                'flex cursor-pointer flex-col items-center gap-2 rounded-card border-[3px] px-5 py-7 text-center transition-colors has-[:focus-visible]:outline has-[:focus-visible]:outline-4 has-[:focus-visible]:outline-offset-4 has-[:focus-visible]:outline-ink',
-                picked === id ? 'border-rose bg-blush' : 'border-line bg-white hover:border-pink',
-              )}
-            >
-              <input type="radio" name="host" value={id} checked={picked === id} onChange={() => pick(id)} className="sr-only" />
-              <HostAvatar id={id} />
-              <span className="font-display text-[1.875rem] leading-tight">{host.name}</span>
-              <span>{HOME.callsIn(host.languageName)}</span>
-              {current === id && (
-                <span className="tag self-center">
-                  {HOME.currentHost}
-                </span>
-              )}
-            </label>
-          ))}
-        </div>
-      </fieldset>
-      {/* Live region stays mounted (sr-only when empty, so no extra gap) so the question is read out. */}
-      <div aria-live="polite" className={changing ? 'w-full' : 'sr-only'}>
-        {changing && (
-          <div className="flex w-full flex-col gap-4 rounded-inset border-2 border-pink bg-blush p-6">
-            <p className="font-display text-lg font-semibold leading-snug">
-              {HOME.switchTo(hostName(picked), HOSTS[picked]?.languageName)}
-            </p>
-            <ErrorText>{error}</ErrorText>
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-4">
-              <Button small busy={busy} busyLabel={HOME.saving} onClick={save}>
-                {HOME.save}
-              </Button>
-              <Button small variant="secondary" disabled={busy} onClick={() => pick(current)}>
-                {HOME.cancel}
-              </Button>
-            </div>
-          </div>
-        )}
-      </div>
-    </Card>
-  )
-}
+/** A known host id: old or unknown ids fall back to the language's default (Daniel if no language). */
+const knownHost = (profile) => (HOSTS[profile.characterId] ? profile.characterId : hostForLanguage(profile.language))
 
 /** Day and time pills, a live summary, and Save. */
 function ScheduleCard({ elderId, profile, host, onSaved }) {
@@ -140,7 +64,8 @@ function ScheduleCard({ elderId, profile, host, onSaved }) {
 export default function HomeTab({ elderId, profile, onChange }) {
   const [toast, setToast] = useState(null)
   const say = (text) => setToast({ text, id: Date.now() })
-  const host = hostName(profile.characterId)
+  const hostId = knownHost(profile)
+  const host = HOSTS[hostId].name
   const scheduled = profile.callDay && profile.callHour != null
 
   return (
@@ -150,13 +75,14 @@ export default function HomeTab({ elderId, profile, onChange }) {
         <p className="max-w-[40rem] text-lg">
           {scheduled ? HOME.callsEvery(host, dayName(profile.callDay), formatHour(profile.callHour)) : HOME.noSchedule(host)}
         </p>
+        <CallUsLine host={host} />
       </div>
       <HostCard
         elderId={elderId}
-        current={profile.characterId}
+        current={hostId}
         onSaved={(characterId) => {
           onChange({ characterId })
-          say(HOME.hostSaved(hostName(characterId)))
+          say(HOME.hostSaved(HOSTS[characterId].name))
         }}
       />
       <ScheduleCard

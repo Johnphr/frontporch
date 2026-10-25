@@ -105,9 +105,9 @@ export function Readers() {
           </h2>
           <p className={P}>{READERS.lead}</p>
           <p className={cx(P, 'border-l-4 border-pink pl-6 font-display text-quote italic')}>
-            {READERS.pipLine}
+            {READERS.hostLine}
           </p>
-          <p className="text-sm font-bold">{READERS.pipSaid}</p>
+          <p className="text-sm font-bold">{READERS.hostSaid}</p>
         </div>
         <Art first>
           <ReadersArt />

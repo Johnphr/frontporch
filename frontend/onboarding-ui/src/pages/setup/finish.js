@@ -22,7 +22,7 @@ export async function placeCall(elderId) {
   }
 }
 
-/** -> { elderId, callId? , reason? } */
+/** hostId is the host they picked on step 3 (data.host). -> { elderId, callId? , reason? } */
 export async function finishSetup({ name, phone, language, hostId, callDay, callHour, linkedinUrl }) {
   const elderId = await signupApi.register(name.trim(), phone, language)
   await signupApi.setCharacter(elderId, hostId)

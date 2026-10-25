@@ -181,31 +181,6 @@ export const LanguageArt = ({ className }) => (
   </Svg>
 )
 
-/** Step 3 host card: Pip (rose, sound-wave smile) and Juanito (sage, bow tie). */
-export const PipHost = ({ className }) => (
-  <Svg viewBox="0 0 120 120" className={className}>
-    <ellipse cx="60" cy="112" rx="34" ry="5" fill="#3A2A2E" opacity="0.1" />
-    <circle cx="60" cy="58" r="46" fill="#A8475E" />
-    <circle cx="60" cy="64" r="34" fill="#F7D6DE" />
-    <circle cx="48" cy="58" r="4" fill="#3A2A2E" /><circle cx="72" cy="58" r="4" fill="#3A2A2E" />
-    <path d="M42 76 q4.5 -6 9 0 t9 0 t9 0 t9 0" fill="none" stroke="#A8475E" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
-    <path className={WAVE} d="M110 46 Q117 58 110 70" fill="none" stroke="#A8475E" strokeWidth="4" strokeLinecap="round" />
-  </Svg>
-)
-
-export const JuanitoHost = ({ className }) => (
-  <Svg viewBox="0 0 120 120" className={className}>
-    <ellipse cx="60" cy="114" rx="34" ry="5" fill="#3A2A2E" opacity="0.1" />
-    <circle cx="60" cy="56" r="44" fill="#8FAE9B" />
-    <circle cx="60" cy="60" r="32" fill="#E6EEE9" />
-    <circle cx="49" cy="56" r="4" fill="#3A2A2E" /><circle cx="71" cy="56" r="4" fill="#3A2A2E" />
-    <path d="M50 70 Q60 78 70 70" fill="none" stroke="#3A2A2E" strokeWidth="3.5" strokeLinecap="round" />
-    <path d="M60 102 L43 93 L43 111 Z" fill="#A8475E" />
-    <path d="M60 102 L77 93 L77 111 Z" fill="#A8475E" />
-    <circle cx="60" cy="102" r="5" fill="#5B474C" />
-  </Svg>
-)
-
 /** Step 4: a calendar and a clock. */
 export const CalendarArt = ({ className }) => (
   <Svg viewBox="0 0 320 200" className={className}>

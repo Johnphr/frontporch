@@ -3,7 +3,7 @@
 // "Change" on Review opens that step, and its button then goes straight back to Review.
 // The phone comes from sign-in (session); after an email sign-in Review asks for it.
 import { useEffect, useRef, useState } from 'react'
-import { HOSTS, hostForLanguage } from '../../copy'
+import { HOSTS } from '../../copy'
 import { SETUP, TOTAL_STEPS, setupCopy } from '../../copy/setup'
 import { go } from '../../lib/route'
 import { loadSession } from '../../lib/session'
@@ -12,7 +12,8 @@ import { Header } from '../../ui/Header'
 import { Button } from '../../ui/controls'
 import Done from './Done'
 import Review from './Review'
-import { LanguageStep, LinkedinStep, NameStep, WhenStep, WhoStep } from './steps'
+import { LanguageStep } from './LanguageStep'
+import { LinkedinStep, NameStep, WhenStep, WhoStep } from './steps'
 
 const STEPS = { 1: WhoStep, 2: NameStep, 3: LanguageStep, 4: WhenStep, 5: LinkedinStep }
 
@@ -22,6 +23,7 @@ export default function Onboarding() {
     who: null, // 'self' | 'helper'
     name: '',
     language: 'en',
+    host: 'daniel', // host id (copy.js HOSTS); the language's default until they pick one
     callDay: 'tuesday',
     callHour: 11,
     linkedin: '', // as typed
@@ -43,8 +45,8 @@ export default function Onboarding() {
   }, [step])
 
   const set = (patch) => setData((d) => ({ ...d, ...patch }))
-  const host = HOSTS[hostForLanguage(data.language)].name
-  const words = setupCopy({ them: data.who === 'helper', name: data.name, host })
+  const host = HOSTS[data.host].name
+  const words = setupCopy({ them: data.who === 'helper', name: data.name, host, hostId: data.host })
 
   function next() {
     setToReview(false)
@@ -102,6 +104,7 @@ export default function Onboarding() {
           {step === 7 && result && (
             <Done
               words={words}
+              host={host}
               headingRef={heading}
               elderId={result.elderId}
               phone={result.phone}

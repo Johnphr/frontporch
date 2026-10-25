@@ -20,22 +20,22 @@ test("characters: unique lowercase ids, one language each, a voice env var and a
 });
 
 test("characterFor: his choice, else the default for his language", () => {
-  assert.equal(characterFor(undefined, "en").id, "pip");
-  assert.equal(characterFor(undefined, "es").id, "juanito");
-  assert.equal(characterFor("nobody", "es").id, "juanito"); // unknown id falls back
-  assert.equal(characterFor("juanito", "en").id, "juanito"); // a chosen character wins
-  assert.equal(characterFor("pip", "en").language, "en");
-  assert.equal(characterFor("juanito", "es").language, "es");
+  assert.equal(characterFor(undefined, "en").id, "daniel");
+  assert.equal(characterFor(undefined, "es").id, "diana");
+  assert.equal(characterFor("nobody", "es").id, "diana"); // unknown id falls back
+  assert.equal(characterFor("diana", "en").id, "diana"); // a chosen character wins
+  assert.equal(characterFor("oscar", "en").language, "en");
+  assert.equal(characterFor("diana", "es").language, "es");
   assert.equal(getCharacter(undefined), undefined);
 });
 
 test("callCharacter: picks the agent from elders.characterId + elders.language", () => {
-  assert.equal(callCharacter({}).id, "pip");
-  assert.equal(callCharacter({ language: "es-MX" }).id, "juanito");
-  assert.equal(callCharacter({ language: "en-US", characterId: "juanito" }).id, "juanito");
+  assert.equal(callCharacter({}).id, "daniel");
+  assert.equal(callCharacter({ language: "es-MX" }).id, "diana");
+  assert.equal(callCharacter({ language: "en-US", characterId: "diana" }).id, "diana");
   // the call runs in the character's language, not his elders.language
-  assert.equal(callCharacter({ language: "es", characterId: "pip" }).language, "en");
-  assert.equal(callCharacter({ language: "es", characterId: "gone" }).id, "juanito");
+  assert.equal(callCharacter({ language: "es", characterId: "victoria" }).language, "en");
+  assert.equal(callCharacter({ language: "es", characterId: "gone" }).id, "diana");
 });
 
 test("publicCharacters: no voice or prompt details for the UI", () => {
