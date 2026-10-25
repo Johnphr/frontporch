@@ -1,7 +1,9 @@
-// How readers reacted to his LinkedIn posts.
+// How readers reacted to his posts (Bluesky threads; LinkedIn when LINKEDIN_POSTING=on).
 //
-//   upsert          called by apify.scrapeEngagement once per post: keeps the latest
-//                   snapshot, links it to our posts row by canonical URL, and when
+//   upsert          called once per post by blueskyEngagement.scrapeForElder (Bluesky:
+//                   likes + reposts, replies by others) and apify.scrapeEngagement
+//                   (LinkedIn): keeps the latest snapshot, links it to our posts row
+//                   (Bluesky: the postId passed in; LinkedIn: by canonical URL), and when
 //                   something changed schedules conversation.refreshQuestionBank
 //                   (debounced: at most once per elder every 10 minutes, 2 minutes
 //                   after the first change so the whole scrape run lands first)
@@ -15,9 +17,11 @@ import type { Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery } from "./_generated/server";
 import {
   BANK_REFRESH_DELAY_MS,
+  canonicalBlueskyPostUrl,
   cleanComments,
   feedbackWindowStart,
   nextSnapshot,
+  platformOf,
   shouldRefreshBank,
 } from "./lib/engagementRules";
 import { canonicalLinkedInPostUrl } from "./lib/linkedinUrl";
@@ -27,11 +31,16 @@ import { canonicalLinkedInPostUrl } from "./lib/linkedinUrl";
 const refreshQuestionBank = makeFunctionReference<"action">("conversation:refreshQuestionBank");
 
 const commentValidator = v.object({ author: v.string(), text: v.string() });
+const platformValidator = v.union(v.literal("linkedin"), v.literal("bluesky"));
 
 export const upsert = internalMutation({
   args: {
     elderId: v.id("elders"),
+    // The post's link on its platform (name predates Bluesky). Missing platform = linkedin.
     linkedinUrl: v.string(),
+    platform: v.optional(platformValidator),
+    // Bluesky: our posts row, from postPublications (Bluesky links never match posts.linkedinUrl).
+    postId: v.optional(v.id("posts")),
     reactions: v.number(),
     comments: v.array(commentValidator),
     // false when the source only had counts (apify's backup Actor): keep stored comments.
@@ -41,7 +50,10 @@ export const upsert = internalMutation({
     ctx,
     args,
   ): Promise<{ engagementId: Id<"engagement">; changed: boolean; refreshScheduled: boolean }> => {
-    const linkedinUrl = canonicalLinkedInPostUrl(args.linkedinUrl);
+    const platform = args.platform ?? "linkedin";
+    // LinkedIn canonicalization only for LinkedIn: it would rewrite other links' hosts.
+    const linkedinUrl =
+      platform === "bluesky" ? canonicalBlueskyPostUrl(args.linkedinUrl) : canonicalLinkedInPostUrl(args.linkedinUrl);
     if (!linkedinUrl) throw new Error("engagement.upsert: empty linkedinUrl");
     const now = Date.now();
     const reactions = Number.isFinite(args.reactions) ? Math.max(0, args.reactions) : 0;
@@ -52,14 +64,16 @@ export const upsert = internalMutation({
         .query("engagement")
         .withIndex("by_url", (q) => q.eq("linkedinUrl", linkedinUrl))
         .collect()
-    ).find((row) => row.elderId === args.elderId);
+    ).find((row) => row.elderId === args.elderId && platformOf(row) === platform);
 
-    const post = (
-      await ctx.db
-        .query("posts")
-        .withIndex("by_url", (q) => q.eq("linkedinUrl", linkedinUrl))
-        .collect()
-    ).find((row) => row.elderId === args.elderId);
+    const post = args.postId
+      ? await ctx.db.get(args.postId).then((row) => (row?.elderId === args.elderId ? row : null))
+      : (
+          await ctx.db
+            .query("posts")
+            .withIndex("by_url", (q) => q.eq("linkedinUrl", linkedinUrl))
+            .collect()
+        ).find((row) => row.elderId === args.elderId);
 
     const { comments, changed } = nextSnapshot(
       existing ?? null,
@@ -81,6 +95,7 @@ export const upsert = internalMutation({
       engagementId = await ctx.db.insert("engagement", {
         elderId: args.elderId,
         ...(post ? { postId: post._id } : {}),
+        ...(platform === "bluesky" ? { platform } : {}),
         linkedinUrl,
         reactions,
         comments,
@@ -109,7 +124,9 @@ export const upsert = internalMutation({
 });
 
 export type Feedback = {
+  /** the post's link on its platform */
   linkedinUrl: string;
+  platform: "linkedin" | "bluesky";
   postText?: string;
   reactions: number;
   comments: { author: string; text: string }[];
@@ -128,11 +145,13 @@ export const recentFeedback = internalQuery({
       .withIndex("by_elder_changed", (q) => q.eq("elderId", args.elderId).gte("changedAt", since))
       .order("desc")
       .take(50);
-    return await Promise.all(
-      rows.map(async (row): Promise<Feedback> => {
+    const out = await Promise.all(
+      rows.map(async (row): Promise<Feedback | null> => {
         const post = row.postId ? await ctx.db.get(row.postId) : null;
+        if (post?.removedAt !== undefined) return null; // taken down: don't bring it up on a call
         return {
           linkedinUrl: row.linkedinUrl,
+          platform: platformOf(row),
           ...(post?.text ? { postText: post.text } : {}),
           reactions: row.reactions,
           comments: row.comments,
@@ -141,5 +160,6 @@ export const recentFeedback = internalQuery({
         };
       }),
     );
+    return out.filter((f): f is Feedback => f !== null);
   },
 });

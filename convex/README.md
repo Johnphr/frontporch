@@ -227,7 +227,7 @@ with a plain equality check.
 
 | Function | Run it | What it does |
 |---|---|---|
-| `apify.scrapeEngagement({ elderId, linkedinUrl?, maxPosts? })` | daily | his recent posts' reaction counts + reader comments → `engagement:upsert` |
+| `apify.scrapeEngagement({ elderId, linkedinUrl?, maxPosts? })` | daily, only with `LINKEDIN_POSTING=on` (otherwise returns `skipped`) | his recent LinkedIn posts' reaction counts + reader comments → `engagement:upsert` |
 | `apify.scrapeProfile({ elderId, linkedinUrl? })` | once, before onboarding | returns `{ knownBackground }` (work history as plain text) |
 | `apify.findAudienceQuestions({ elderId, keywords?, sources? })` | weekly | real questions people in his field ask → `audienceQuestions` |
 | `apify.topAudienceQuestions({ elderId, limit? })` | from the planner | best unused questions, highest priority first |
@@ -359,12 +359,14 @@ clear error without it).
 | `memories.addMany({ elderId, callId?, items, resolveThreadIds? })` | `pipeline.processCall` | embed + store what he said; merges near-duplicates, resolves finished open threads |
 | `memories.search({ elderId, text, k, kinds? })` | `conversation.planNextCall` | memories closest to a text (e.g. the next question) |
 | `memories.listForElder({ elderId, kinds?, status?, limit? })` | planner | e.g. all active open threads |
-| `engagement.upsert(...)` | `apify.scrapeEngagement` | latest reactions + comments per post; schedules a question-bank refresh when something changed |
+| `blueskyEngagement.scrapeForElder({ elderId })` | `schedule.dailyEngagement` | his Bluesky threads from the last 30 days: likes + reposts on his posts, replies by others → `engagement:upsert` (public AppView, no login). Returns `{ threads, upserted, likes, reposts, replies, gone, errors }` |
+| `engagement.upsert(...)` | `blueskyEngagement.scrapeForElder`, `apify.scrapeEngagement` | latest reactions + comments per post per platform (`platform`, default linkedin); schedules a question-bank refresh when something changed |
 | `engagement.recentFeedback({ elderId, sinceDays? })` | planner | posts with reactions + comments, newest first |
 | `schedule.tick` | hourly cron | `conversation.prepareCall` ~1h before his call, `cartesia.startCall` at the call hour |
 
 Crons (`crons.ts`, UTC): hourly `schedule.tick`; daily 13:15 `schedule.dailyEngagement`
-(→ `apify.scrapeEngagement` per active elder with a `linkedinUrl`); weekly Monday 14:30
+(→ `blueskyEngagement.scrapeForElder` per active elder, and `apify.scrapeEngagement` per
+active elder with a `linkedinUrl` only when `LINKEDIN_POSTING=on`); weekly Monday 14:30
 `schedule.weeklyAudienceQuestions` (→ `apify.findAudienceQuestions`). `tick` only acts
 on elders with `stage`, `timezone`, `callDay` and `callHour` set, and skips a target
 that isn't deployed yet (that slot is NOT retried: start that week's call by hand).

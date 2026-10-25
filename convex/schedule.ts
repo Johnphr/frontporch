@@ -3,8 +3,9 @@
 //   tick                      hourly: for each elder whose weekly call is about an hour
 //                             away -> conversation.prepareCall; whose call hour has
 //                             started -> cartesia.startCall. Each call slot is handled once.
-//   dailyEngagement           daily: apify.scrapeEngagement for every active elder
-//                             with a linkedinUrl (staggered)
+//   dailyEngagement           daily: blueskyEngagement.scrapeForElder for every active
+//                             elder; apify.scrapeEngagement (LinkedIn) too for those with a
+//                             linkedinUrl, only when LINKEDIN_POSTING=on (staggered)
 //   weeklyAudienceQuestions   weekly: apify.findAudienceQuestions for every active elder
 //
 // Time math (timezones, DST) lives in lib/schedule.ts.
@@ -16,6 +17,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation } from "./_generated/server";
 import { loopCovers, type LoopEnv } from "./lib/callLoop";
+import { linkedinEngagementOn, planDailyEngagement } from "./lib/engagementRules";
 import { PREPARE_CALL_FN, START_CALL_FN, dueActions } from "./lib/schedule";
 
 // Convex exposes env vars on process.env (declared so we don't need @types/node).
@@ -26,7 +28,7 @@ declare const process: { env: Record<string, string | undefined> };
 const prepareCall = makeFunctionReference<"action">(PREPARE_CALL_FN);
 const startCall = makeFunctionReference<"action">(START_CALL_FN);
 
-/** Space out Apify runs so they don't all start at once. */
+/** Space out scrape runs (Apify, Bluesky) so they don't all start at once. */
 const STAGGER_MS = 30 * 1000;
 
 type TickResult = {
@@ -92,17 +94,18 @@ export const tick = internalAction({
 
 export const dailyEngagement = internalMutation({
   args: {},
-  handler: async (ctx): Promise<{ scheduled: number }> => {
+  handler: async (ctx): Promise<{ scheduled: number; bluesky: number; linkedin: number }> => {
     const elders = await ctx.db.query("elders").collect();
-    let scheduled = 0;
-    for (const elder of elders) {
-      if (elder.stage !== "active" || !elder.linkedinUrl) continue;
-      await ctx.scheduler.runAfter(scheduled * STAGGER_MS, internal.apify.scrapeEngagement, {
-        elderId: elder._id,
-      });
-      scheduled += 1;
+    const jobs = planDailyEngagement(elders, linkedinEngagementOn(process.env), STAGGER_MS);
+    for (const job of jobs) {
+      if (job.kind === "bluesky") {
+        await ctx.scheduler.runAfter(job.delayMs, internal.blueskyEngagement.scrapeForElder, { elderId: job.elderId });
+      } else {
+        await ctx.scheduler.runAfter(job.delayMs, internal.apify.scrapeEngagement, { elderId: job.elderId });
+      }
     }
-    return { scheduled };
+    const bluesky = jobs.filter((j) => j.kind === "bluesky").length;
+    return { scheduled: jobs.length, bluesky, linkedin: jobs.length - bluesky };
   },
 });
 

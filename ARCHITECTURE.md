@@ -139,9 +139,21 @@ and his profile/memories → fail: `needs_review`, nothing posted → pass: Link
 `st.createPost` → poll → canonical post URL (`lib/linkedinUrl.ts`) saved.
 
 ### ④ Feedback loop (slice 3)
-Daily cron → `apify.scrapeEngagement` → `engagement.upsert`. The next `planNextCall` reads
-`engagement.recentFeedback`; `llm.summarizeFeedback` turns it into "what resonated" + reader
-questions worth asking him.
+Daily cron → `schedule.dailyEngagement` → `blueskyEngagement.scrapeForElder` per active elder
+(staggered 30 s). For each Bluesky thread he posted in the last 30 days (`postPublications`
+rows that are `posted` and not removed), one `app.bsky.feed.getPostThread` (depth 6) on the
+public AppView, no login; only if that fails (not "deleted") it retries through his PDS with his
+session. From the thread (`lib/blueskyEngagement.ts`): likes + reposts summed over HIS posts →
+`reactions`; replies by OTHER accounts (author did ≠ the root uri's repo; blocked, deleted and
+not-found posts skipped; max 20, 500 chars each) → `comments` as `{ author: "Name (@handle)", text }`.
+Each thread → `engagement.upsert` with `platform: "bluesky"` and its `postId`; one failing
+thread doesn't stop the others. LinkedIn (`apify.scrapeEngagement`, Apify) runs too only when
+`LINKEDIN_POSTING=on`.
+
+When a row's numbers or replies changed, `upsert` schedules `conversation.refreshQuestionBank`
+(debounced). It reads `engagement.recentFeedback` (both platforms; posts taken down are left
+out); `llm.summarizeFeedback` turns replies into "what resonated" + reader questions for the
+bank + the one line Pip reads him ("A reader asked how you priced bread back then...").
 
 **Audience questions:** weekly `apify.findAudienceQuestions` searches Reddit, Stack Exchange,
 Bluesky (with his login) and (once enabled) Quora and Discourse for real questions people in his field ask, filters,
@@ -205,7 +217,7 @@ type Turn = { role: "pip" | "elder"; text: string };   // calls.transcript, afte
 `cartesiaAgents.syncAgent` · `cartesia.startCall` · `cartesia.pollCall` · `conversation.planNextCall` ·
 `pipeline.processCall` · `llm.extractProfile` · `llm.writePost` · `llm.extractMemories` ·
 `llm.summarizeFeedback` · `llm.planQuestions` · `memories.addMany` · `memories.search` ·
-`engagement.upsert` · `engagement.recentFeedback` · `apify.scrapeEngagement` ·
+`engagement.upsert` · `engagement.recentFeedback` · `blueskyEngagement.scrapeForElder` · `apify.scrapeEngagement` ·
 `apify.scrapeProfile` · `apify.findAudienceQuestions` · `apify.topAudienceQuestions` ·
 `linkedapi.createPost`
 
@@ -252,7 +264,9 @@ memories: elderId, callId?, kind, text, name?, status (active | resolved),
            "this elder AND these kinds"); indexes by_elder_kind, by_elder_status,
            by_elder_last, by_call
 
-engagement: elderId, postId?, linkedinUrl (canonical, lib/linkedinUrl.ts), reactions,
+engagement: elderId, postId?, platform? (linkedin | bluesky; missing = linkedin),
+            linkedinUrl (the post's link on its platform: LinkedIn canonical via
+            lib/linkedinUrl.ts; Bluesky the thread's bsky.app link), reactions,
             comments [{ author, text }], scrapedAt, changedAt?
             indexes by_elder, by_url, by_elder_scraped, by_elder_changed
 
@@ -279,18 +293,20 @@ resolved. A repeat run for a `callId` that already has memories is skipped
 `listForElder({ elderId, kinds?, status?, limit? })` (newest first, no embeddings).
 `resolveThreads({ elderId, ids })`. Prompt text: `formatMemoriesForPrompt` in `lib/memoryText.ts`.
 
-**Engagement** (`engagement.ts`): `upsert` (from `apify.scrapeEngagement`) keeps the
-latest snapshot, links `postId` by canonical URL, and when reactions/comments changed
+**Engagement** (`engagement.ts`): `upsert` (from `blueskyEngagement.scrapeForElder` and
+`apify.scrapeEngagement`) keeps the latest snapshot per post per platform, links `postId`
+(Bluesky: passed in from `postPublications`; LinkedIn: by canonical URL), and when reactions/comments changed
 sets `changedAt` and schedules `conversation.refreshQuestionBank` (2 min later, at most
 once per elder per 10 min). `commentsKnown: false` (counts-only backup Actor) keeps the
 stored comments. `recentFeedback({ elderId, sinceDays? })` →
-`{ linkedinUrl, postText?, reactions, comments, scrapedAt, changedAt }[]`, posts whose
+`{ linkedinUrl, platform, postText?, reactions, comments, scrapedAt, changedAt }[]`, posts whose
 reactions/comments changed in the window, most recently changed first.
 
 **Scheduling** (`schedule.ts` + `crons.ts`): hourly `schedule.tick` →
 `conversation.prepareCall` about 1 hour before his local call time and
 `cartesia.startCall` at the call hour (each local slot once, DST-safe, `lib/schedule.ts`);
-daily `apify.scrapeEngagement` and weekly `apify.findAudienceQuestions` for active elders.
+daily `blueskyEngagement.scrapeForElder` (+ `apify.scrapeEngagement` when `LINKEDIN_POSTING=on`)
+and weekly `apify.findAudienceQuestions` for active elders.
 
 **v1 leftovers in `convex/`** (done): `questions.ts`, `answers.ts`, `replies.ts`, `calls.ts` and
 `lib/auth.ts` are deleted; `elders.ts` keeps only the internal `seed`. The **only public Convex

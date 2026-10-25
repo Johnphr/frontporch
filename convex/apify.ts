@@ -1,7 +1,8 @@
 // LinkedIn + audience-question scraping via Apify (and two free public APIs).
 //
-//   scrapeEngagement       daily: reactions + reader comments on his LinkedIn posts
-//                          -> engagement:upsert (Core: Data) per post
+//   scrapeEngagement       daily, only when LINKEDIN_POSTING=on: reactions + reader comments
+//                          on his LinkedIn posts -> engagement:upsert (Core: Data) per post
+//                          (Bluesky threads: blueskyEngagement.scrapeForElder)
 //   scrapeProfile          once before onboarding: his work history as plain text
 //                          -> { knownBackground } for conversation.planNextCall
 //   findAudienceQuestions  weekly: real questions people in his field ask online
@@ -17,6 +18,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { errorMessage, runActor, sleep } from "./lib/apifyClient";
+import { linkedinEngagementOn } from "./lib/engagementRules";
 import { blueskySearchPlan } from "./lib/bluesky";
 import { searchPosts, sharedSessionCache, withSession, type FetchFn } from "./lib/blueskyClient";
 import { blueskyLoginForElder, type BlueskyLogin } from "./lib/logins";
@@ -84,6 +86,8 @@ type EngagementResult = {
   comments: number;
   upserted: number;
   errors: string[];
+  /** set when the run did nothing on purpose */
+  skipped?: string;
 };
 
 export const scrapeEngagement = internalAction({
@@ -93,6 +97,10 @@ export const scrapeEngagement = internalAction({
     maxPosts: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<EngagementResult> => {
+    // Posts moved to Bluesky: don't pay for LinkedIn runs unless LinkedIn is switched on.
+    if (!linkedinEngagementOn(process.env)) {
+      return { actor: "", posts: 0, comments: 0, upserted: 0, errors: [], skipped: "LINKEDIN_POSTING is off" };
+    }
     const elder = await ctx.runQuery(internal.apify.getElderForScrape, { elderId: args.elderId });
     const profileUrl = args.linkedinUrl ?? elder?.linkedinUrl;
     if (!profileUrl) throw new Error("No LinkedIn URL: pass linkedinUrl or set it on the elder");

@@ -72,3 +72,59 @@ export function feedbackWindowStart(nowMs: number, sinceDays?: number): number {
   const days = typeof sinceDays === "number" && Number.isFinite(sinceDays) && sinceDays >= 0 ? sinceDays : 14;
   return nowMs - days * 24 * 60 * 60 * 1000;
 }
+
+// ---------- platforms ----------
+
+export type EngagementPlatform = "linkedin" | "bluesky";
+
+/** Rows written before Bluesky have no platform: they're LinkedIn. */
+export function platformOf(row: { platform?: EngagementPlatform } | null | undefined): EngagementPlatform {
+  return row?.platform ?? "linkedin";
+}
+
+/**
+ * One key per Bluesky post: the bsky.app link without query, hash or trailing slash, host
+ * lowercased. The path (handle or did + rkey) is kept as given; we always store the same
+ * link for a post (postPublications.url), so it matches itself on every scrape.
+ */
+export function canonicalBlueskyPostUrl(input?: string | null): string {
+  const raw = (input ?? "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    url.search = "";
+    url.hash = "";
+    url.hostname = url.hostname.toLowerCase();
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return raw.replace(/[?#].*$/, "").replace(/\/+$/, "");
+  }
+}
+
+// ---------- daily schedule ----------
+
+/** LinkedIn scraping (Apify) runs only when LINKEDIN_POSTING is on. Off by default. */
+export function linkedinEngagementOn(env: Record<string, string | undefined>): boolean {
+  return ["on", "true", "1", "yes"].includes((env.LINKEDIN_POSTING ?? "").trim().toLowerCase());
+}
+
+export type EngagementJob = { kind: "bluesky" | "linkedin"; elderId: string; delayMs: number };
+
+/**
+ * Daily engagement runs: Bluesky for every active elder, LinkedIn (when on) for active
+ * elders with a LinkedIn profile. Each kind is staggered on its own.
+ */
+export function planDailyEngagement<Id extends string>(
+  elders: { _id: Id; stage?: string; linkedinUrl?: string }[],
+  linkedinOn: boolean,
+  staggerMs: number,
+): (EngagementJob & { elderId: Id })[] {
+  const active = elders.filter((e) => e.stage === "active");
+  const jobs: (EngagementJob & { elderId: Id })[] = active.map((e, i) => ({ kind: "bluesky", elderId: e._id, delayMs: i * staggerMs }));
+  if (linkedinOn) {
+    active
+      .filter((e) => !!e.linkedinUrl)
+      .forEach((e, i) => jobs.push({ kind: "linkedin", elderId: e._id, delayMs: i * staggerMs }));
+  }
+  return jobs;
+}

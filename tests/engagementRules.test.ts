@@ -2,10 +2,14 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   BANK_REFRESH_DEBOUNCE_MS,
+  canonicalBlueskyPostUrl,
   cleanComments,
   engagementChanged,
   feedbackWindowStart,
+  linkedinEngagementOn,
   nextSnapshot,
+  planDailyEngagement,
+  platformOf,
   shouldRefreshBank,
 } from "../convex/lib/engagementRules.ts";
 import { canonicalLinkedInPostUrl } from "../convex/lib/linkedinUrl.ts";
@@ -79,4 +83,57 @@ test("feedbackWindowStart: days back from now, 14 by default", () => {
   assert.equal(feedbackWindowStart(now, -3), now - 14 * day);
   assert.equal(feedbackWindowStart(now, Number.NaN), now - 14 * day);
   assert.equal(feedbackWindowStart(now, 0), now);
+});
+
+// ---------- platforms + daily schedule ----------
+
+test("canonicalBlueskyPostUrl drops query/hash/trailing slash and never rewrites to LinkedIn", () => {
+  const url = "https://bsky.app/profile/walt.bsky.social/post/3lroot";
+  assert.equal(canonicalBlueskyPostUrl(" https://BSKY.app/profile/walt.bsky.social/post/3lroot/?ref=x#top "), url);
+  assert.equal(canonicalBlueskyPostUrl(url), url);
+  assert.equal(canonicalBlueskyPostUrl(""), "");
+  assert.equal(canonicalBlueskyPostUrl(undefined), "");
+  assert.ok(!canonicalBlueskyPostUrl(url).includes("linkedin"));
+});
+
+test("platformOf: rows from before Bluesky are LinkedIn", () => {
+  assert.equal(platformOf({}), "linkedin");
+  assert.equal(platformOf(null), "linkedin");
+  assert.equal(platformOf({ platform: "bluesky" }), "bluesky");
+  assert.equal(platformOf({ platform: "linkedin" }), "linkedin");
+});
+
+test("linkedinEngagementOn: only when LINKEDIN_POSTING is on", () => {
+  assert.equal(linkedinEngagementOn({}), false);
+  assert.equal(linkedinEngagementOn({ LINKEDIN_POSTING: "off" }), false);
+  assert.equal(linkedinEngagementOn({ LINKEDIN_POSTING: "" }), false);
+  for (const on of ["on", " ON ", "true", "1", "yes"]) assert.equal(linkedinEngagementOn({ LINKEDIN_POSTING: on }), true, on);
+});
+
+test("planDailyEngagement: Bluesky for every active elder; LinkedIn only behind the gate", () => {
+  const elders = [
+    { _id: "a", stage: "active", linkedinUrl: "https://www.linkedin.com/in/a" },
+    { _id: "b", stage: "onboarding", linkedinUrl: "https://www.linkedin.com/in/b" },
+    { _id: "c", stage: "active" },
+    { _id: "d" },
+    { _id: "e", stage: "active", linkedinUrl: "https://www.linkedin.com/in/e" },
+  ];
+  assert.deepEqual(planDailyEngagement(elders, false, 30_000), [
+    { kind: "bluesky", elderId: "a", delayMs: 0 },
+    { kind: "bluesky", elderId: "c", delayMs: 30_000 },
+    { kind: "bluesky", elderId: "e", delayMs: 60_000 },
+  ]);
+  const on = planDailyEngagement(elders, true, 30_000).filter((j) => j.kind === "linkedin");
+  assert.deepEqual(on, [
+    { kind: "linkedin", elderId: "a", delayMs: 0 },
+    { kind: "linkedin", elderId: "e", delayMs: 30_000 },
+  ]);
+  assert.equal(planDailyEngagement(elders, true, 30_000).length, 5);
+});
+
+test("LinkedIn canonicalization is unchanged for LinkedIn rows", () => {
+  assert.equal(
+    canonicalLinkedInPostUrl("https://www.linkedin.com/posts/walt_bread-activity-7123456789012345678-abcd?utm=x"),
+    "https://www.linkedin.com/feed/update/urn:li:activity:7123456789012345678",
+  );
 });
