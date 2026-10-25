@@ -11,6 +11,13 @@ then...").
 
 Built at Cal Hacks 13.0.
 
+## How we use Convex
+Convex is the whole backend: 19 tables with a vector index for his long-term memory, crons and the scheduler
+that chain every post-call step (memories → write → fact-check → publish → feedback), HTTP actions for the
+Cartesia caller lookup and the Threads/X OAuth callbacks, and internal-only functions behind two token-checked
+public modules. It deploys from GitHub on every push. Details and a dated log: **[hackathon.md](hackathon.md)**.
+Other sponsor tracks: [Cartesia](docs/hackathon-cartesia.md) · [Apify](docs/hackathon-apify.md) · [Meta](docs/hackathon-meta.md) · [Social impact](docs/hackathon-social-impact.md).
+
 > **Status:** v2 structure only. See **[ARCHITECTURE.md](ARCHITECTURE.md)** for
 > the loop, contracts, data model, locked decisions and who owns what.
 
