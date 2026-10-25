@@ -20,6 +20,7 @@ const http = httpRouter();
 
 // TEMPORARY: posts review page (convex/postsPage.ts). Remove with that file.
 http.route({ path: "/posts", method: "GET", handler: servePostsPage });
+http.route({ path: "/posts", method: "POST", handler: servePostsPage }); // "Fact-check now"
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });

@@ -264,14 +264,16 @@ test("login: decrypts his token; no refresh while far from expiry", async () => 
   assert.equal(mutations.length, 0);
 });
 
-test("login: refreshes under 7 days left and saves the new token (encrypted)", async () => {
-  const { ctx, mutations } = await loginCtx(await sealedRow({ issuedAt: NOW - 55 * DAY, expiresAt: NOW + 5 * DAY }));
+test("login: refreshes under 7 days left and saves the new token (encrypted), only over the old one", async () => {
+  const row = await sealedRow({ issuedAt: NOW - 55 * DAY, expiresAt: NOW + 5 * DAY });
+  const { ctx, mutations } = await loginCtx(row);
   const api = fake(() => ({ body: { access_token: "NEW-TOKEN", expires_in: 5184000 } }));
   const login = await threadsLoginForElder(ctx, "elder1", { env: ENV, fetchFn: api.fetchFn, now: () => NOW });
   assert.equal(login?.accessToken, "NEW-TOKEN");
   assert.equal(mutations.length, 1);
   const saved = mutations[0].args;
   assert.equal(saved.tokenExpiresAt, NOW + 5184000 * 1000);
+  assert.equal(saved.expectedIv, row.secret.iv, "compare-and-swap on the token it refreshed from");
   assert.ok(!JSON.stringify(saved).includes("NEW-TOKEN"));
   const back = await openTokens(await loadAccountKey(KEY), saved.secret, "elder1", "threads", {});
   assert.equal(back.accessToken, "NEW-TOKEN");

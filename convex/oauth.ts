@@ -4,7 +4,7 @@
 //   consumeState    single use, at most 15 minutes old, same platform (lib/oauthFlow.checkState)
 //   saveTokens      after the callback: his encrypted tokens on elderAccounts
 //   getForLogin     for lib/threadsLogin.ts only: the row with the ciphertext (decrypted there, in the action)
-//   updateTokens    after a refresh
+//   updateTokens    after a refresh (compare-and-swap on the old IV, lib/tokenSave)
 //   markInvalid     the platform refused his token: stop until he reconnects
 // Rules: lib/oauthFlow.ts. Nothing here decrypts, returns a plaintext token or logs one.
 
@@ -14,6 +14,7 @@ import { internalMutation, internalQuery, type MutationCtx, type QueryCtx } from
 import { shortAccountError } from "./lib/accountConnect";
 import { checkState, STATE_CLEANUP_AFTER_MS, type StateError } from "./lib/oauthFlow";
 import { connectLocked, connectRateLimit, recordAttempt, sameTokenHash } from "./lib/signupRules";
+import { canSaveRefreshed, THREADS_SAVE_STATUSES } from "./lib/tokenSave";
 
 const platform = v.union(v.literal("threads"), v.literal("x"));
 const sealed = v.object({ ciphertext: v.string(), iv: v.string() });
@@ -122,12 +123,15 @@ export const getForLogin = internalQuery({
   },
 });
 
-/** A refreshed token. Only while the row is still connected (a disconnect wins). */
+/**
+ * A refreshed token. Only while still connected and still on the token we refreshed from
+ * (same IV), so a slow refresh can't overwrite a fresh reconnect.
+ */
 export const updateTokens = internalMutation({
-  args: { elderId: v.id("elders"), platform, secret: sealed, tokenExpiresAt: v.number(), now: v.number() },
-  handler: async (ctx, { elderId, platform: p, secret, tokenExpiresAt, now }): Promise<boolean> => {
+  args: { elderId: v.id("elders"), platform, expectedIv: v.string(), secret: sealed, tokenExpiresAt: v.number(), now: v.number() },
+  handler: async (ctx, { elderId, platform: p, expectedIv, secret, tokenExpiresAt, now }): Promise<boolean> => {
     const row = await accountRow(ctx, elderId, p);
-    if (!row || row.status !== "connected") return false;
+    if (!row || !canSaveRefreshed(row, expectedIv, THREADS_SAVE_STATUSES)) return false;
     await ctx.db.patch(row._id, { secret, tokenExpiresAt, lastCheckedAt: now, lastError: undefined });
     return true;
   },

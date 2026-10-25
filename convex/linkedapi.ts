@@ -76,6 +76,7 @@ import {
   type PlatformOutcome,
 } from "./lib/postFlow";
 import { canonicalLinkedInPostUrl } from "./lib/linkedinUrl";
+import { splitBlueskyThread } from "./lib/blueskyThread";
 
 // Convex exposes env vars on process.env (declared so we don't need @types/node).
 declare const process: { env: Record<string, string | undefined> };
@@ -137,8 +138,9 @@ export const getPostForPosting = internalQuery({
       summary: (call as Record<string, unknown> | null)?.summary,
     });
     // Disclosure footer in the post's language (posts.language; older rows: his calls' language).
-    const disclosure = disclosureFor(post.language ?? (elder ? callCharacter(elder).language : "en"));
-    return { post, turns, context, disclosure, usesPublish: await hasPublications(ctx, postId) };
+    const lang = post.language ?? (elder ? callCharacter(elder).language : "en");
+    const disclosure = disclosureFor(lang);
+    return { post, turns, context, disclosure, lang, usesPublish: await hasPublications(ctx, postId) };
   },
 });
 
@@ -562,8 +564,11 @@ export const previewPost = internalAction({
     if (!data) throw new Error("Post not found");
     const prepared = prepareLinkedInText(data.post.text, { disclosure: data.disclosure });
     const fullContext = [data.context, context ?? ""].filter((s) => s.trim()).join("\n\n");
+    // The same text and context publish.ts checks (story body without our disclosure line,
+    // buildGuardContext), so this matches the real fact-check.
+    const split = splitBlueskyThread(data.post.text, data.lang);
     const guard: GuardResult = await ctx.runAction(internal.postGuard.checkPost, {
-      postText: prepared.body, // our own disclosure line isn't a claim from the call
+      postText: split.ok ? split.body : data.post.text,
       turns: data.turns,
       context: fullContext || undefined,
     });

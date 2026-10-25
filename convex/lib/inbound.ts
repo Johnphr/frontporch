@@ -58,15 +58,20 @@ export function callerCandidates(telephony: unknown): string[] {
   return out;
 }
 
+/** Constant-time string compare against a secret. No secret configured = always false. */
+export function sameSecret(given: string | null | undefined, secret: string | undefined): boolean {
+  if (!secret) return false;
+  const g = given ?? "";
+  const len = Math.max(g.length, secret.length);
+  let diff = g.length ^ secret.length;
+  for (let i = 0; i < len; i++) diff |= (g.charCodeAt(i) || 0) ^ (secret.charCodeAt(i) || 0);
+  return diff === 0;
+}
+
 /** Constant-time check of `Authorization: Bearer <secret>`. No secret configured = always false. */
 export function verifyBearer(header: string | null | undefined, secret: string | undefined): boolean {
-  if (!secret) return false;
   const match = /^Bearer\s+(.+)$/i.exec((header ?? "").trim());
-  const given = match ? match[1].trim() : "";
-  const len = Math.max(given.length, secret.length);
-  let diff = given.length ^ secret.length;
-  for (let i = 0; i < len; i++) diff |= (given.charCodeAt(i) || 0) ^ (secret.charCodeAt(i) || 0);
-  return diff === 0;
+  return sameSecret(match ? match[1].trim() : "", secret);
 }
 
 export type LookupRequest = { callerId: string; conversationId: string };

@@ -12,6 +12,7 @@ import {
   checkXState,
   codeChallengeS256,
   isRefreshRefused,
+  isRefreshSetupError,
   makeCodeVerifier,
   makeXAdapter,
   parseTokenResponse,
@@ -203,4 +204,30 @@ test("token JSON round trip", () => {
   assert.deepEqual(tokensFromJson(tokensToJson({ accessToken: "a", refreshToken: "r" })), { accessToken: "a", refreshToken: "r" });
   assert.equal(tokensFromJson("not json"), null);
   assert.equal(tokensFromJson("{}"), null);
+});
+
+test("refresh errors: only invalid_grant / invalid_request about the token are refusals; unauthorized_client is setup", async () => {
+  const errOf = async (status: number, body: unknown) => {
+    const { fetchFn } = fakeFetch([{ status, body }]);
+    return adapter.refresh(fetchFn, { accessToken: "a", refreshToken: "old" }).catch((e) => e);
+  };
+  const badToken = await errOf(400, { error: "invalid_request", error_description: "Value passed for the token was invalid." });
+  assert.ok(isRefreshRefused(badToken));
+  assert.ok(!JSON.stringify(badToken).includes("Value passed"), "X's text isn't kept");
+  assert.ok(!isRefreshRefused(await errOf(400, { error: "invalid_request", error_description: "Missing grant_type" })));
+  const setup = await errOf(401, { error: "unauthorized_client", error_description: "Missing valid authorization header" });
+  assert.ok(!isRefreshRefused(setup), "a 401 from our app credentials doesn't mark his account");
+  assert.ok(isRefreshSetupError(setup));
+  assert.ok(!isRefreshRefused(await errOf(401, {})), "a bare 401 isn't a refusal");
+  assert.ok(!isRefreshSetupError(await errOf(400, { error: "invalid_grant" })));
+});
+
+test("callback: no offline.access (no refresh token, dead in 2 hours) -> missing_scope, nothing saved", async () => {
+  const noOffline = callbackDeps({
+    exchange: async () => ({ accessToken: "A", expiresAt: 0, userId: "1", username: "j", scopes: ["tweet.read", "tweet.write", "users.read"] }),
+  });
+  assert.deepEqual(await runXCallback(noOffline, new URLSearchParams({ state: "good", code: "C" })), {
+    redirect: "https://frontporch.example/signup?connect_error=missing_scope&platform=x",
+  });
+  assert.equal(noOffline.saved.length, 0);
 });

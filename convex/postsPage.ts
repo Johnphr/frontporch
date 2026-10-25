@@ -5,8 +5,8 @@
 //
 // Shows posts newest first: the Bluesky thread as it would be split (post 1/N ...), where each
 // platform stands (postPublications: status + link), the call's question and why a post was
-// held, with the publish: commands to run. "Fact-check now" runs linkedapi.previewPost (the
-// fact-check only: nothing is posted, LinkedAPI isn't called).
+// held, with the publish: commands to run. "Fact-check now" (a POST) runs linkedapi.previewPost
+// (the fact-check only: nothing is posted, LinkedAPI isn't called).
 // Never shows transcripts or phone numbers. Remove this file, lib/postsPage.ts and the /posts
 // route in http.ts once posts are reviewed on the platforms themselves. Owner: Brain.
 
@@ -14,6 +14,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { httpAction, internalQuery } from "./_generated/server";
 import { splitBlueskyThread } from "./lib/blueskyThread";
+import { sameSecret } from "./lib/inbound";
 import { firstName } from "./lib/onboarding";
 import { renderPostsPage, type PageCheck, type PagePost } from "./lib/postsPage";
 import { postLanguage } from "./publish";
@@ -70,10 +71,12 @@ export const servePostsPage = httpAction(async (ctx, request) => {
   const url = new URL(request.url);
   const expected = process.env.POSTS_PAGE_KEY;
   const key = url.searchParams.get("key") ?? "";
-  if (!expected || key !== expected) return new Response("Not found", { status: 404 });
+  if (!sameSecret(key, expected)) return new Response("Not found", { status: 404 });
 
   let check: PageCheck | undefined;
-  const checkId = url.searchParams.get("check");
+  // The fact-check costs a model call: only from the page's POST button, never a GET (link
+  // previews and crawlers fetch GETs).
+  const checkId = request.method === "POST" ? url.searchParams.get("check") : null;
   if (checkId) {
     try {
       // previewPost validates the id (v.id("posts")); a bad one lands in the catch below
