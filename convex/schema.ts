@@ -170,16 +170,19 @@ export default defineSchema({
       filterFields: ["elderId", "kind", "elderKind"],
     }),
 
-  // ---- Data: reader engagement on his LinkedIn posts ----
-  // One row per post (latest snapshot), written by apify.scrapeEngagement via
-  // engagement.upsert. linkedinUrl is canonical (lib/linkedinUrl.ts) so it matches
-  // posts.linkedinUrl with a plain equality check.
+  // ---- Data: reader engagement on his posts (Bluesky threads, LinkedIn) ----
+  // One row per post per platform (latest snapshot), written via engagement.upsert by
+  // blueskyEngagement.scrapeForElder and apify.scrapeEngagement.
+  // linkedinUrl is the post's link on its platform (the name predates Bluesky):
+  //   linkedin (or missing platform): canonical (lib/linkedinUrl.ts), matches posts.linkedinUrl
+  //   bluesky: the thread's bsky.app link (postPublications.url); postId comes from that row
   engagement: defineTable({
     elderId: v.id("elders"),
     postId: v.optional(v.id("posts")),
+    platform: v.optional(v.union(v.literal("linkedin"), v.literal("bluesky"))), // missing = linkedin
     linkedinUrl: v.string(),
-    reactions: v.number(),
-    comments: v.array(v.object({ author: v.string(), text: v.string() })),
+    reactions: v.number(), // Bluesky: likes + reposts on his posts in the thread
+    comments: v.array(v.object({ author: v.string(), text: v.string() })), // Bluesky: replies by others
     scrapedAt: v.number(), // epoch ms, last scrape
     changedAt: v.optional(v.number()), // epoch ms, last time reactions/comments changed
   })
