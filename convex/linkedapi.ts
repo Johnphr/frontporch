@@ -9,7 +9,8 @@
 //       url; posts.linkedinUrl via publish.settlePost) | failed | maybe_posted.
 //
 // The older one-platform flow below (createPost / approvePost / checkPostStatus on the posts
-// row) is kept, also behind LINKEDIN_POSTING. It was called by pipeline.processCall:
+// row) is kept, also behind LINKEDIN_POSTING, for posts that never went through publish.ts:
+// it refuses any post with postPublications rows. It was called by pipeline.processCall:
 //   await ctx.runAction(internal.linkedapi.createPost, { postId, context? })
 //     context: optional background the fact-check may treat as his words
 //     (e.g. memories used to write the post). His profile and the call summary
@@ -50,6 +51,7 @@ import {
   internalMutation,
   internalQuery,
   type ActionCtx,
+  type QueryCtx,
 } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import {
@@ -106,8 +108,15 @@ type PreviewResult = {
 };
 
 type ClaimResult =
-  | { ok: true }
+  | { ok: true; runGuard: boolean }
   | { ok: false; reason: string; status: PostStatus; url?: string; restartPolling: boolean };
+
+const USES_PUBLISH =
+  "This post goes out through publish.ts (it has postPublications rows): use publish:approvePost or publish:retryPublication.";
+
+async function hasPublications(ctx: { db: QueryCtx["db"] }, postId: Id<"posts">): Promise<boolean> {
+  return (await ctx.db.query("postPublications").withIndex("by_post", (q) => q.eq("postId", postId)).first()) !== null;
+}
 
 const turnValidator = v.object({ role: v.string(), text: v.string() });
 
@@ -127,9 +136,9 @@ export const getPostForPosting = internalQuery({
       profile: (elder as Record<string, unknown> | null)?.profile,
       summary: (call as Record<string, unknown> | null)?.summary,
     });
-    // Disclosure footer in the language his calls run in (his character's).
-    const disclosure = disclosureFor(elder ? callCharacter(elder).language : "en");
-    return { post, turns, context, disclosure };
+    // Disclosure footer in the post's language (posts.language; older rows: his calls' language).
+    const disclosure = disclosureFor(post.language ?? (elder ? callCharacter(elder).language : "en"));
+    return { post, turns, context, disclosure, usesPublish: await hasPublications(ctx, postId) };
   },
 });
 
@@ -140,6 +149,10 @@ export const claimPost = internalMutation({
     const post = await ctx.db.get(postId);
     if (!post) return { ok: false, reason: "Post not found", status: "failed", restartPolling: false };
     const now = Date.now();
+    // publish.ts owns it (its workflowId, if any, is a publish.ts LinkedIn row's).
+    if (await hasPublications(ctx, postId)) {
+      return { ok: false, reason: USES_PUBLISH, status: post.status as PostStatus, restartPolling: false };
+    }
 
     if (shouldRestartPolling(post, now)) {
       // Sent to LinkedAPI but nobody is polling: restart once (lastPolledAt = now
@@ -163,6 +176,8 @@ export const claimPost = internalMutation({
         restartPolling: false,
       };
     }
+    // Decided before the claim changes the status (lib/postFlow.shouldRunGuard).
+    const runGuard = shouldRunGuard(post, approve);
     await ctx.db.patch(postId, {
       status: "posting",
       claimedAt: now,
@@ -170,7 +185,7 @@ export const claimPost = internalMutation({
       maybePosted: undefined,
       ...(approve ? { approvedAt: now } : {}),
     });
-    return { ok: true };
+    return { ok: true, runGuard };
   },
 });
 
@@ -185,7 +200,7 @@ export const updatePost = internalMutation({
     workflowId: v.optional(v.string()),
     guardIssues: v.optional(v.array(v.string())),
     guardSummary: v.optional(v.string()),
-    heldFor: v.optional(v.union(v.literal("quality"), v.literal("guard"))),
+    heldFor: v.optional(v.union(v.literal("quality"), v.literal("thread_fit"), v.literal("guard"))),
     pollAttempts: v.optional(v.number()),
     lastPolledAt: v.optional(v.number()),
     maybePosted: v.optional(v.boolean()),
@@ -260,8 +275,8 @@ async function runPosting(
   }
 
   let guard: GuardResult | null = null;
-  // A post held for quality never went through the fact-check, so approving it still runs it.
-  if (shouldRunGuard(opts.approve, data.post.heldFor)) {
+  // Skipped only for a person approving a fact-check hold (claimPost decided it).
+  if (claim.runGuard) {
     let checked: GuardResult;
     try {
       checked = await ctx.runAction(internal.postGuard.checkPost, {
@@ -375,6 +390,10 @@ export const checkPostStatus = internalAction({
     const data = await ctx.runQuery(internal.linkedapi.getPostForPosting, { postId });
     const post = data?.post;
     if (!post || !post.workflowId || !["pending", "needs_attention"].includes(post.status)) return;
+    if (data.usesPublish) {
+      console.warn(`linkedapi.checkPostStatus: post ${postId} goes out through publish.ts; use checkPublicationStatus`);
+      return;
+    }
 
     const headers = linkedApiHeaders();
     if (!headers) {

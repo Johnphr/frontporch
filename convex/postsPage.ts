@@ -14,8 +14,9 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { httpAction, internalQuery } from "./_generated/server";
 import { splitBlueskyThread } from "./lib/blueskyThread";
-import { callCharacter, firstName } from "./lib/onboarding";
+import { firstName } from "./lib/onboarding";
 import { renderPostsPage, type PageCheck, type PagePost } from "./lib/postsPage";
+import { postLanguage } from "./publish";
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -32,8 +33,8 @@ export const listForPage = internalQuery({
           ctx.db.get(p.callId),
           ctx.db.query("postPublications").withIndex("by_post", (q) => q.eq("postId", p._id)).collect(),
         ]);
-        // The thread as publish.ts would split it, in the language his calls run in.
-        const split = splitBlueskyThread(p.text, elder ? callCharacter(elder).language : "en");
+        // The thread as publish.ts would split it, in the post's language (posts.language).
+        const split = splitBlueskyThread(p.text, p.language ?? postLanguage(elder));
         const plan = (call?.plan ?? null) as { question?: unknown } | null;
         return {
           id: p._id,

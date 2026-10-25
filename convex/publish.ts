@@ -1,34 +1,45 @@
 // Publishing a story post to his accounts. One postPublications row per post per platform.
 //
-//   publishPost({ postId })        scheduled by pipeline.processCall for a new post (AUTO_POST on).
-//                                  Never a post with removedAt, or one held for review. Then:
+//   publishPost({ postId })        scheduled by pipeline.insertPost for a new post (AUTO_POST on),
+//                                  in the same mutation that saves it. Never a post with
+//                                  removedAt, or one held for review. Then:
 //     1. claim the post (posts.status -> "posting"; one run at a time, retaken after 15 min)
-//     2. the fact-check, once (postGuard.checkPost, as linkedapi did; lib/postFlow.shouldRunGuard)
+//     2. the fact-check, once (postGuard.checkPost; lib/postFlow.shouldRunGuard)
 //          fail + POST_GUARD_MODE=enforce -> needs_review (heldFor "guard"), posted nowhere
+//          cleared -> guardPassedAt
 //     3. each platform in order, each with its own row: claim -> post -> finish -> re-read the
 //        post; if it was taken down meanwhile (removedAt), schedule undo:removePost and stop
 //          bluesky   his login (lib/logins.ts): the post as a 3-5 post thread
-//                    (lib/blueskyThread.ts); records = every post, root first; url = post 1
+//                    (lib/blueskyThread.ts); records = every post, root first; url = post 1.
+//                    A refused login marks his account invalid (reportBlueskyLoginError).
 //          reddit    only when redditLoginForElder returns a login (REDDIT_POSTING=on): a self
 //                    post on his profile (sr=u_<name>), title = the hook
 //          linkedin  only when LINKEDIN_POSTING=on, through linkedapi.startPublication
 //                    (LinkedAPI + polling); otherwise its row is "skipped"
-//        an unclear failure (timeout after the request went out, 5xx) -> maybe_posted: never
-//        retried on its own; a person checks his profile, then retryPublication approve:true
+//        an unclear failure (timeout after the request went out, 5xx, or a Reddit / LinkedIn
+//        run that stopped mid-post) -> maybe_posted: never retried on its own; a person checks
+//        his profile, then retryPublication approve:true
 //     4. posts.status: published (any platform posted; linkedinUrl only from LinkedIn) |
-//        failed (none did) | needs_review (held)
-//   approvePost({ postId })        a person read a held post: runs the fact-check first if it was
-//                                  held for quality (never checked), then publishes everywhere.
-//   retryPublication({ publicationId, approve? })   one failed / maybe_posted / skipped row
-//                                  (maybe_posted needs approve: true, after checking his profile).
-//                                  A Bluesky retry continues a half-posted thread, and first
-//                                  looks in his repo for posts an earlier attempt made.
+//        partly_posted (only part of a Bluesky thread is out) | failed (nothing went out) |
+//        needs_review (held)
+//   approvePost({ postId })        a person read a held post. A fact-check hold goes out as it
+//                                  is; anything else (quality / thread-fit hold, a pending post
+//                                  with AUTO_POST=off, a failed one) is fact-checked first. A
+//                                  thread-fit hold is refused until the text fits.
+//   retryPublication({ publicationId, approve? })   one failed / maybe_posted / skipped row of
+//                                  a post the fact-check cleared (maybe_posted needs approve:
+//                                  true, after checking his profile). A Bluesky retry continues
+//                                  a half-posted thread, and first looks in his repo for posts an
+//                                  earlier attempt made (only ones made after the row existed).
+//                                  A LinkedIn row stuck "pending" (sent, checks stopped) is
+//                                  checked again; nothing is sent.
 //
 //   npx convex run publish:publishPost '{"postId":"<posts id>"}'
 //   npx convex run publish:approvePost '{"postId":"<posts id>"}'
 //   npx convex run publish:retryPublication '{"publicationId":"<postPublications id>","approve":true}'
 //
-// Disclosure + fact-check language: the language his calls run in (callCharacter(elder).language).
+// Disclosure + fact-check language: posts.language, decided once when the post is saved
+// (postLanguage: the language his calls run in). Older rows: postLanguage(elder).
 // Never log tokens, passwords or post text: ids and statuses only.
 // Env: AUTO_POST, POST_GUARD_MODE, LINKEDIN_POSTING (+ the login variables in lib/logins.ts).
 // Owner: Integrations.
@@ -40,7 +51,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery, type ActionCtx } from "./_generated/server";
 import { sharedSessionCache, type FetchFn } from "./lib/blueskyClient";
 import { splitBlueskyThread } from "./lib/blueskyThread";
-import { blueskyLoginForElder, redditLoginForElder } from "./lib/logins";
+import { blueskyLoginForElder, redditLoginForElder, reportBlueskyLoginError } from "./lib/logins";
 import { callCharacter } from "./lib/onboarding";
 import {
   buildGuardContext,
@@ -52,6 +63,7 @@ import {
   overallPostStatus,
   publishOne,
   runPublish,
+  shouldRunGuard,
   skipReason,
   type ClaimCheck,
   type GuardResult,
@@ -88,10 +100,19 @@ const outcomeValidator = v.union(
   }),
 );
 
-/** The language his calls run in: the disclosure line and the fact-check follow it. */
-function postLanguage(elder: Doc<"elders"> | null): "en" | "es" {
+/**
+ * The language a post goes out in (disclosure line, fact-check): the language his calls run in,
+ * i.e. his character's (callCharacter falls back to elders.language). Saved on posts.language.
+ */
+export function postLanguage(elder: Pick<Doc<"elders">, "characterId" | "language"> | null): "en" | "es" {
   return elder ? callCharacter(elder).language : "en";
 }
+
+/** postLanguage for an elder id (pipeline: the writer's thread-fit check). */
+export const languageForElder = internalQuery({
+  args: { elderId: v.id("elders") },
+  handler: async (ctx, { elderId }): Promise<"en" | "es"> => postLanguage(await ctx.db.get(elderId)),
+});
 
 // ---------- queries + mutations ----------
 
@@ -107,7 +128,7 @@ export const getForPublish = internalQuery({
       profile: (elder as Record<string, unknown> | null)?.profile,
       summary: (call as Record<string, unknown> | null)?.summary,
     });
-    return { post, turns, context, lang: postLanguage(elder) };
+    return { post, turns, context, lang: post.language ?? postLanguage(elder) };
   },
 });
 
@@ -130,19 +151,32 @@ export const claimPost = internalMutation({
     const now = Date.now();
     const check = canStartPublish(post, now, approve);
     if (!check.ok) return check;
-    await ctx.db.patch(postId, { status: "posting", claimedAt: now, error: undefined, ...(approve ? { approvedAt: now } : {}) });
+    // A person approving a fact-check hold clears it: this run skips the guard (shouldRunGuard).
+    const approvedHold = approve && !shouldRunGuard(post, approve);
+    await ctx.db.patch(postId, {
+      status: "posting",
+      claimedAt: now,
+      error: undefined,
+      ...(approve ? { approvedAt: now } : {}),
+      ...(approvedHold ? { guardPassedAt: now } : {}),
+    });
     return { ok: true };
   },
 });
 
-/** The fact-check result. hold: needs_review (heldFor "guard", so a second approve skips it). */
+/**
+ * The fact-check result. hold: needs_review (heldFor "guard", so a second approve skips it).
+ * Otherwise it's cleared (guardPassedAt), which retryPublication needs.
+ */
 export const saveGuard = internalMutation({
   args: { postId: v.id("posts"), hold: v.boolean(), issues: v.array(v.string()), summary: v.string() },
   handler: async (ctx, { postId, hold, issues, summary }) => {
     await ctx.db.patch(postId, {
       guardIssues: issues,
       guardSummary: summary,
-      ...(hold ? { status: "needs_review", heldFor: "guard" as const, claimedAt: undefined } : {}),
+      ...(hold
+        ? { status: "needs_review", heldFor: "guard" as const, claimedAt: undefined, guardPassedAt: undefined }
+        : { guardPassedAt: Date.now() }),
     });
   },
 });
@@ -172,7 +206,10 @@ export const ensurePublication = internalMutation({
   },
 });
 
-/** Atomic claim of one platform row (never for a post that was taken down). */
+/**
+ * Atomic claim of one platform row (never for a post that was taken down). A stale Reddit /
+ * LinkedIn claim becomes maybe_posted here (lib/postFlow.canClaimPublication).
+ */
 export const claimPublication = internalMutation({
   args: { publicationId: v.id("postPublications"), approve: v.boolean() },
   handler: async (ctx, { publicationId, approve }): Promise<ClaimCheck & { previous?: string }> => {
@@ -181,7 +218,10 @@ export const claimPublication = internalMutation({
     const post = await ctx.db.get(row.postId);
     const now = Date.now();
     const check = canClaimPublication(row, now, approve, !post || post.removedAt !== undefined);
-    if (!check.ok) return check;
+    if (!check.ok) {
+      if ("becomes" in check) await ctx.db.patch(publicationId, { status: check.becomes, claimedAt: undefined, error: check.reason });
+      return { ok: false, reason: check.reason };
+    }
     await ctx.db.patch(publicationId, { status: "posting", claimedAt: now, error: undefined });
     return { ok: true, previous: row.status };
   },
@@ -217,7 +257,9 @@ export const settlePost = internalMutation({
     const post = await ctx.db.get(postId);
     if (!post) return { status: "failed", error: "Post not found." };
     // Taken down (removedAt / "removed"), or held: undo and review own those states.
-    if (post.removedAt !== undefined || !["posting", "published", "failed", "pending"].includes(post.status)) return { status: post.status };
+    if (post.removedAt !== undefined || !["posting", "published", "partly_posted", "failed", "pending"].includes(post.status)) {
+      return { status: post.status };
+    }
     const rows = await ctx.db.query("postPublications").withIndex("by_post", (q) => q.eq("postId", postId)).collect();
     const overall = overallPostStatus(rows);
     const linkedin = rows.find((r) => r.platform === "linkedin" && r.status === "posted" && r.url);
@@ -289,8 +331,12 @@ async function postTo(
       texts: split.posts,
       langs: split.langs,
       done: row?.records ?? [],
-      // An earlier attempt may have posted more than we know.
+      // An earlier attempt may have posted more than we know: only posts made after this row
+      // existed (its first claim came right after) can be that attempt's.
       recover: previous === "maybe_posted" || previous === "posting" || Boolean(row?.records?.length),
+      ...(row ? { since: row._creationTime } : {}),
+      // A revoked or changed app password: mark his account invalid (lib/logins.ts).
+      onLoginError: (e) => reportBlueskyLoginError(ctx, post.elderId, e),
     });
   }
   if (platform === "reddit") {
@@ -367,17 +413,32 @@ export const publishPost = internalAction({
 });
 
 /**
- * A person read a held post (needs_review) and wants it out: a quality hold is fact-checked
- * first (it never was); a fact-check hold goes out as it is. Same claims, so no double posts.
+ * A person read a post and wants it out: a fact-check hold goes out as it is; anything else
+ * (quality / thread-fit hold, a pending or failed post) is fact-checked first. A thread-fit hold
+ * whose text still doesn't fit is refused. Same claims, so no double posts.
  */
 export const approvePost = internalAction({
   args: { postId: v.id("posts") },
-  handler: async (ctx, { postId }): Promise<PublishResult> => publish(ctx, postId, true),
+  handler: async (ctx, { postId }): Promise<PublishResult> => {
+    const data = await loadData(ctx, postId);
+    if (data && data.post.status === "needs_review" && data.post.heldFor === "thread_fit") {
+      const split = splitBlueskyThread(data.post.text, data.lang);
+      if (!split.ok) {
+        return {
+          status: "needs_review",
+          reason: `Held: too long for a Bluesky thread (${split.reason}). Shorten posts.text, then run publish:approvePost again.`,
+        };
+      }
+    }
+    return publish(ctx, postId, true);
+  },
 });
 
 /**
  * Post one platform again: a failed or skipped row, or (approve: true, after checking his
- * profile) a maybe_posted one. The post must have been published or failed before.
+ * profile) a maybe_posted one. The post must have gone through publishing and been cleared by
+ * the fact-check (else: run publish:publishPost). A LinkedIn row LinkedAPI accepted whose
+ * status checks stopped is only checked again.
  */
 export const retryPublication = internalAction({
   args: { publicationId: v.id("postPublications"), approve: v.optional(v.boolean()) },
@@ -389,6 +450,16 @@ export const retryPublication = internalAction({
     const allowed = canRetry(state.data.post, row);
     if (!allowed.ok) return { status: row.status, reason: allowed.reason };
     const platform = row.platform as Platform;
+    if (allowed.repoll) {
+      if (!linkedinPostingOn(process.env.LINKEDIN_POSTING)) return { status: row.status, reason: skipReason("linkedin") };
+      // LinkedAPI already has it: check its status again with a fresh poll budget. Never sends again.
+      await ctx.runMutation(internal.linkedapi.updatePost, { postId: row.postId, pollAttempts: 0 });
+      await ctx.runAction(internal.linkedapi.checkPublicationStatus, { postId: row.postId, publicationId });
+      const after = await ctx.runQuery(internal.publish.getPublication, { publicationId });
+      const settled = await ctx.runMutation(internal.publish.settlePost, { postId: row.postId });
+      console.log(`publish.retryPublication: linkedin row ${publicationId} re-checked: ${after?.status ?? "gone"}`);
+      return { status: after?.status ?? row.status, post: settled.status };
+    }
     if (!(await platformsFor(ctx, row.elderId))[platform]) return { status: row.status, reason: skipReason(platform) };
 
     const one = await publishOne(depsFor(ctx, row.postId, state), platform, publicationId, approve ?? false);

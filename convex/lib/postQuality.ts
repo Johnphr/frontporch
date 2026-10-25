@@ -172,9 +172,10 @@ export function hasMarkdown(text: string): boolean {
 /**
  * Checks code can do without AI. `expectedLang` is the language he spoke on the call
  * (detectLanguage on his words); a mismatch only counts when both are clearly detected,
- * so a Spanish post is never penalized by English-only rules.
+ * so a Spanish post is never penalized by English-only rules. `disclosureLang`: the language
+ * the post goes out in (posts.language, publish.postLanguage), for the thread-fit check.
  */
-export function hardChecks(text: string, expectedLang: Lang = "unknown"): CheckIssue[] {
+export function hardChecks(text: string, expectedLang: Lang = "unknown", disclosureLang?: "en" | "es"): CheckIssue[] {
   const issues: CheckIssue[] = [];
   const words = wordCount(text);
   if (words < HARD_MIN_WORDS || words > HARD_MAX_WORDS) {
@@ -196,8 +197,8 @@ export function hardChecks(text: string, expectedLang: Lang = "unknown"): CheckI
     });
   }
   // The real split (hook in post 1, story + disclosure in at most 5 posts). Disclosure language:
-  // his call language, else the post's own.
-  const fitLang = expectedLang !== "unknown" ? expectedLang : detectLanguage(text);
+  // the one it's posted in when known, else the language he spoke, else the post's own.
+  const fitLang = disclosureLang ?? (expectedLang !== "unknown" ? expectedLang : detectLanguage(text));
   const fit = threadFitProblem(text, fitLang === "es" ? "es" : "en");
   if (fit) issues.push({ id: "thread_fit", severity: "major", message: `Doesn't fit a Bluesky thread: ${fit}` });
   const hashtags = text.match(/(^|\s)#\p{L}[\p{L}\p{N}_]*/gu) ?? [];
@@ -475,17 +476,19 @@ export async function runQualityLoop(deps: QualityDeps): Promise<WrittenPost> {
 export function holdDecision(
   quality: QualityReport | undefined,
   threadProblem?: string | null,
-): { status: "needs_review"; summary: string } | null {
+): { status: "needs_review"; heldFor: "thread_fit" | "quality"; summary: string } | null {
   const rewrites = (q: QualityReport) => `${q.rounds} rewrite${q.rounds === 1 ? "" : "s"}`;
   if (threadProblem) {
     return {
       status: "needs_review",
+      heldFor: "thread_fit",
       summary: `Held: doesn't fit a Bluesky thread of at most 5 posts (${threadProblem})${quality ? ` after ${rewrites(quality)}` : ""}. Shorten it, then publish:approvePost.`,
     };
   }
   if (!quality || quality.passed) return null;
   return {
     status: "needs_review",
+    heldFor: "quality",
     summary: `Held by the quality check: ${quality.score}/100 (bar ${PASS_SCORE}) after ${rewrites(quality)}.`,
   };
 }

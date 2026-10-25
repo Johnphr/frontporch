@@ -12,11 +12,12 @@
 //          memories  llm.extractKnowledge -> memories.addMany (+ resolve the open threads he
 //                    finished; only thread ids we sent are passed back)
 //          post      llm.writePost, given the time left of the 10-min action limit
-//                    (lib/postQuality.postBudgetMs; may decline: no post; below the quality bar,
-//                    or too long for a 5-post Bluesky thread -> saved as needs_review, not
-//                    posted) -> one posts row per call (posts.by_call) -> publish.publishPost
-//                    (Bluesky thread, Reddit when on, LinkedIn when on), scheduled only for a
-//                    new row and only when AUTO_POST isn't "off" (off = saved, not posted)
+//                    (lib/postQuality.postBudgetMs; may decline: no post) -> insertPost: one
+//                    posts row per call (posts.by_call) with its language; below the quality
+//                    bar (heldFor "quality") or too long for a 5-post Bluesky thread ("thread_fit")
+//                    -> needs_review, not posted; else publish.publishPost (Bluesky thread,
+//                    Reddit when on, LinkedIn when on) is scheduled in the same mutation, only
+//                    for a new row and only when AUTO_POST isn't "off" (off = saved, not posted)
 //          reply     threadReplies.draftForCall (scheduled; only when the question came from
 //                    a Bluesky thread, or Reddit once REDDIT_POSTING is on)
 //          plan      conversation.refreshQuestionBank (scheduled)
@@ -45,7 +46,8 @@ import { canClaimProcessing, finishPatch, isProfileUsable, mergeProfile, type Pr
 import { runSteps, type StepReport } from "./lib/planner";
 import { threadFitProblem } from "./lib/blueskyThread";
 import { parseAutoPost } from "./lib/postFlow";
-import { MIN_POST_BUDGET_MS, detectLanguage, holdDecision, postBudgetMs } from "./lib/postQuality";
+import { MIN_POST_BUDGET_MS, holdDecision, postBudgetMs } from "./lib/postQuality";
+import { postLanguage } from "./publish";
 import { CALL_REASON, detectTakeDown } from "./lib/undo";
 import { postQuality } from "./schema";
 
@@ -109,7 +111,13 @@ export const saveProfile = internalMutation({
   },
 });
 
-/** One post per call: returns the existing row if this call already has one. */
+/**
+ * One post per call: returns the existing row if this call already has one. Decides here, once:
+ * the language it goes out in (publish.postLanguage, saved on posts.language), and whether it's
+ * held (lib/postQuality.holdDecision: below the quality bar, or too long for a Bluesky thread
+ * in that language). A new post that isn't held is scheduled to publish in this same mutation
+ * (unless AUTO_POST=off), so a saved post is never left unscheduled.
+ */
 export const insertPost = internalMutation({
   args: {
     elderId: v.id("elders"),
@@ -118,23 +126,32 @@ export const insertPost = internalMutation({
     // Post quality (lib/postQuality.ts): below the bar it's saved held. The judge's notes stay on
     // `quality` only (shown once on /posts); guardIssues is left for the fact-check.
     quality: v.optional(postQuality),
-    hold: v.optional(v.object({ summary: v.string() })),
   },
-  handler: async (ctx, args): Promise<{ postId: Id<"posts">; created: boolean }> => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ postId: Id<"posts">; created: boolean; held?: "quality" | "thread_fit"; scheduled?: boolean }> => {
     const existing = await ctx.db
       .query("posts")
       .withIndex("by_call", (q) => q.eq("callId", args.callId))
       .first();
     if (existing) return { postId: existing._id, created: false };
+    const language = postLanguage(await ctx.db.get(args.elderId));
+    const hold = holdDecision(args.quality, threadFitProblem(args.text, language));
     const postId = await ctx.db.insert("posts", {
       elderId: args.elderId,
       callId: args.callId,
       text: args.text,
-      status: args.hold ? "needs_review" : "pending",
+      language,
+      status: hold ? "needs_review" : "pending",
       ...(args.quality ? { quality: args.quality } : {}),
-      ...(args.hold ? { heldFor: "quality" as const, guardSummary: args.hold.summary } : {}),
+      ...(hold ? { heldFor: hold.heldFor, guardSummary: hold.summary } : {}),
     });
-    return { postId, created: true };
+    if (hold) return { postId, created: true, held: hold.heldFor };
+    // AUTO_POST=off (tests): keep the row `pending` (see it on /posts), post on purpose.
+    const scheduled = parseAutoPost(process.env.AUTO_POST);
+    if (scheduled) await ctx.scheduler.runAfter(0, internal.publish.publishPost, { postId });
+    return { postId, created: true, scheduled };
   },
 });
 
@@ -232,31 +249,31 @@ async function runStoryCall(
         // fail the step (process_failed) rather than be cut off mid-write; a retry is safe.
         const budgetMs = postBudgetMs(startedAt, Date.now());
         if (budgetMs < MIN_POST_BUDGET_MS) throw new Error("not enough time left in this run for the post step");
+        // The language it goes out in (the same one insertPost saves), for the writer's fit check.
+        const language = await ctx.runQuery(internal.publish.languageForElder, { elderId: elder._id });
         const post = await ctx.runAction(internal.llm.writePost, {
           turns,
           ...(profile ? { profile } : {}),
           ...(feedback ? { feedback } : {}),
           budgetMs,
+          language,
         });
         if (post.skip) return `no post: ${post.reason}`;
-        // Below the quality bar, or too long for a Bluesky thread: saved as needs_review (shown
-        // on /posts), never auto-posted.
-        const hold = holdDecision(post.quality, threadFitProblem(post.text, detectLanguage(post.text) === "es" ? "es" : "en"));
-        const { postId, created } = await ctx.runMutation(internal.pipeline.insertPost, {
+        // insertPost holds it (below the quality bar, or too long for a Bluesky thread: shown on
+        // /posts, never auto-posted) or schedules publish.publishPost, in one mutation.
+        const saved = await ctx.runMutation(internal.pipeline.insertPost, {
           elderId: elder._id,
           callId,
           text: post.text,
           quality: post.quality,
-          ...(hold ? { hold: { summary: hold.summary } } : {}),
         });
-        if (!created) return `post ${postId} already exists`;
-        if (hold) return `post ${postId} held for review (quality ${post.quality.score}/100); post it with publish:approvePost`;
-        // AUTO_POST=off (tests): keep the row `pending` (see it on /posts), post on purpose.
-        if (!parseAutoPost(process.env.AUTO_POST)) {
+        const { postId } = saved;
+        if (!saved.created) return `post ${postId} already exists`;
+        if (saved.held === "thread_fit") return `post ${postId} held: too long for a Bluesky thread; shorten it, then publish:approvePost`;
+        if (saved.held) return `post ${postId} held for review (quality ${post.quality.score}/100); post it with publish:approvePost`;
+        if (!saved.scheduled) {
           return `post ${postId} saved, not posted (AUTO_POST=off); post it with: npx convex run publish:publishPost '{"postId":"${postId}"}'`;
         }
-        // Publishing runs on its own (fact-check + every platform) so it can't hold up the rest.
-        await ctx.scheduler.runAfter(0, internal.publish.publishPost, { postId });
         return `post ${postId} scheduled`;
       },
     },

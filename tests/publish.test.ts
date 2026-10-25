@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { createThread, type FetchFn } from "../convex/lib/blueskyClient.ts";
 import { splitBlueskyThread } from "../convex/lib/blueskyThread.ts";
 import { DEFAULT_DISCLOSURE, SPANISH_DISCLOSURE } from "../convex/lib/linkedinPost.ts";
-import { redditLoginForElder } from "../convex/lib/logins.ts";
+import { isBlueskyLoginRefused, redditLoginForElder } from "../convex/lib/logins.ts";
 import {
   STALE_CLAIM_MS,
   canClaimPublication,
@@ -161,17 +161,44 @@ test("postBlueskyStory: partial refused -> failed with records + url; partial ti
 });
 
 test("postBlueskyStory: recover finds the earlier attempt's posts and only posts the rest", async () => {
+  const at = (ms: number) => new Date(ms).toISOString();
   const listed = [
-    { uri: "at://did:plc:him/app.bsky.feed.post/a1", cid: "a1", value: { text: TEXTS[0] } },
-    { uri: "at://did:plc:him/app.bsky.feed.post/a2", cid: "a2", value: { text: TEXTS[1], reply: { parent: { uri: "at://did:plc:him/app.bsky.feed.post/a1" } } } },
+    { uri: "at://did:plc:him/app.bsky.feed.post/a1", cid: "a1", value: { text: TEXTS[0], createdAt: at(NOW + 1000) } },
+    { uri: "at://did:plc:him/app.bsky.feed.post/a2", cid: "a2", value: { text: TEXTS[1], createdAt: at(NOW + 1001), reply: { parent: { uri: "at://did:plc:him/app.bsky.feed.post/a1" } } } },
   ];
   const bs = fakeBluesky({ listed });
-  const out = await postBlueskyStory(bs.fetchFn, new Map(), LOGIN, { texts: TEXTS, langs: ["en"], recover: true });
+  const out = await postBlueskyStory(bs.fetchFn, new Map(), LOGIN, { texts: TEXTS, langs: ["en"], recover: true, since: NOW });
   assert.equal(out.status, "posted");
   assert.equal(bs.records().length, 1);
   assert.equal(bs.records()[0].text, TEXTS[2]);
   assert.equal(bs.records()[0].reply.parent.uri, "at://did:plc:him/app.bsky.feed.post/a2");
   if (out.status === "posted") assert.match(out.url ?? "", /post\/a1$/);
+});
+
+test("postBlueskyStory: recover ignores an older post with the same text", async () => {
+  // Same opening as an old story of his, posted a day before this row existed.
+  const listed = [{ uri: "at://did:plc:him/app.bsky.feed.post/old", cid: "old", value: { text: TEXTS[0], createdAt: new Date(NOW - 86_400_000).toISOString() } }];
+  const bs = fakeBluesky({ listed });
+  const out = await postBlueskyStory(bs.fetchFn, new Map(), LOGIN, { texts: TEXTS, langs: ["en"], recover: true, since: NOW });
+  assert.equal(out.status, "posted");
+  assert.equal(bs.records().length, 3, "the whole thread is posted, not replies under the old post");
+  assert.equal(bs.records()[1].reply.root.uri, "at://did:plc:him/app.bsky.feed.post/p1");
+});
+
+test("postBlueskyStory: a refused login is reported (his account gets marked invalid)", async () => {
+  const refusedLogin: FetchFn = async () => ({ ok: false, status: 401, json: async () => ({ error: "AuthenticationRequired" }) });
+  const seen: unknown[] = [];
+  const out = await postBlueskyStory(refusedLogin, new Map(), LOGIN, { texts: TEXTS, langs: ["en"], onLoginError: (e) => void seen.push(e) });
+  assert.equal(out.status, "failed");
+  assert.equal(seen.length, 1);
+  assert.equal(isBlueskyLoginRefused(seen[0]), true);
+  // A post that's refused (not the login) isn't a login problem.
+  const later: unknown[] = [];
+  await postBlueskyStory(fakeBluesky({ fail: () => ({ status: 400 }) }).fetchFn, new Map(), LOGIN, { texts: TEXTS, langs: ["en"], onLoginError: (e) => void later.push(e) });
+  assert.equal(later.length, 0);
+  // A throwing reporter never breaks posting.
+  const ok = await postBlueskyStory(refusedLogin, new Map(), LOGIN, { texts: TEXTS, langs: ["en"], onLoginError: () => { throw new Error("db down"); } });
+  assert.equal(ok.status, "failed");
 });
 
 test("the real split goes out as is: disclosure in the last post, Spanish langs", async () => {
@@ -278,6 +305,24 @@ test("canClaimPublication: stale claims retaken, maybe_posted only with approve,
   assert.equal(canClaimPublication({ platform: "linkedin", status: "pending", externalId: "wf1" }, NOW, true, false).ok, false, "waiting on LinkedAPI");
 });
 
+test("canClaimPublication: a stale Reddit / LinkedIn claim becomes maybe_posted; Bluesky retakes it", () => {
+  const stale = NOW - STALE_CLAIM_MS - 1;
+  for (const platform of ["reddit", "linkedin"]) {
+    for (const approve of [false, true]) {
+      const c = canClaimPublication({ platform, status: "posting", claimedAt: stale }, NOW, approve, false);
+      assert.equal(c.ok, false, `${platform} is never retaken (it can't check what went out)`);
+      assert.ok(!c.ok && "becomes" in c && c.becomes === "maybe_posted");
+      if (!c.ok) assert.match(c.reason, /approve: true/);
+    }
+    const fresh = canClaimPublication({ platform, status: "posting", claimedAt: NOW - 1000 }, NOW, false, false);
+    assert.ok(!fresh.ok && !("becomes" in fresh), "a live claim is left alone");
+  }
+  assert.deepEqual(canClaimPublication({ platform: "bluesky", status: "posting", claimedAt: stale }, NOW, false, false), { ok: true });
+  // The row then needs a person: maybe_posted only with approve.
+  assert.equal(canClaimPublication({ platform: "reddit", status: "maybe_posted" }, NOW, false, false).ok, false);
+  assert.equal(canClaimPublication({ platform: "reddit", status: "maybe_posted" }, NOW, true, false).ok, true);
+});
+
 test("overallPostStatus: published once any platform posted; failed when all failed; nowhere to post", () => {
   assert.equal(overallPostStatus([{ platform: "bluesky", status: "posted" }, { platform: "reddit", status: "failed", error: "Reddit HTTP 403" }]).status, "published");
   const pub = overallPostStatus([{ platform: "bluesky", status: "posted" }, { platform: "reddit", status: "failed", error: "Reddit HTTP 403" }]);
@@ -292,12 +337,51 @@ test("overallPostStatus: published once any platform posted; failed when all fai
 });
 
 test("canRetry: failed / maybe_posted / skipped rows of a published or failed post", () => {
-  assert.equal(canRetry({ status: "published" }, { status: "failed" }).ok, true);
-  assert.equal(canRetry({ status: "failed" }, { status: "maybe_posted" }).ok, true);
-  assert.equal(canRetry({ status: "published" }, { status: "posted" }).ok, false);
-  assert.equal(canRetry({ status: "needs_review" }, { status: "failed" }).ok, false);
-  assert.equal(canRetry({ status: "pending" }, { status: "failed" }).ok, false);
-  assert.equal(canRetry({ status: "published", removedAt: NOW }, { status: "failed" }).ok, false);
+  const checked = { guardPassedAt: NOW - 1000 };
+  assert.equal(canRetry({ status: "published", ...checked }, { status: "failed" }).ok, true);
+  assert.equal(canRetry({ status: "failed", ...checked }, { status: "maybe_posted" }).ok, true);
+  assert.equal(canRetry({ status: "partly_posted", ...checked }, { status: "failed" }).ok, true);
+  assert.equal(canRetry({ status: "published", ...checked }, { status: "posted" }).ok, false);
+  assert.equal(canRetry({ status: "needs_review", ...checked }, { status: "failed" }).ok, false);
+  assert.equal(canRetry({ status: "pending", ...checked }, { status: "failed" }).ok, false);
+  assert.equal(canRetry({ status: "published", removedAt: NOW, ...checked }, { status: "failed" }).ok, false);
+});
+
+test("canRetry: never posts a story the fact-check didn't clear", () => {
+  // Nothing was set up when it ran: guard skipped, rows skipped, post failed. Then his Bluesky
+  // gets connected and someone retries the skipped row.
+  const never = canRetry({ status: "failed" }, { platform: "bluesky", status: "skipped" });
+  assert.equal(never.ok, false);
+  if (!never.ok) assert.match(never.reason, /never fact-checked.*publish:publishPost/);
+  assert.equal(canRetry({ status: "failed", guardIssues: ["made up"] }, { status: "failed" }).ok, false, "flagged in warn mode, before guardPassedAt");
+  assert.equal(canRetry({ status: "published", guardIssues: [] }, { status: "failed" }).ok, true, "older rows: a clean saved check");
+  assert.equal(canRetry({ status: "failed", guardPassedAt: NOW }, { platform: "bluesky", status: "skipped" }).ok, true);
+});
+
+test("canRetry: a stuck LinkedIn row is re-polled, never re-sent", () => {
+  const r = canRetry({ status: "posting" }, { platform: "linkedin", status: "pending", externalId: "wf1" });
+  assert.deepEqual(r, { ok: true, repoll: true });
+  assert.equal(canRetry({ status: "posting", guardPassedAt: NOW }, { platform: "linkedin", status: "pending" }).ok, false, "not sent yet");
+  assert.equal(canRetry({ status: "posting", removedAt: NOW }, { platform: "linkedin", status: "pending", externalId: "wf1" }).ok, false);
+});
+
+test("overallPostStatus: a half-posted thread is partly_posted, not failed", () => {
+  const records = [{ uri: "at://x/app.bsky.feed.post/1", cid: "c1" }];
+  const half = overallPostStatus([
+    { platform: "bluesky", status: "failed", error: "Bluesky post HTTP 400. Posted 1 of 4; a retry continues the thread.", records },
+    { platform: "reddit", status: "skipped" },
+  ]);
+  assert.equal(half.status, "partly_posted");
+  assert.match(half.error ?? "", /Bluesky: partly posted/);
+  const unclear = overallPostStatus([{ platform: "bluesky", status: "maybe_posted", error: "timeout", records }]);
+  assert.equal(unclear.status, "partly_posted");
+  assert.match(unclear.error ?? "", /maybe more/);
+  // Another platform posted: published, and the error still names the half thread.
+  const pub = overallPostStatus([{ platform: "bluesky", status: "failed", records }, { platform: "reddit", status: "posted" }]);
+  assert.equal(pub.status, "published");
+  assert.match(pub.error ?? "", /Bluesky: partly posted/);
+  assert.equal(overallPostStatus([{ platform: "bluesky", status: "failed", error: "x" }]).status, "failed", "nothing out");
+  assert.equal(canStartPublish({ status: "partly_posted" }, NOW, false).ok, true, "a run continues it");
 });
 
 // ---------- runPublish (fake deps) ----------
@@ -416,6 +500,20 @@ test("runPublish: approve skips the guard for a guard hold, runs it for a qualit
   const out = await runPublish(held.deps, false);
   assert.equal(out.status, "needs_review");
   assert.match(out.reason ?? "", /publish:approvePost/);
+});
+
+test("runPublish: approving a post that was never held still fact-checks it", async () => {
+  // AUTO_POST=off: pending, no heldFor. A failed post whose guard never ran: same.
+  for (const status of ["pending", "failed"]) {
+    const f = fakeDeps({ status, enabled: { bluesky: true }, guard: { pass: false, issues: ["made up"], summary: "x", mode: "enforce" } });
+    const out = await runPublish(f.deps, true);
+    assert.ok(f.log.includes("guard"), `${status}: checked`);
+    assert.equal(out.status, "needs_review", `${status}: held, not posted`);
+    assert.ok(!f.log.some((l) => l.startsWith("post:")));
+  }
+  const t = fakeDeps({ status: "needs_review", heldFor: "thread_fit", enabled: { bluesky: true } });
+  await runPublish(t.deps, true);
+  assert.ok(t.log.includes("guard"), "a thread-fit hold was never fact-checked");
 });
 
 test("runPublish: nothing set up -> no fact-check, failed with 'nowhere to post'", async () => {

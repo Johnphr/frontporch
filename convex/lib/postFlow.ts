@@ -81,17 +81,29 @@ export type PostState = {
 
 export type ClaimCheck = { ok: true } | { ok: false; reason: string };
 
-/** Why a `needs_review` post is held: the quality check (llm.writePost) or the fact-check (postGuard). */
-export type HeldFor = "quality" | "guard";
+/**
+ * Why a `needs_review` post is held: the quality check (llm.writePost), too long for a Bluesky
+ * thread (pipeline.insertPost), or the fact-check (postGuard).
+ */
+export type HeldFor = "quality" | "thread_fit" | "guard";
 
 /**
- * Does this posting run fact-check the post? createPost: always. approvePost: only a post held
- * for quality, because the fact-check never ran on it; a guard hold was already checked and a
- * person approved it (so a second approvePost after a guard hold skips it, as before). Rows
- * held before heldFor existed count as guard holds.
+ * Does this posting run fact-check the post? It skips it only when a person approves a post
+ * the fact-check itself held (needs_review + heldFor "guard", or no heldFor on rows from before
+ * heldFor existed). Everything else is checked: a new post, a quality or thread-fit hold, a
+ * pending post approved by hand (AUTO_POST=off), a failed post.
  */
-export function shouldRunGuard(approve: boolean, heldFor: HeldFor | undefined): boolean {
-  return !approve || heldFor === "quality";
+export function shouldRunGuard(post: { status: string; heldFor?: HeldFor }, approve: boolean): boolean {
+  const guardHold = post.status === "needs_review" && (post.heldFor === "guard" || post.heldFor === undefined);
+  return !(approve && guardHold);
+}
+
+/**
+ * Did the fact-check clear this post? guardPassedAt (it passed, warn/off mode let it through, or
+ * a person approved its hold). Rows from before guardPassedAt: a saved fact-check with no issues.
+ */
+export function guardCleared(post: { guardPassedAt?: number; guardIssues?: string[] }): boolean {
+  return post.guardPassedAt !== undefined || (Array.isArray(post.guardIssues) && post.guardIssues.length === 0);
 }
 
 /**
@@ -236,7 +248,8 @@ export function linkedinPostingOn(value: string | undefined): boolean {
 // ---------- publishing a story post to several platforms (publish.ts) ----------
 // One postPublications row per post per platform. posts.status stays the summary:
 //   pending -> posting (publish.ts claimed it) -> published (any platform posted)
-//   | failed (none did) | needs_review (held by the fact-check or the quality check)
+//   | partly_posted (only part of a Bluesky thread went out) | failed (nothing went out)
+//   | needs_review (held by the fact-check, the quality check or the thread fit)
 
 export const PLATFORMS = ["bluesky", "reddit", "linkedin"] as const;
 export type Platform = (typeof PLATFORMS)[number];
@@ -275,6 +288,7 @@ export function canStartPublish(
   switch (post.status) {
     case "pending":
     case "failed":
+    case "partly_posted": // a run continues the half-posted thread
       return { ok: true };
     case "needs_review":
       return approve ? { ok: true } : { ok: false, reason: "Held for review. Read it, then run publish:approvePost." };
@@ -290,12 +304,19 @@ export function canStartPublish(
 
 export type PublicationState = { platform: string; status: string; claimedAt?: number; externalId?: string };
 
+/** A claim refusal; `becomes`: the claim mutation sets the row to this status (a stale claim). */
+export type PublicationClaim = ClaimCheck | { ok: false; reason: string; becomes: "maybe_posted" };
+
+export const STALE_POSTING_MESSAGE =
+  "A run stopped while posting (no answer for 15 minutes), so it may be out: check his profile, then run publish:retryPublication with approve: true.";
+
 /**
- * May this run take the platform row and post? One run at a time; a claim older than
- * STALE_CLAIM_MS can be retaken; maybe_posted only with approve (a person checked first);
- * LinkedIn `pending` with a workflow id is waiting on LinkedAPI.
+ * May this run take the platform row and post? One run at a time; maybe_posted only with
+ * approve (a person checked first); LinkedIn `pending` with a workflow id is waiting on LinkedAPI.
+ * A claim older than STALE_CLAIM_MS: Bluesky retakes it (the retry looks in his repo first);
+ * Reddit and LinkedIn can't check, so the row becomes maybe_posted.
  */
-export function canClaimPublication(row: PublicationState, now: number, approve: boolean, postRemoved: boolean): ClaimCheck {
+export function canClaimPublication(row: PublicationState, now: number, approve: boolean, postRemoved: boolean): PublicationClaim {
   if (postRemoved) return { ok: false, reason: "Taken down (removedAt is set): not posting it." };
   switch (row.status) {
     case "pending":
@@ -310,8 +331,10 @@ export function canClaimPublication(row: PublicationState, now: number, approve:
         ? { ok: true }
         : { ok: false, reason: "It may already be posted. Check his profile, then run publish:retryPublication with approve: true." };
     case "posting":
-      if (row.claimedAt !== undefined && now - row.claimedAt > STALE_CLAIM_MS) return { ok: true };
-      return { ok: false, reason: "Another run is posting this right now." };
+      if (row.claimedAt === undefined || now - row.claimedAt <= STALE_CLAIM_MS) {
+        return { ok: false, reason: "Another run is posting this right now." };
+      }
+      return row.platform === "bluesky" ? { ok: true } : { ok: false, reason: STALE_POSTING_MESSAGE, becomes: "maybe_posted" };
     case "posted":
       return { ok: false, reason: "Already posted." };
     case "removing":
@@ -335,31 +358,56 @@ export function mayBeOut(outcome: PlatformOutcome): boolean {
   return outcome.status !== "failed" || Boolean(outcome.records?.length);
 }
 
-/** posts.status from its platform rows (+ a short error naming the platforms that didn't post). */
+/** A row that didn't finish but has posts out: a Bluesky thread that stopped partway. */
+export function isPartlyPosted(row: { status: string; records?: unknown[] }): boolean {
+  return (row.status === "failed" || row.status === "maybe_posted") && (row.records?.length ?? 0) > 0;
+}
+
+/**
+ * posts.status from its platform rows (+ a short error naming the platforms that didn't post).
+ * partly_posted: nothing finished, but part of a Bluesky thread is live (a retry continues it).
+ */
 export function overallPostStatus(
-  rows: { platform: string; status: string; error?: string; externalId?: string }[],
-): { status: "published" | "posting" | "failed"; error?: string } {
+  rows: { platform: string; status: string; error?: string; externalId?: string; records?: unknown[] }[],
+): { status: "published" | "posting" | "partly_posted" | "failed"; error?: string } {
   const label = (p: string) => PLATFORM_LABEL[p as Platform] ?? p;
+  const what = (r: (typeof rows)[number]) =>
+    isPartlyPosted(r)
+      ? r.status === "maybe_posted" ? "partly posted, maybe more: check first" : "partly posted"
+      : r.status === "maybe_posted" ? "maybe posted, check first" : "failed";
   const problems = rows
     .filter((r) => r.status === "failed" || r.status === "maybe_posted")
-    .map((r) => `${label(r.platform)}: ${r.status === "maybe_posted" ? "maybe posted, check first" : "failed"}${r.error ? ` (${r.error})` : ""}`);
+    .map((r) => `${label(r.platform)}: ${what(r)}${r.error ? ` (${r.error})` : ""}`);
   const error = problems.length ? problems.join("; ").slice(0, 600) : undefined;
   if (rows.some((r) => r.status === "posted")) return { status: "published", ...(error ? { error } : {}) };
   if (rows.some((r) => r.status === "posting" || (r.status === "pending" && r.platform === "linkedin" && r.externalId))) {
     return { status: "posting", ...(error ? { error } : {}) };
   }
+  if (rows.some(isPartlyPosted)) return { status: "partly_posted", error };
   if (problems.length) return { status: "failed", error };
   return { status: "failed", error: "Nowhere to post: no platform is set up (connect his Bluesky account), then run publish:publishPost." };
 }
 
-/** retryPublication: only rows that didn't post, on a post that went through publishing. */
-export function canRetry(post: { status: string; removedAt?: number }, row: { status: string }): ClaimCheck {
+export const NOT_CHECKED_MESSAGE =
+  "This post was never fact-checked (nothing was set up to post to when it ran): run publish:publishPost, which checks it first.";
+
+/**
+ * retryPublication: only rows that didn't post, on a post that went through publishing and was
+ * cleared by the fact-check (guardCleared). repoll: a LinkedIn row LinkedAPI accepted whose
+ * status checks stopped: check it again (nothing is sent).
+ */
+export function canRetry(
+  post: { status: string; removedAt?: number; guardPassedAt?: number; guardIssues?: string[] },
+  row: { platform?: string; status: string; externalId?: string },
+): { ok: true; repoll?: true } | { ok: false; reason: string } {
   if (post.removedAt !== undefined) return { ok: false, reason: "Taken down (removedAt is set): not posting it." };
   if (post.status === "needs_review") return { ok: false, reason: "The post is held for review: run publish:approvePost." };
   if (post.status === "pending") return { ok: false, reason: "Not published yet: run publish:publishPost." };
+  if (row.platform === "linkedin" && row.status === "pending" && row.externalId) return { ok: true, repoll: true };
   if (!["failed", "maybe_posted", "skipped"].includes(row.status)) {
     return { ok: false, reason: `This platform is "${row.status}"; only failed, maybe_posted or skipped rows are retried.` };
   }
+  if (!guardCleared(post)) return { ok: false, reason: NOT_CHECKED_MESSAGE };
   return { ok: true };
 }
 
@@ -370,10 +418,11 @@ export type PublishDeps = {
   load(): Promise<{ status: string; removedAt?: number; heldFor?: HeldFor } | null>;
   /** Which platforms are on for him. */
   platforms(): Promise<Record<Platform, boolean>>;
+  /** Take the post. A person approving a fact-check hold also clears it (guardPassedAt). */
   claimPost(approve: boolean): Promise<ClaimCheck>;
   /** The fact-check (fail closed: a crash returns a failing result). */
   guard(): Promise<GuardResult>;
-  /** Save the guard result; hold = needs_review, posted nowhere. */
+  /** Save the guard result; hold = needs_review, posted nowhere; else guardPassedAt. */
   saveGuard(guard: GuardResult, hold: boolean): Promise<void>;
   /** The row for this platform (created if missing); a disabled platform's pending row becomes skipped. */
   ensureRow(platform: Platform, enabled: boolean): Promise<{ id: string }>;
@@ -428,7 +477,7 @@ export async function runPublish(deps: PublishDeps, approve: boolean): Promise<P
   if (!claim.ok) return { status: post.status, reason: claim.reason };
 
   const enabled = await deps.platforms();
-  if (PLATFORMS.some((p) => enabled[p]) && shouldRunGuard(approve, post.heldFor)) {
+  if (PLATFORMS.some((p) => enabled[p]) && shouldRunGuard(post, approve)) {
     const guard = await deps.guard();
     const hold = guardDecision(guard) === "hold";
     await deps.saveGuard(guard, hold);

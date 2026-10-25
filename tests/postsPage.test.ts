@@ -87,3 +87,25 @@ test("statusLabel follows the real state: a post that went out is never 'Saved (
   assert.equal(statusLabel({ status: "pending" }), "Saved (not posted)");
   assert.equal(statusLabel({ status: "needs_review", heldFor: "quality" }), "Held: below the quality bar");
 });
+
+test("a half-posted thread shows as partly posted, never just 'Failed'", async () => {
+  const { statusLabel, publicationLabel } = await import("../convex/lib/postsPage.ts");
+  const half = { id: "a", platform: "bluesky", status: "failed", posts: 2, error: "Bluesky post HTTP 400. Posted 2 of 4; a retry continues the thread." };
+  assert.equal(statusLabel({ status: "partly_posted", publications: [half] }), "Partly posted");
+  assert.equal(statusLabel({ status: "failed", publications: [half] }), "Partly posted", "older rows saved it as failed");
+  assert.equal(statusLabel({ status: "failed", publications: [{ id: "a", platform: "bluesky", status: "failed" }] }), "Failed");
+  assert.equal(publicationLabel(half), "Partly posted (2 posts out)");
+  assert.match(publicationLabel({ ...half, status: "maybe_posted" }), /maybe more: check his profile/);
+  const html = renderPostsPage([{ ...post, status: "partly_posted", publications: [half] }], { key: "k" });
+  assert.match(html, /Partly posted \(2 posts out\)/);
+  assert.match(html, /publish:retryPublication/);
+  assert.doesNotMatch(html, />Failed</);
+});
+
+test("a thread-fit hold is labelled as one, not as a quality hold", async () => {
+  const { statusLabel } = await import("../convex/lib/postsPage.ts");
+  assert.equal(statusLabel({ status: "needs_review", heldFor: "thread_fit" }), "Held: too long for a Bluesky thread");
+  const html = renderPostsPage([{ ...post, heldFor: "thread_fit" }], { key: "k" });
+  assert.match(html, /Held: too long for a Bluesky thread/);
+  assert.doesNotMatch(html, /below the quality bar/);
+});
