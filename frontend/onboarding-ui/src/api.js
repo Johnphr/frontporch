@@ -62,8 +62,10 @@ export const signupApi = {
   register: (name, phone, language) => call('mutation', 'register', { name, phone, language }),
   setCharacter: (elderId, characterId) => call('mutation', 'setCharacter', { elderId, characterId }),
   setLinkedin: (elderId, url) => call('mutation', 'setLinkedin', { elderId, url }),
-  /** { ok: true } | { ok: false, reason: 'disabled' | 'rate_limited' | 'failed', message } */
+  /** { ok: true, callId } | { ok: false, reason: 'disabled' | 'rate_limited' | 'already_onboarded' | 'failed', message, callId? } */
   requestCall: (elderId) => call('action', 'requestCall', { elderId }),
+  /** { state, canRetry, retryAt? } for the call requestCall placed (convex/lib/callStatus.ts states) */
+  callStatus: (callId) => call('query', 'callStatus', { callId }),
 }
 
 // SMS verification: the backend has none yet (App.jsx VERIFY_PHONE = false skips this step).

@@ -131,6 +131,6 @@ test("hasOpenCall: queued / in_progress calls from the last hour block a new one
   assert.equal(hasOpenCall([{ status: "done", _creationTime: NOW - 1000 }], NOW), false);
   assert.equal(hasOpenCall([{ status: "failed", _creationTime: NOW - 1000 }], NOW), false);
   assert.equal(hasOpenCall([{ status: "in_progress", _creationTime: NOW - OPEN_CALL_WINDOW_MS - 1 }], NOW), false);
-  // the window outlasts the whole poll budget (2 min + 59 x 1 min)
+  // the window outlasts the whole poll budget (9 x 20 s + 58 x 1 min, ~61 min)
   assert.ok(OPEN_CALL_WINDOW_MS > 62 * 60_000);
 });

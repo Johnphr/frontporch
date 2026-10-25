@@ -343,7 +343,7 @@ export const attachCallId = internalMutation({
       cartesiaCallId,
       ...(row.cartesiaCallId && !row.cartesiaConversationId ? { cartesiaConversationId: row.cartesiaCallId } : {}),
       status: "in_progress",
-      pollAttempts: 0,
+      pollAttempts: 0, endedAt: undefined, // re-opened: callLoop waits for this call again
     });
     await ctx.scheduler.runAfter(0, internal.cartesia.pollCall, { callId });
     return { attached: true };

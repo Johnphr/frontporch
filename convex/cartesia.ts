@@ -145,12 +145,12 @@ export const markStartFailed = internalMutation({
   handler: async (ctx, { callId, status, error }) => {
     const call = await ctx.db.get(callId);
     if (!call || call.status !== "queued") return;
-    await ctx.db.patch(callId, { status, error });
+    await ctx.db.patch(callId, { status, error, endedAt: Date.now() });
   },
 });
 
 const pollOutcome = v.union(
-  v.object({ kind: v.literal("pending") }),
+  v.object({ kind: v.literal("pending"), liveStatus: v.optional(v.string()) }),
   v.object({ kind: v.literal("fatal"), error: v.string() }),
   v.object({ kind: v.literal("timeout") }),
   v.object({
@@ -309,7 +309,7 @@ export const pollCall = internalAction({
         outcome = { kind: "fatal", error: httpError(res) };
       } else if (http === "retry" || !isCallFinished(res.json)) {
         if (http === "ok") console.log(`cartesia.pollCall: call ${callId} still "${String(res.json?.status ?? "?")}"`);
-        outcome = { kind: "pending" };
+        outcome = { kind: "pending", ...(http === "ok" && typeof res.json?.status === "string" ? { liveStatus: res.json.status } : {}) };
       } else {
         const unknown = unknownRoles(res.json?.transcript);
         if (unknown.length) console.warn(`cartesia.pollCall: dropped transcript roles ${unknown.join(", ")}`);

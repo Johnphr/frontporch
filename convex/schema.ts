@@ -65,6 +65,7 @@ export default defineSchema({
     lastCallSlot: v.optional(v.string()), // "YYYY-MM-DDTHH" local slot already called
     lastBankRefreshAt: v.optional(v.number()), // epoch ms, debounces question-bank refreshes
     characterId: v.optional(v.string()), // who calls him (lib/characters.ts); missing = default for his language
+    loopRequestedAt: v.optional(v.number()), // epoch ms; when callLoop last scheduled a call (may be ahead)
   }).index("by_phone", ["phone"]),
 
   // One Cartesia agent per character (lib/characters.ts), written by cartesiaAgents.syncAgent.
@@ -109,6 +110,8 @@ export default defineSchema({
     lastPolledAt: v.optional(v.number()), // epoch ms
     processingAt: v.optional(v.number()), // epoch ms; claim, stale after 15 min
     processedAt: v.optional(v.number()), // epoch ms; set only on success
+    endedAt: v.optional(v.number()), // epoch ms; when the call ended (callLoop counts its interval from here)
+    liveStatus: v.optional(v.string()), // Cartesia status while live: created | started (sign-up page)
     // ---- v2 (Brain) ----
     plan: v.optional(v.any()), // CallPlan from conversation.planNextCall, for debugging
     // ---- inbound calls (inbound.ts) ----

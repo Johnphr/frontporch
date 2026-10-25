@@ -1,4 +1,4 @@
-// Sign-up page API (public): sign up -> choose a character -> optional LinkedIn -> first call.
+// Sign-up page API (public): sign up -> choose a character -> optional LinkedIn -> first call -> its status.
 // These are the only public functions: anyone with the deployment URL can call them, so they
 // return only ids, characters and ok/reason results (never elder rows or transcripts), and
 // validate every argument. Rules live in lib/signupRules.ts (unit-tested).
@@ -14,6 +14,7 @@ import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { action, internalQuery, mutation, query } from "./_generated/server";
+import { callState, retryOffer, type CallState } from "./lib/callStatus";
 import { getCharacter, publicCharacters, type Character } from "./lib/characters";
 import { planNextCall } from "./lib/onboarding";
 import {
@@ -31,8 +32,8 @@ import { asElderV2 } from "./lib/v2Fields";
 declare const process: { env: Record<string, string | undefined> };
 
 type CallRequest =
-  | { ok: true }
-  | { ok: false; reason: "disabled" | "rate_limited" | "failed"; message: string };
+  | { ok: true; callId: Id<"calls"> }
+  | { ok: false; reason: "disabled" | "rate_limited" | "already_onboarded" | "failed"; message: string; callId?: Id<"calls"> };
 
 const DISABLED = "Calls from the sign-up page are turned off for now.";
 const FAILED = "We couldn't start the call. Please try again later.";
@@ -128,18 +129,56 @@ export const requestCall = action({
       return { ok: false, reason: "disabled", message: DISABLED };
     }
     if (!check.onboarding) {
-      return { ok: false, reason: "failed", message: "Your first call is done; your weekly calls are scheduled." };
+      return { ok: false, reason: "already_onboarded", message: "Your first call is done." };
     }
     const limit = callRateLimit(check.callTimes, Date.now());
     if (!limit.ok) return { ok: false, reason: "rate_limited", message: limit.message };
     try {
       const result = await ctx.runAction(internal.cartesia.startCall, { elderId });
-      if (result.status === "started") return { ok: true };
+      if (result.status === "started") return { ok: true, callId: result.callId as Id<"calls"> };
       console.warn(`signup.requestCall: elder ${elderId} not called (${result.status})`);
+      // The row exists: the page can show what happened (callStatus).
+      if (result.status === "failed") return { ok: false, reason: "failed", message: FAILED, callId: result.callId as Id<"calls"> };
     } catch {
       // Fixed text: the error can name env vars or quote Cartesia's response.
       console.warn(`signup.requestCall: elder ${elderId} startCall threw`);
     }
     return { ok: false, reason: "failed", message: FAILED };
+  },
+});
+
+const STATUS_WINDOW_MS = 3 * 60 * 60_000;
+
+/**
+ * The sign-up page's view of the call it asked for: a friendly state (lib/callStatus.ts) and
+ * whether "Try again" is allowed yet. Keyed by the callId requestCall returned, and only for a
+ * call made in the last 3 hours, so it never exposes his later calls. No transcript, no phone.
+ */
+export const callStatus = query({
+  args: { callId: v.id("calls") },
+  handler: async (ctx, { callId }): Promise<{ state: CallState; canRetry: boolean; retryAt?: number }> => {
+    const now = Date.now();
+    const call = await ctx.db.get(callId);
+    if (!call || now - call._creationTime > STATUS_WINDOW_MS) return { state: "none", canRetry: false };
+    const state = callState(call, now);
+    const row = await ctx.db.get(call.elderId);
+    const elder = asElderV2(row);
+    if (!row || !elder) return { state, canRetry: false };
+    const recent = await ctx.db
+      .query("calls")
+      .withIndex("by_elder", (q) => q.eq("elderId", call.elderId))
+      .order("desc")
+      .take(CALLS_PER_DAY);
+    const mode = process.env.PUBLIC_CALLS;
+    return {
+      state,
+      ...retryOffer(state, {
+        createdAt: call._creationTime,
+        onboarding: planNextCall(elder).kind === "onboarding",
+        callsOn: (mode === "on" || mode === "all") && publicCallAllowed(mode, process.env.CALL_ALLOWLIST, row.phone),
+        callTimes: recent.map((c) => c._creationTime),
+        now,
+      }),
+    };
   },
 });
