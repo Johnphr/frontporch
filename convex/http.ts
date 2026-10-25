@@ -3,10 +3,11 @@ import { internal } from "./_generated/api";
 import { httpAction } from "./_generated/server";
 import { LOOKUP_PATH, lookupErrorResponse, parseLookupRequest, verifyBearer } from "./lib/inbound";
 import { servePostsPage } from "./postsPage";
+import { xOAuthCallback } from "./xAuth";
 
 // Served at https://<deployment>.convex.site. Cartesia transcripts are polled (cartesia.pollCall)
-// until Cartesia ships call webhooks. Routes: the inbound agent's lookup_caller tool and the
-// temporary posts page. This file must keep a default-exported router. Env: CARTESIA_TOOL_SECRET.
+// until Cartesia ships call webhooks. Routes: the inbound agent's lookup_caller tool, the X
+// OAuth callback and the temporary posts page. This file must keep a default-exported router. Env: CARTESIA_TOOL_SECRET.
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -41,5 +42,9 @@ http.route({
     }
   }),
 });
+
+// GET /oauth/x/callback?code&state: X sends him back here after Connect (xAuth.ts).
+// Must match the callback URL in the X app settings: https://<deployment>.convex.site/oauth/x/callback
+http.route({ path: "/oauth/x/callback", method: "GET", handler: xOAuthCallback });
 
 export default http;
