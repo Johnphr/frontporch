@@ -223,14 +223,22 @@ export function parseWorkflowResult(result: any): WorkflowOutcome {
 
 // ---------- auto-post switch ----------
 
+let warnedAutoPost = false; // the unknown-value warning, once per process
+
 /**
- * AUTO_POST env -> post right after the call or not. Default on (the locked auto-post
- * decision); "off" / "false" / "0" / "no" keeps the post as a `pending` row for preview
- * until someone posts it on purpose (publish:publishPost).
+ * AUTO_POST env -> post right after the call or not. On when unset or empty (the locked
+ * auto-post decision), or "on" / "true" / "1" / "yes". Anything else is off (with one warning):
+ * the post stays a `pending` row for preview until someone posts it on purpose
+ * (publish:publishPost). A typo never turns posting on.
  */
 export function parseAutoPost(value: string | undefined): boolean {
   const v = (value ?? "").trim().toLowerCase();
-  return !["off", "false", "0", "no"].includes(v);
+  if (v === "" || ["on", "true", "1", "yes"].includes(v)) return true;
+  if (!["off", "false", "0", "no"].includes(v) && !warnedAutoPost) {
+    warnedAutoPost = true;
+    console.warn("AUTO_POST has an unknown value: treated as off (use on or off).");
+  }
+  return false;
 }
 
 // ---------- platform switches ----------

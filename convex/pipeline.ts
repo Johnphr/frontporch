@@ -17,7 +17,7 @@
 //                    bar (heldFor "quality") or too long for a 5-post Bluesky thread ("thread_fit")
 //                    -> needs_review, not posted; else publish.publishPost (Bluesky thread,
 //                    Reddit when on, LinkedIn when on) is scheduled in the same mutation, only
-//                    for a new row and only when AUTO_POST isn't "off" (off = saved, not posted)
+//                    for a new row and only when AUTO_POST is on (else saved, not posted)
 //          reply     threadReplies.draftForCall (scheduled; only when the question came from
 //                    a Bluesky thread, or Reddit once REDDIT_POSTING is on)
 //          plan      conversation.refreshQuestionBank (scheduled)
@@ -51,7 +51,7 @@ import { threadFitProblem } from "./lib/blueskyThread";
 import { parseAutoPost } from "./lib/postFlow";
 import { MIN_POST_BUDGET_MS, holdDecision, postBudgetMs } from "./lib/postQuality";
 import { postLanguage } from "./publish";
-import { CALL_REASON, detectTakeDown, type TakeDownHow } from "./lib/undo";
+import { CALL_REASON, detectTakeDown, holdReason, postRemovalPatch, type TakeDownHow } from "./lib/undo";
 import { postQuality } from "./schema";
 
 // Convex exposes env vars on process.env (declared so we don't need @types/node).
@@ -119,7 +119,8 @@ export const saveProfile = internalMutation({
  * the language it goes out in (publish.postLanguage, saved on posts.language), and whether it's
  * held (lib/postQuality.holdDecision: below the quality bar, or too long for a Bluesky thread
  * in that language). A new post that isn't held is scheduled to publish in this same mutation
- * (unless AUTO_POST=off), so a saved post is never left unscheduled.
+ * (unless AUTO_POST=off), so a saved post is never left unscheduled. A take-down on this call
+ * (calls.takeDown) saves it already taken down (removedAt + a "held:" reason), not scheduled.
  */
 export const insertPost = internalMutation({
   args: {
@@ -141,6 +142,9 @@ export const insertPost = internalMutation({
     if (existing) return { postId: existing._id, created: false };
     const language = postLanguage(await ctx.db.get(args.elderId));
     const hold = holdDecision(args.quality, threadFitProblem(args.text, language));
+    // He asked for a take-down on this call (calls.takeDown): saved already held, never scheduled.
+    // holdOwnPost stays as the backstop.
+    const takeDown = (await ctx.db.get(args.callId))?.takeDown;
     const postId = await ctx.db.insert("posts", {
       elderId: args.elderId,
       callId: args.callId,
@@ -149,7 +153,9 @@ export const insertPost = internalMutation({
       status: hold ? "needs_review" : "pending",
       ...(args.quality ? { quality: args.quality } : {}),
       ...(hold ? { heldFor: hold.heldFor, guardSummary: hold.summary } : {}),
+      ...(takeDown ? postRemovalPatch({}, holdReason(takeDown.how), Date.now()) : {}),
     });
+    if (takeDown) return { postId, created: true, scheduled: false };
     if (hold) return { postId, created: true, held: hold.heldFor };
     // AUTO_POST=off (tests): keep the row `pending` (see it on /posts), post on purpose.
     const scheduled = parseAutoPost(process.env.AUTO_POST);

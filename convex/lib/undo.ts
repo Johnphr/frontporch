@@ -22,6 +22,7 @@
 
 import type { DeleteOutcome } from "./blueskyDelete.ts";
 import type { FetchFn } from "./blueskyClient.ts";
+import { recoverThreadRecords, type ListedPost } from "./blueskyThread.ts";
 import type { RedditLogin } from "./logins.ts";
 import { KEEP_UP_LINE, TAKE_DOWN_LINE, TODAY_LINE } from "./prompts/principles.ts";
 import { redditToken } from "./replyPosting.ts";
@@ -211,10 +212,44 @@ export function claimPatch(step: Step, now: number, manualNote = MANUAL_NOTE): R
   }
 }
 
+/** A delete's outcome; `manual`: we couldn't find what to delete, a person checks (not retried). */
+export type RemoveOutcome = DeleteOutcome | { ok: false; error: string; manual: true };
+
 /** Row patch after the platform delete. */
-export function finishPatch(previous: RestoreStatus, outcome: DeleteOutcome, now: number): Record<string, unknown> {
+export function finishPatch(previous: RestoreStatus, outcome: RemoveOutcome, now: number): Record<string, unknown> {
   if (outcome.ok) return { status: "removed", removedAt: now, claimedAt: undefined, error: undefined };
+  if ("manual" in outcome) return { status: previous, claimedAt: undefined, error: outcome.error.slice(0, 200) };
   return { status: previous, claimedAt: undefined, error: `Take-down failed: ${outcome.error}`.slice(0, 200) };
+}
+
+export const BLUESKY_NOT_FOUND_NOTE =
+  "May have gone out with no Bluesky post ids saved, and it isn't in his recent posts: check his profile, remove it by hand, then run undo:markRemovedByHand.";
+
+/**
+ * A Bluesky row that went out (or may have) with no records saved: look in his repo for the
+ * thread (lib/blueskyThread.recoverThreadRecords, only posts made after `since` = the row's
+ * creation), and delete what's there. Nothing found -> manual (check his profile).
+ */
+export async function deleteUnsavedBluesky(
+  d: { list(): Promise<ListedPost[]>; remove(uris: string[]): Promise<DeleteOutcome> },
+  texts: string[] | undefined,
+  since: number | undefined,
+): Promise<RemoveOutcome> {
+  if (!texts?.length) return { ok: false, error: BLUESKY_NOT_FOUND_NOTE, manual: true };
+  let listed: ListedPost[];
+  try {
+    listed = await d.list();
+  } catch {
+    return { ok: false, error: "Couldn't read his Bluesky posts to look for it." };
+  }
+  const found = recoverThreadRecords(listed, texts, [], since);
+  if (!found.length) return { ok: false, error: BLUESKY_NOT_FOUND_NOTE, manual: true };
+  return d.remove(found.map((r) => r.uri));
+}
+
+/** Needs the repo lookup above: a Bluesky delete with no post ids. */
+export function needsBlueskyLookup(e: { platform: string; step: Step; uris?: string[] }): boolean {
+  return e.platform === "bluesky" && e.step.kind === "delete" && !e.uris?.length;
 }
 
 /** A finish only applies to the claim this run made (a stale claim may have been retaken). */
@@ -233,19 +268,27 @@ export type Entry = {
   uris?: string[]; // Bluesky / Threads / X: every post of the thread, root first
   externalId?: string; // Reddit fullname
   claimedAt?: number; // delete steps: the claim this run made
+  since?: number; // Bluesky delete with no ids: the row's creation (look in his repo after it)
 };
 
-export type RemovalResult = { removed: string[]; failed: string[]; manual: string[]; waiting: string[] };
+/** removed: taken down (now or earlier); cleared: never went out, marked removed. */
+export type RemovalResult = { removed: string[]; cleared: string[]; failed: string[]; manual: string[]; waiting: string[] };
 
-export const EMPTY_RESULT: RemovalResult = { removed: [], failed: [], manual: [], waiting: [] };
+export const EMPTY_RESULT: RemovalResult = { removed: [], cleared: [], failed: [], manual: [], waiting: [] };
 
 export function mergeResults(a: RemovalResult, b: RemovalResult): RemovalResult {
   return {
     removed: [...a.removed, ...b.removed],
+    cleared: [...(a.cleared ?? []), ...(b.cleared ?? [])],
     failed: [...a.failed, ...b.failed],
     manual: [...a.manual, ...b.manual],
     waiting: [...a.waiting, ...b.waiting],
   };
+}
+
+/** An already-removed row: did something of it go out (ids, or a LinkedIn link)? */
+function wentOutBefore(e: Entry): boolean {
+  return Boolean(e.uris?.length || e.externalId || (e.platform === "linkedin" && e.url));
 }
 
 function label(e: { platform: string; url?: string }): string {
@@ -254,27 +297,29 @@ function label(e: { platform: string; url?: string }): string {
 
 export type RunDeps = {
   /** Delete on the platform (only called for "delete" entries). */
-  remove(entry: Entry): Promise<DeleteOutcome>;
+  remove(entry: Entry): Promise<RemoveOutcome>;
   /** Record the outcome on the row. */
-  finish(entry: Entry & { step: { kind: "delete"; previous: RestoreStatus } }, outcome: DeleteOutcome): Promise<void>;
+  finish(entry: Entry & { step: { kind: "delete"; previous: RestoreStatus } }, outcome: RemoveOutcome): Promise<void>;
 };
 
 /**
  * Delete what was claimed and sort every row into the result:
- *   removed  gone (now, earlier, or never went out)
+ *   removed  taken down (now or earlier)
+ *   cleared  never went out: marked removed, nothing to delete
  *   failed   the platform delete failed; the row is back to its previous status
- *   manual   a person has to remove it by hand (LinkedIn, or no id to delete by)
+ *   manual   a person has to remove it by hand (LinkedIn, no id to delete by, or not found)
  *   waiting  in flight; removed when that finishes
  */
 export async function runRemoval(entries: Entry[], deps: RunDeps): Promise<RemovalResult> {
-  const out: RemovalResult = { removed: [], failed: [], manual: [], waiting: [] };
+  const out: RemovalResult = { removed: [], cleared: [], failed: [], manual: [], waiting: [] };
   for (const e of entries) {
     const step = e.step;
-    if (step.kind === "already_removed" || step.kind === "mark_removed") out.removed.push(label(e));
+    if (step.kind === "mark_removed") out.cleared.push(label(e));
+    else if (step.kind === "already_removed") (wentOutBefore(e) ? out.removed : out.cleared).push(label(e));
     else if (step.kind === "manual") out.manual.push(label(e));
     else if (step.kind === "wait") out.waiting.push(`${label(e)} (${step.reason})`);
     else {
-      let outcome: DeleteOutcome;
+      let outcome: RemoveOutcome;
       try {
         outcome = await deps.remove(e);
       } catch {
@@ -282,6 +327,7 @@ export async function runRemoval(entries: Entry[], deps: RunDeps): Promise<Remov
       }
       await deps.finish({ ...e, step }, outcome);
       if (outcome.ok) out.removed.push(label(e));
+      else if ("manual" in outcome) out.manual.push(label(e));
       else out.failed.push(`${label(e)}: ${outcome.error}`);
     }
   }
@@ -314,6 +360,7 @@ export type PubRow = {
   records?: Array<{ uri: string; cid: string }>;
   externalId?: string;
   claimedAt?: number;
+  _creationTime?: number;
 };
 
 /**
@@ -332,7 +379,7 @@ export function planPostRemoval(
     const step = publicationStep(row, now);
     const patch = claimPatch(step, now);
     if (patch) rowPatches.push({ id: row._id, patch });
-    entries.push({
+    const entry: Entry = {
       id: row._id,
       platform: row.platform,
       ...(row.url ? { url: row.url } : {}),
@@ -340,7 +387,9 @@ export function planPostRemoval(
       ...(row.records?.length ? { uris: row.records.map((r) => r.uri) } : {}),
       ...(row.externalId ? { externalId: row.externalId } : {}),
       ...(step.kind === "delete" ? { claimedAt: now } : {}),
-    });
+    };
+    if (needsBlueskyLookup(entry) && row._creationTime !== undefined) entry.since = row._creationTime;
+    entries.push(entry);
   }
   const legacy = legacyLinkedinEntry(post, rows);
   if (legacy) entries.push(legacy);
@@ -349,9 +398,11 @@ export function planPostRemoval(
 
 /** One line for logs and the command's output (no post text). */
 export function summaryLine(r: RemovalResult): string {
-  if (!r.removed.length && !r.failed.length && !r.manual.length && !r.waiting.length) return "nothing to remove";
+  const cleared = r.cleared ?? [];
+  if (!r.removed.length && !cleared.length && !r.failed.length && !r.manual.length && !r.waiting.length) return "nothing to remove";
   const parts = [
     r.removed.length ? `${r.removed.length} removed` : "",
+    cleared.length ? `${cleared.length} never went out` : "",
     r.failed.length ? `${r.failed.length} failed` : "",
     r.manual.length ? `${r.manual.length} to remove by hand` : "",
     r.waiting.length ? `${r.waiting.length} waiting` : "",
@@ -432,9 +483,10 @@ export function publishedAt(c: LatestCandidate): number | undefined {
   }
   // Older posts published straight to LinkedIn have no publication rows.
   if (at === undefined && !c.publications.length && c.linkedinUrl && (c.status === "published" || c.status === "removed")) at = c.createdAt;
-  // Already taken down: still counts (at its creation time), so asking again never reaches back
-  // to an older post. Not a post held on its own call: that one never went out.
-  if (at === undefined && c.removedAt !== undefined && !isHoldReason(c.removedReason)) at = c.createdAt;
+  // A legacy post (no publication rows) already taken down: still counts (at its creation time),
+  // so asking again never reaches back to an older post. Not a post held on its own call. With
+  // rows, the rows decide: removed rows that never went out don't count.
+  if (at === undefined && !c.publications.length && c.removedAt !== undefined && !isHoldReason(c.removedReason)) at = c.createdAt;
   return at;
 }
 
@@ -466,13 +518,16 @@ export function pickLatestPost(
 // The phone path (pipeline.ts). Only Pip's exact lines (prompts/principles.ts) delete anything:
 //   line         Pip said TAKE_DOWN_LINE right after he asked for a take-down (in one of his
 //                last two turns): his most recent earlier post comes down; this call's is held
-//   today        Pip said TODAY_LINE right after he asked: this call's post is held
-//   unconfirmed  he clearly asked in his own words, but Pip said no line: nothing is deleted;
-//                this call's post is held and the call is flagged for family (calls.takeDown)
-// A retraction later in the call ("leave it up", "never mind", "déjela", Pip's KEEP_UP_LINE)
-// cancels everything before it. Stories ("take down the post on the wall"), past tense
-// ("borré las historias"), questions about what Pip can do ("can you delete posts?"), quotes
-// ("take down that story, he said") and refusals ("no quiero que la quite") are not requests.
+//   today        Pip said TODAY_LINE (anywhere): this call's post is held
+//   unconfirmed  nothing is deleted; this call's post is held and the call is flagged for
+//                family (calls.takeDown). Either he clearly asked in his own words but Pip said
+//                no line, or Pip said TAKE_DOWN_LINE with no ask we could spot right before it.
+// Once Pip said TAKE_DOWN_LINE or TODAY_LINE, only Pip's KEEP_UP_LINE cancels it. His own
+// retraction ("I changed my mind", "leave it up", "déjela publicada") cancels only an ask Pip
+// didn't confirm, and only within his next 2 turns. Stories ("take down the post on the wall"),
+// past tense ("borré las historias"), questions about what Pip can do ("can you delete
+// posts?"), quotes ("take down that story, he said") and refusals ("no quiero que la quite")
+// are not requests.
 
 export type TranscriptTurn = { role: string; text: string };
 export type TakeDownHow = "line" | "today" | "unconfirmed";
@@ -483,7 +538,7 @@ function fold(text: string): string {
   return text
     .normalize("NFC")
     .toLowerCase()
-    .replace(/\b(quit|borr|baj|elimin|retir)é(?!\p{L})/gu, "$1e_past")
+    .replace(/\b(quit|borr|baj|elimin|retir|saqu|publiqu)é(?!\p{L})/gu, "$1e_past")
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
     .replace(/[’‘]/g, "'")
@@ -516,7 +571,7 @@ const re = (source: string) => new RegExp(source, "g");
 const DET_EN = String.raw`(?:(?:the|that|this|my|last|latest|previous|recent|most recent|newest|other|last week's|last weeks|today's|todays|new)\s+){1,4}`;
 const NOUN_EN = String.raw`(?:post|story)`;
 // Spanish: usted imperative / subjunctive or infinitive (+ pronouns); never "borré" or "retiramos".
-const VERB_ES = String.raw`(?:quit|borr|baj|elimin|retir)(?:e|en|ar)(?:me|se|nos)?(?:la|lo|las|los)?`;
+const VERB_ES = String.raw`(?:(?:quit|borr|baj|elimin|retir)(?:e|en|ar)|saqu(?:e|en)|sacar)(?:me|se|nos)?(?:la|lo|las|los)?`;
 const DET_ES = String.raw`(?:(?:la|el|esa|ese|esta|este|mi|su|ultima|ultimo|nueva)\s+){1,3}`;
 // "historia" is also history or records: only with a sign it's the one we posted.
 const NOUN_ES = String.raw`(?:publicacion|post|historia(?=\s+(?:que\s+(?:me\s+|le\s+)?(?:subi|subio|subieron|public|pus|compart)|de\s+la\s+semana\s+pasada|de\s+hoy)))`;
@@ -527,13 +582,14 @@ const CLEAR = [
   re(String.raw`\b(?:take|pull)\s+${DET_EN}${NOUN_EN}\s+(?:down|off)\b`),
   re(String.raw`\b(?:take|pull)\s+${DET_EN}${NOUN_EN}\s+about\b[^.?!,]{0,40}?\s(?:down|off)\b`),
   re(String.raw`\b(?:delete|remove|unpost|unpublish|erase)\s+${DET_EN}${NOUN_EN}\b`),
+  re(String.raw`\bget rid of\s+${DET_EN}${NOUN_EN}\b`),
   re(String.raw`\b${VERB_ES}\s+${DET_ES}${NOUN_ES}\b`),
   re(String.raw`\bdar de baja\s+${DET_ES}${NOUN_ES}\b`),
 ];
 
 /** Said as a wish (no lead-in needed): "I'd like that post taken down", "ya no quiero esa publicación". */
 const WISH = [
-  re(String.raw`\b(?:want|like|need|rather have)\s+${DET_EN}${NOUN_EN}\s+(?:(?:taken|pulled|brought)\s+(?:down|off)|deleted|removed)\b`),
+  re(String.raw`\b(?:want|like|need|rather have)\s+${DET_EN}${NOUN_EN}\s+(?:(?:taken|pulled|brought)\s+(?:down|off)|deleted|removed|gone|down)\b`),
   re(String.raw`\b(?:don't|do not) want\s+${DET_EN}${NOUN_EN}\s+(?:up|online|out there|on the internet)\b`),
   re(String.raw`\bya no quiero\s+${DET_ES}${NOUN_ES}\b`),
 ];
@@ -543,26 +599,29 @@ const VAGUE = [
   /\b(?:take|pull|bring)\b[^.?!]{0,30}?\b(?:down|off)\b/g,
   /\b(?:delete|remove|erase|unpost|unpublish)\b/g,
   /\b(?:don't|do not) (?:post|put up|share|publish) (?:it|that|this|today's story|the story|that story)\b/g,
+  /\b(?:don't|do not) put (?:it|that|this|today's story|the story|that story) (?:up|online|out there|on the internet|on (?:bluesky|threads|x|facebook|social media))\b/g,
+  /\b(?:rather|prefer) (?:you |we |they )?(?:not|didn't|did not|don't) (?:post|put up|share|publish)\b/g,
+  /\bget rid of (?:it|that|that one|this|this one)(?=\s*[,.!?]|\s*$|\s+(?:please|for me|now)\b)/g,
   /\b(?:don't|do not) want (?:it|that|that one|this|the post|that post|the story|that story|today's story) (?:up|online|out there|posted|on the internet)\b/g,
   // Spanish verb + a pronoun, article or end of phrase (so English "quite a day" isn't one)
   re(String.raw`\b${VERB_ES}(?=\s+(?:la|el|esa|ese|esta|este|mi|su|eso|por favor)\b|\s*[,.!?]|\s*$)`),
   // "¿Me borra la publicación?": the present tense, as a polite ask
   /\b(?:quit|borr|baj|elimin|retir)a\s+(?:la|el|esa|ese|mi|su)\s+(?:publicacion|post|historia)\b/g,
   /\bdar de baja\b/g,
-  /\bno (?:la|lo) (?:publique|publiquen|suba|suban)\b/g,
+  /\bno (?:(?:la|lo|me)\s+)?(?:publique|publiquen|suba|suban|ponga|pongan|comparta|compartan)\b/g,
+  /\bno quiero que (?:(?:la|lo|me)\s+)?(?:publique|publiquen|suba|suban|ponga|pongan|comparta|compartan)\b/g,
   /\bya no (?:la|lo) quiero\b/g,
 ];
 
-/** He changed his mind. */
+/** He changed his mind. Clear phrases only: bare "keep it", "never mind" or "déjelo" are not. */
 const RETRACT = [
-  /\bchanged? my mind\b/g,
-  /\bkeep it\b/g,
-  /\bleave (?:it|that|that one|the post|that post|the story|it all) up\b/g,
-  /\bnever ?mind\b/g,
+  /\b(?:i|i've|i have) changed my mind\b/g,
+  /\bleave (?:it|that|that one|the post|that post|the story|it all) (?:up|online|posted)\b/g,
+  /\bkeep (?:the|that|my) (?:post|story) up\b/g,
   /\bdon't (?:take|pull) (?:it|that|that one|the post|that post) (?:down|off)\b/g,
   /\bdon't (?:delete|remove) (?:it|that|that one|the post|that post)\b/g,
-  /\bcambie de (?:opinion|idea)\b/g,
-  /\b(?:dejela|dejala|dejelo|dejalo)\b/g,
+  /\bcambie de (?:opinion|idea|parecer)\b/g,
+  /\b(?:dejela|dejala|dejelo|dejalo|dejenla|dejenlo) (?:publicad[ao]|puest[ao]|arriba|en internet)\b/g,
   /\bno (?:la|lo|las|los) (?:quite|quiten|borre|borren|baje|bajen|retire|retiren|elimine|eliminen)\b/g,
 ];
 
@@ -636,10 +695,11 @@ export function readElderTurn(raw: string): { ask: number; clear: number; retrac
   const usable = (before: string, after: string) => !negated(before) && !reported(before, after);
   const clear = Math.max(
     lastHit(text, CLEAR, (b, a) => usable(b, a) && framed(b) && tailOk(a)),
-    lastHit(text, WISH, (b, a) => !reported(b, a) && tailOk(a)),
+    lastHit(text, WISH, (b, a) => !negated(b) && !reported(b, a) && tailOk(a)),
   );
   const ask = Math.max(clear, lastHit(text, VAGUE, usable));
-  const retract = lastHit(text, RETRACT, () => true);
+  // Not someone else's words ("déjalo, mijo", he said).
+  const retract = lastHit(text, RETRACT, (b, a) => !reported(b, a));
   return { ask, clear, retract };
 }
 
@@ -648,47 +708,61 @@ export function readElderTurn(raw: string): { ask: number; clear: number; retrac
  * Pip's; returns no text.
  */
 export function detectTakeDown(turns: TranscriptTurn[]): TakeDown {
-  let line = false;
-  let today = false;
-  let clear = false;
+  let line = false; // Pip's take-down line right after he asked
+  let lineAlone = false; // Pip's take-down line with no ask right before it: hold only
+  let today = false; // Pip's today line
+  let clear = false; // a clear ask in his own words, not confirmed
   let elderTurns = 0;
   let askedOnTurn = -10; // his turn number with the latest ask still standing
-  const reset = () => {
-    line = today = clear = false;
-    askedOnTurn = -10;
-  };
+  let clearOnTurn = -10; // ... and with the latest clear one
   for (const t of turns) {
     if (t.role === "elder") {
       elderTurns += 1;
       const r = readElderTurn(t.text);
-      if (r.retract > r.ask) {
-        reset();
-        continue;
-      }
       if (r.ask >= 0) askedOnTurn = elderTurns;
-      if (r.clear >= 0) clear = true;
+      if (r.clear >= 0) {
+        clear = true;
+        clearOnTurn = elderTurns;
+      }
+      // His own retraction: only an ask Pip didn't confirm, and only a recent one.
+      // Pip's lines stay (only his KEEP_UP_LINE cancels them).
+      if (r.retract >= 0 && r.retract > r.ask) {
+        if (elderTurns - askedOnTurn <= RETRACT_TURNS) askedOnTurn = -10;
+        if (elderTurns - clearOnTurn <= RETRACT_TURNS) {
+          clear = false;
+          clearOnTurn = -10;
+        }
+      }
       continue;
     }
     if (t.role !== "pip") continue;
     if (saysLine(t.text, KEEP_UP_KEYS)) {
-      reset();
+      line = lineAlone = today = clear = false;
+      askedOnTurn = clearOnTurn = -10;
       continue;
     }
-    if (elderTurns - askedOnTurn > 1) continue; // a line only counts right after he asked
-    if (saysLine(t.text, TAKE_DOWN_KEYS)) line = true;
-    else if (saysLine(t.text, TODAY_KEYS)) today = true;
+    if (saysLine(t.text, TAKE_DOWN_KEYS)) {
+      // It deletes only right after he asked (one of his last two turns); otherwise it holds.
+      if (elderTurns - askedOnTurn <= 1) line = true;
+      else lineAlone = true;
+    } else if (saysLine(t.text, TODAY_KEYS)) {
+      today = true; // holding today's post is harmless
+    }
   }
   if (line) return { asked: true, how: "line" };
   if (today) return { asked: true, how: "today" };
-  if (clear) return { asked: true, how: "unconfirmed" };
+  if (clear || lineAlone) return { asked: true, how: "unconfirmed" };
   return { asked: false };
 }
+
+/** His retraction cancels an unconfirmed ask up to this many of his turns later (0 = same turn). */
+const RETRACT_TURNS = 2;
 
 /** The note on calls.takeDown, for family (no words from the call). */
 export function takeDownNote(how: TakeDownHow): string {
   if (how === "line") return "He asked to take down his most recent post and Pip confirmed: it's being taken down. This call's post is held.";
   if (how === "today") return "He asked not to post today's story: this call's post is held.";
-  return "He may have asked to take a post down, but Pip didn't confirm, so nothing was deleted. This call's post is held. Check with him; undo:removePost takes any post down.";
+  return "He may have asked to take a post down, but it wasn't clear, so nothing was deleted. This call's post is held. Check with him; undo:removePost takes any post down.";
 }
 
 /** The reason on this call's own post when it's held. */

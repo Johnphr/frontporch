@@ -108,8 +108,10 @@ export type LoopEnv = {
 };
 
 /**
- * Could a finished call post anywhere public? Yes unless AUTO_POST=off: logins are per elder
- * (Bluesky, Reddit) and thread replies post too, so env keys can't tell us it's safe.
+ * Could a finished call post anywhere public? Yes when AUTO_POST is on (lib/postFlow.parseAutoPost:
+ * unset, empty, on/true/1/yes): logins are per elder and thread replies post too, so env keys
+ * can't tell us it's safe. Any other value is off for every poster (insertPost, threadReplies),
+ * so it's off here too.
  */
 export function postingMayBeLive(env: { AUTO_POST?: string }): boolean {
   return parseAutoPost(env.AUTO_POST);

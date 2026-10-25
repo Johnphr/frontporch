@@ -6,7 +6,7 @@
 //                              Reddit AND that platform is set up. One reply per thread:
 //                              replyWriter.writeReply -> disclosure line -> postGuard.checkPost
 //                              -> row: draft | needs_review
-//                              -> postReply scheduled for "draft" when AUTO_POST isn't off
+//                              -> postReply scheduled for "draft" when AUTO_POST is on
 //   postReply({ replyId, approve? })   claim (no double replies) -> Bluesky / Reddit -> posted
 //                              (+ link) | failed (nothing went out) | maybe_posted (unclear:
 //                              check the thread, then approve:true). approve:true also posts a
