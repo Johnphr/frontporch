@@ -8,6 +8,7 @@ import {
   MIN_CRITERION,
   MINOR_PENALTY,
   PASS_SCORE,
+  UNSUPPORTED_PENALTY,
   JUDGE_RETRY_DELAY_MS,
   JUDGE_TIMEOUT_MS,
   MAX_TOTAL_CHARS,
@@ -140,9 +141,10 @@ test("evaluate: weighted score, minor penalty, pass bar", () => {
   assert.equal(minor.score, 80 - MINOR_PENALTY);
   assert.equal(minor.passed, minor.score >= PASS_SCORE);
 
-  const justBelow = evaluate(judgement(7), []);
-  assert.equal(justBelow.score, 70);
+  const justBelow = evaluate(judgement(3), []);
+  assert.equal(justBelow.score, 30);
   assert.equal(justBelow.passed, false);
+  assert.equal(PASS_SCORE, 40, "kept loose on purpose: the fact-check is the safety net");
 });
 
 test("evaluate: one weak criterion blocks a pass even with a high total", () => {
@@ -157,11 +159,26 @@ test("evaluate: a major code issue blocks a pass", () => {
   assert.equal(e.passed, false);
 });
 
-test("evaluate: unsupported facts are a hard zero", () => {
-  const e = evaluate(judgement(10, { unsupportedFacts: ["He never said 1971"] }), []);
-  assert.equal(e.score, 0);
-  assert.equal(e.passed, false);
+test("evaluate: unsupported facts cost points (not a zero) and are noted first for the rewrite", () => {
+  const e = evaluate(judgement(7, { unsupportedFacts: ["He never said 1971", "No renters"] }), []);
+  assert.equal(e.score, 70 - 2 * UNSUPPORTED_PENALTY);
+  assert.equal(e.passed, true);
+  assert.equal(e.unsupported, 2);
   assert.match(e.notes[0], /Not something he said: He never said 1971/);
+  assert.equal(evaluate(judgement(7), []).unsupported, undefined);
+});
+
+test("nextStep: a passing post with unsupported claims gets one rewrite, then goes out anyway", () => {
+  const base = { passed: true, timeLeftMs: QUALITY_BUDGET_MS, roundCostMs: ROUND_COST_MS };
+  assert.equal(nextStep({ ...base, round: 0, unsupported: 1 }), "rewrite");
+  assert.equal(nextStep({ ...base, round: MAX_REWRITE_ROUNDS, unsupported: 1 }), "done");
+  assert.equal(nextStep({ ...base, round: 0, timeLeftMs: 0, unsupported: 1 }), "done");
+});
+
+test("keepRewrite: fewer unsupported claims wins over a higher score", () => {
+  const e = (score: number, unsupported?: number) => ({ score, passed: true, scores: scores(5), notes: [], ...(unsupported ? { unsupported } : {}) });
+  assert.equal(keepRewrite(e(70, 2), e(60)), true);
+  assert.equal(keepRewrite(e(60), e(80, 1)), false);
 });
 
 test("evaluate: no judgement (judge failed) never passes", () => {
@@ -225,9 +242,9 @@ test("postBudgetMs: what's left of the 10-minute action, capped at QUALITY_BUDGE
 });
 
 test("holdDecision: below the bar -> needs_review with a summary; passed -> post as usual", () => {
-  const held = holdDecision(qualityReport(evaluate(judgement(6, { notes: ["Hook is flat"] }), []), 2));
+  const held = holdDecision(qualityReport(evaluate(judgement(3, { notes: ["Hook is flat"] }), []), 2));
   assert.equal(held?.status, "needs_review");
-  assert.match(held?.summary ?? "", /Held by the quality check: 60\/100 \(bar 75\) after 2 rewrites/);
+  assert.match(held?.summary ?? "", /Held by the quality check: 30\/100 \(bar 40\) after 2 rewrites/);
   assert.equal("issues" in (held ?? {}), false); // the notes live on posts.quality only
   assert.equal(holdDecision(qualityReport(evaluate(judgement(9), []), 0)), null);
   assert.equal(holdDecision(undefined), null);
@@ -417,9 +434,9 @@ test("runQualityLoop: a judge that never answers fails closed (held, never poste
 });
 
 test("runQualityLoop: picks the best draft, and keeps a rewrite only when it's better", async () => {
-  // The second angle's draft scores best (6, below the bar); the first rewrite scores 9 and passes.
+  // The second angle's draft scores best (3, below the bar); the first rewrite scores 9 and passes.
   const SECOND = "Angle: the hard lesson";
-  const score = (text: string) => (text.startsWith("REWRITE") ? 9 : text.startsWith(SECOND) ? 6 : 4);
+  const score = (text: string) => (text.startsWith("REWRITE") ? 9 : text.startsWith(SECOND) ? 3 : 2);
   const better = loop({ judge: async (text) => judgement(score(text)) });
   const out = await runQualityLoop(better.deps);
   assert.equal(out.skip, false);
@@ -429,7 +446,7 @@ test("runQualityLoop: picks the best draft, and keeps a rewrite only when it's b
   assert.equal(out.hold, false);
 
   // Every rewrite is worse: the best draft stays, held after MAX_REWRITE_ROUNDS.
-  const worse = loop({ judge: async (text) => judgement(text.startsWith("REWRITE") ? 3 : score(text)) });
+  const worse = loop({ judge: async (text) => judgement(text.startsWith("REWRITE") ? 1 : score(text)) });
   const held = await runQualityLoop(worse.deps);
   assert.equal(held.skip, false);
   if (held.skip) return;
@@ -442,7 +459,7 @@ test("runQualityLoop: picks the best draft, and keeps a rewrite only when it's b
 test("runQualityLoop: a failed or declined rewrite keeps the best so far", async () => {
   let r = 0;
   const { deps } = loop({
-    judge: async () => judgement(6),
+    judge: async () => judgement(3),
     rewrite: async () => (r++ === 0 ? Promise.reject(new Error("timeout")) : skip()),
   });
   const out = await runQualityLoop(deps);
@@ -461,7 +478,7 @@ test("runQualityLoop: stays inside the time budget", async () => {
 
   // Drafts take 60 s of a 150 s budget: the judges run, but a rewrite round (120 s) doesn't fit.
   const budget = MIN_POST_BUDGET_MS + 30_000;
-  const tight = loop({ budgetMs: budget, judge: async () => judgement(6) }, 0);
+  const tight = loop({ budgetMs: budget, judge: async () => judgement(3) }, 0);
   let first = true;
   const timeouts: number[] = [];
   tight.deps.draft = async (_angle, ms) => {
@@ -539,7 +556,7 @@ test("holdDecision: a post that doesn't fit a thread is held with a clear summar
 test("holdDecision: says what kind of hold it is (thread fit vs quality)", () => {
   const passed = qualityReport(evaluate(judgement(9), []), 1);
   assert.equal(holdDecision(passed, "It needs 6 posts; a thread holds at most 5.")?.heldFor, "thread_fit");
-  assert.equal(holdDecision(qualityReport(evaluate(judgement(6), []), 2))?.heldFor, "quality");
+  assert.equal(holdDecision(qualityReport(evaluate(judgement(3), []), 2))?.heldFor, "quality");
 });
 
 test("hardChecks: the thread fit uses the language it goes out in", () => {

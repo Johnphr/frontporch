@@ -34,10 +34,15 @@ export const WEIGHTS: CriterionScores = {
   clarity: 0.12, // short paragraphs, plain words, no filler, no clichés
 };
 
-/** A post passes at this score (0-100) or above... */
-export const PASS_SCORE = 75;
-/** ...and only if no single criterion is below this (a great story can't hide a dead hook). */
-export const MIN_CRITERION = 5;
+/**
+ * A post passes at this score (0-100) or above... Kept loose on purpose (team choice): a held post
+ * never goes out, and the fact-check before posting (postGuard.ts) is the real safety net.
+ */
+export const PASS_SCORE = 40;
+/** ...and only if no single criterion is below this (only a dead hook or no story at all). */
+export const MIN_CRITERION = 2;
+/** Points off per claim the judge can't find in the call (one rewrite round tries to remove it). */
+export const UNSUPPORTED_PENALTY = 10;
 /** Points taken off per minor code-side issue (major issues block a pass outright). */
 export const MINOR_PENALTY = 5;
 /** Critique -> rewrite rounds on the best draft, at most. */
@@ -386,6 +391,8 @@ export type Evaluation = {
   notes: string[];
   /** False when it can't be split into a Bluesky thread (missing = fits). */
   fits?: boolean;
+  /** Claims the judge couldn't find in the call (missing = none): worth one rewrite even when it passes. */
+  unsupported?: number;
 };
 
 function clampScore(n: unknown): number {
@@ -417,27 +424,20 @@ export function evaluate(judgement: Judgement | null, issues: CheckIssue[]): Eva
   if (!judgement) {
     return { score: 0, passed: false, scores: ZERO_SCORES, notes: ["The quality check couldn't run, so it can't post on its own.", ...issueNotes], ...fit };
   }
-  if (judgement.unsupportedFacts.length) {
-    return {
-      score: 0,
-      passed: false,
-      scores: judgement.scores,
-      notes: [...judgement.unsupportedFacts.map((f) => `Not something he said: ${f}`), ...judgement.notes, ...issueNotes],
-      ...fit,
-    };
-  }
   const weighted = CRITERIA.reduce((sum, c) => sum + judgement.scores[c] * WEIGHTS[c], 0) * 10;
   const minors = issues.filter((i) => i.severity === "minor").length;
-  const score = Math.max(0, Math.round(weighted - minors * MINOR_PENALTY));
+  const unsupported = judgement.unsupportedFacts.length;
+  const score = Math.max(0, Math.round(weighted - minors * MINOR_PENALTY - unsupported * UNSUPPORTED_PENALTY));
   const weak = CRITERIA.filter((c) => judgement.scores[c] < MIN_CRITERION);
   const major = issues.some((i) => i.severity === "major");
   const passed = score >= PASS_SCORE && weak.length === 0 && !major;
   const notes = [
+    ...judgement.unsupportedFacts.map((f) => `Not something he said: ${f}`),
     ...weak.map((c) => `Weak ${c} (${judgement.scores[c]}/10).`),
     ...judgement.notes,
     ...issueNotes,
   ];
-  return { score, passed, scores: judgement.scores, notes, ...fit };
+  return { score, passed, scores: judgement.scores, notes, ...(unsupported ? { unsupported } : {}), ...fit };
 }
 
 export type Candidate = { index: number; text: string; hook: string; evaluation: Evaluation };
@@ -454,13 +454,14 @@ export function pickBest(candidates: Candidate[]): Candidate | null {
 }
 
 /**
- * After scoring the current best: stop when it passes, rewrite while rounds and time remain,
- * otherwise hold it for a person to review.
+ * After scoring the current best: stop when it passes with nothing unsupported, rewrite while
+ * rounds and time remain (also to remove unsupported claims from a passing post), otherwise
+ * post it if it passes or hold it for a person to review.
  */
-export function nextStep(a: { passed: boolean; round: number; timeLeftMs: number; roundCostMs: number }): "done" | "rewrite" | "hold" {
-  if (a.passed) return "done";
+export function nextStep(a: { passed: boolean; round: number; timeLeftMs: number; roundCostMs: number; unsupported?: number }): "done" | "rewrite" | "hold" {
+  if (a.passed && !a.unsupported) return "done";
   if (a.round < MAX_REWRITE_ROUNDS && a.timeLeftMs >= a.roundCostMs) return "rewrite";
-  return "hold";
+  return a.passed ? "done" : "hold";
 }
 
 /**
@@ -472,6 +473,8 @@ export function keepRewrite(current: Evaluation, rewritten: Evaluation): boolean
   const fitsNow = current.fits !== false;
   const fitsNew = rewritten.fits !== false;
   if (fitsNow !== fitsNew) return fitsNew;
+  const lessMadeUp = (current.unsupported ?? 0) - (rewritten.unsupported ?? 0);
+  if (lessMadeUp !== 0) return lessMadeUp > 0;
   return rewritten.score > current.score;
 }
 
@@ -592,7 +595,7 @@ export async function runQualityLoop(deps: QualityDeps): Promise<WrittenPost> {
 
   // 3. Critique -> rewrite on the best, while it's below the bar and a round fits.
   let rounds = 0;
-  while (nextStep({ passed: best.evaluation.passed, round: rounds, timeLeftMs: left(), roundCostMs: ROUND_COST_MS }) === "rewrite") {
+  while (nextStep({ passed: best.evaluation.passed, round: rounds, timeLeftMs: left(), roundCostMs: ROUND_COST_MS, unsupported: best.evaluation.unsupported }) === "rewrite") {
     rounds++;
     let revised: DraftResult;
     try {

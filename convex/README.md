@@ -344,7 +344,7 @@ optional `"language":"es-MX"`.
 short story (120-200 words, short paragraphs) whose first line works on its own as the opening
 post, so publishing can turn it into a short thread (at most 5 Bluesky posts). 3 drafts with
 different angles, a judge scores each (hook, story, voice, lesson, question, clarity, 0-10, plus
-any fact not in the call or his profile = score 0), code checks (120-200 words, under 1,250
+each fact not in the call or his profile = -10 and one rewrite to remove it), code checks (120-200 words, under 1,250
 characters in total, hook ≤200 chars, ≤2 hashtags, stock phrases, markdown or lists, closing
 question, language), then at most one critique -> rewrite round on the best (`FAST_POST=on`:
 one draft, no judge, falling back to this loop). The call is skipped
@@ -352,7 +352,8 @@ only when most of the 3 drafts decline; failed drafts never count as a skip (too
 fail the post step, which is safe to retry). A failed judge call is retried once; if it still
 fails, the post is held (fail closed). The loop is `runQualityLoop` (unit-tested with fake model
 calls).
-It passes at 75/100 with no criterion under 5. Below the bar the post is saved as
+It passes at 40/100 with no criterion under 2 (loose on purpose: the fact-check before posting is
+the safety net). Below the bar the post is saved as
 `needs_review` with the judge's notes on `posts.quality` (shown once on `/posts`) and never
 auto-posts; after a look, post it with `npx convex run publish:approvePost '{"postId":"<posts id>"}'`. Such a post
 (`heldFor: "quality"`, or `"thread_fit"` when it's too long for a 5-post Bluesky thread: shorten
