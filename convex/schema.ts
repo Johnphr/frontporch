@@ -273,10 +273,46 @@ export default defineSchema({
     // Why a needs_review post is held. "quality": never fact-checked yet, so approvePost runs
     // the guard first. "guard" (or missing, on older rows): approvePost skips it.
     heldFor: v.optional(v.union(v.literal("quality"), v.literal("guard"))),
+    // ---- undo (undo.ts): set the moment someone asks to take the post down. Publishing
+    // never posts a post with removedAt set; undo removes it from every platform it reached.
+    removedAt: v.optional(v.number()), // epoch ms
+    removedReason: v.optional(v.string()), // short note: "he asked on the call", "family request"
   })
     .index("by_elder", ["elderId"])
     .index("by_url", ["linkedinUrl"])
     .index("by_call", ["callId"]), // one post per call (pipeline idempotency)
+
+  // ---- Integrations: where each post went (publish.ts writes; undo.ts and
+  // blueskyEngagement.ts read). One row per post per platform.
+  // status: pending | posting (claimed) | posted | failed (nothing went out)
+  //       | maybe_posted (unclear: check before retrying) | skipped (platform off / no account)
+  //       | removing (undo claimed it) | removed (taken down)
+  postPublications: defineTable({
+    postId: v.id("posts"),
+    elderId: v.id("elders"),
+    platform: v.union(v.literal("bluesky"), v.literal("reddit"), v.literal("linkedin")),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("posting"),
+      v.literal("posted"),
+      v.literal("failed"),
+      v.literal("maybe_posted"),
+      v.literal("skipped"),
+      v.literal("removing"),
+      v.literal("removed"),
+    ),
+    url: v.optional(v.string()), // public link to the post (Bluesky: the first post of the thread)
+    // Bluesky: every post of the thread, in order (records[0] is the root).
+    records: v.optional(v.array(v.object({ uri: v.string(), cid: v.string() }))),
+    externalId: v.optional(v.string()), // Reddit fullname (t3_...), LinkedIn URN
+    error: v.optional(v.string()),
+    claimedAt: v.optional(v.number()), // epoch ms; stale claims (>15 min) can be retaken
+    postedAt: v.optional(v.number()), // epoch ms
+    removedAt: v.optional(v.number()), // epoch ms
+  })
+    .index("by_post", ["postId"])
+    .index("by_elder_platform", ["elderId", "platform"])
+    .index("by_status", ["status"]),
 
   // ---- Brain: question bank (conversation.ts) ----
   // Ranked questions for his next calls, refreshed after every call, when new
@@ -330,6 +366,8 @@ export default defineSchema({
     claimedAt: v.optional(v.number()), // epoch ms; stale claims (>15 min) can be retaken
     approvedAt: v.optional(v.number()), // epoch ms; a held reply posted on purpose
     postedAt: v.optional(v.number()), // epoch ms
+    postedUri: v.optional(v.string()), // Bluesky at:// uri of his reply (so undo can delete it)
+    removedAt: v.optional(v.number()), // epoch ms; taken down by undo.ts
   })
     .index("by_audience", ["audienceQuestionId"])
     .index("by_call", ["callId"])
