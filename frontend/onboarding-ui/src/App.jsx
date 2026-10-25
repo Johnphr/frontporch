@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { isConfigured, looksLikeLinkedInProfile, phoneVerification, signupApi } from './api'
+import { isConfigured, looksLikeAppPassword, phoneVerification, signupApi, tidyBlueskyHandle } from './api'
 import { COUNTRIES, STRINGS } from './i18n'
 import { digitsOf, formatNational, toE164 } from './phone'
 import {
   BackButton,
   Button,
+  BlueskyIcon,
   ErrorBanner,
   LangToggle,
-  LinkedInIcon,
   Note,
+  PasswordField,
   RadioCards,
   SelectField,
   StepHeader,
@@ -18,8 +19,8 @@ import {
 import { DoneStep } from './DoneStep'
 import { Scene, SvgDefs } from './Scene'
 
-// Flow (convex/signup.ts): 1 name + language -> 2 phone (register) -> 3 character (setCharacter)
-// -> 4 LinkedIn, optional (setLinkedin) -> done: "Call me now" (requestCall) + call status (DoneStep.jsx).
+// Flow (convex/signup.ts): 1 name + language -> 2 phone (register: elderId + sign-up token)
+// -> 3 character (setCharacter) -> 4 Bluesky, optional (connectBluesky: handle + app password) -> done: "Call me now" (requestCall) + call status (DoneStep.jsx).
 //
 // The backend has no SMS verification yet, so the 6-digit code screen is skipped. Turn this on
 // (and replace phoneVerification in api.js with a real provider) once it exists.
@@ -30,7 +31,8 @@ const KEY = 'onboarding-v2'
 const COOLDOWN = 30
 const MAX_NAME = 100
 
-// Progress survives a refresh. The SMS code and the LinkedIn link are never stored.
+// Progress (and the sign-up token) survives a refresh in sessionStorage. The SMS code and the
+// app password are never stored.
 const load = () => {
   try {
     return JSON.parse(sessionStorage.getItem(KEY)) || {}
@@ -108,12 +110,15 @@ function Onboarding() {
   const [resendsLeft, setResendsLeft] = useState(saved.resendsLeft ?? 3)
   const [cooldown, setCooldown] = useState(0)
   const [elderId, setElderId] = useState(saved.elderId || null)
+  const [token, setToken] = useState(saved.token || null) // from register; every later step needs it
   const [characters, setCharacters] = useState(null) // null = not loaded
   const [charsFailed, setCharsFailed] = useState(false)
   const [characterId, setCharacterId] = useState(saved.characterId || '')
   const [characterName, setCharacterName] = useState(saved.characterName || '')
-  const [linkedinUrl, setLinkedinUrl] = useState('')
-  const [linkedin, setLinkedin] = useState(saved.linkedin || null) // 'saved' | 'skipped' | null
+  const [bskyHandle, setBskyHandle] = useState(saved.bskyHandle || '')
+  const [appPassword, setAppPassword] = useState('') // memory only, cleared once used
+  const [bluesky, setBluesky] = useState(saved.bluesky || null) // 'saved' | 'skipped' | 'locked' | null
+  const [connectedHandle, setConnectedHandle] = useState(saved.connectedHandle || '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null) // { code, message }
   const [fieldErrors, setFieldErrors] = useState({})
@@ -126,10 +131,10 @@ function Onboarding() {
   useEffect(() => {
     save({
       lang, langPinned, step, phoneStage, name, callLang, countryCode, phone, resendsLeft,
-      elderId, characterId, characterName, linkedin,
+      elderId, token, characterId, characterName, bskyHandle, bluesky, connectedHandle,
     })
     document.documentElement.lang = t.htmlLang
-  }, [lang, langPinned, step, phoneStage, name, callLang, countryCode, phone, resendsLeft, elderId, characterId, characterName, linkedin, t.htmlLang])
+  }, [lang, langPinned, step, phoneStage, name, callLang, countryCode, phone, resendsLeft, elderId, token, characterId, characterName, bskyHandle, bluesky, connectedHandle, t.htmlLang])
 
   // Move focus to the new heading whenever the screen changes.
   useEffect(() => {
@@ -171,6 +176,7 @@ function Onboarding() {
   // Backend text for errors we have no translation for; our own copy otherwise.
   const errorText = (e) => {
     if (!e) return ''
+    if (e.code === 'BLUESKY') return e.message // already in his language (t.sBsky.errors)
     if (e.code === 'SERVER' && e.message && e.message !== 'SERVER') return e.message
     return t.errors[e.code] || t.errors.SERVER
   }
@@ -179,7 +185,7 @@ function Onboarding() {
     setBusy(true)
     setError(null)
     try {
-      if (step !== 1 && step !== 2 && !elderId) throw Object.assign(new Error('NOT_FOUND'), { code: 'NOT_FOUND' })
+      if (step !== 1 && step !== 2 && (!elderId || !token)) throw Object.assign(new Error('NOT_FOUND'), { code: 'NOT_FOUND' })
       await task()
       return true
     } catch (e) {
@@ -216,8 +222,10 @@ function Onboarding() {
   /* ----- step 2: phone ----- */
   const register = () =>
     run(async () => {
-      const id = await signupApi.register(name, toE164(country, phone), callLang)
-      setElderId(id)
+      const res = await signupApi.register(name, toE164(country, phone), callLang)
+      if (!res?.ok) throw Object.assign(new Error('ALREADY_SIGNED_UP'), { code: 'ALREADY_SIGNED_UP' })
+      setElderId(res.elderId)
+      setToken(res.token)
     })
 
   async function onPhone(e) {
@@ -273,39 +281,46 @@ function Onboarding() {
       return
     }
     clearMessages()
-    if (await run(() => signupApi.setCharacter(elderId, selected))) {
+    if (await run(() => signupApi.setCharacter(elderId, token, selected))) {
       setCharacterId(selected)
       setCharacterName(shown.find((c) => c.id === selected)?.name || '')
       setStep(4)
     }
   }
 
-  /* ----- step 4: LinkedIn ----- */
-  async function onLinkedIn(e) {
+  /* ----- step 4: Bluesky ----- */
+  async function onBluesky(e) {
     e.preventDefault()
     setError(null)
-    if (!looksLikeLinkedInProfile(linkedinUrl)) {
-      setFieldErrors({ linkedin: t.s3.urlInvalid })
-      return
-    }
-    setFieldErrors({})
-    if (!elderId) {
+    const errs = {}
+    if (!tidyBlueskyHandle(bskyHandle)) errs.handle = t.sBsky.handleInvalid
+    if (!looksLikeAppPassword(appPassword)) errs.password = t.sBsky.passwordInvalid
+    setFieldErrors(errs)
+    if (Object.keys(errs).length) return
+    if (!elderId || !token) {
       setError({ code: 'NOT_FOUND' })
       return
     }
     setBusy(true)
     try {
-      await signupApi.setLinkedin(elderId, linkedinUrl.trim())
-      setLinkedin('saved')
-      setStep('done')
-    } catch (err) {
-      if (err.code === 'LINKEDIN_LOCKED') {
-        // Already set up for this number: nothing to change, carry on.
-        setLinkedin('saved')
+      const res = await signupApi.connectBluesky(elderId, token, bskyHandle.trim(), appPassword)
+      if (res?.ok) {
+        setAppPassword('')
+        setConnectedHandle(res.handle || tidyBlueskyHandle(bskyHandle))
+        setBluesky('saved')
         setStep('done')
+      } else if (res?.error === 'locked') {
+        // He's already active: his accounts are set up with us, carry on.
+        setAppPassword('')
+        setBluesky('locked')
+        setStep('done')
+      } else if (res?.error === 'not_found') {
+        setError({ code: 'NOT_FOUND' })
       } else {
-        setError({ code: err.code || 'SERVER', message: err.message })
+        setError({ code: 'BLUESKY', message: t.sBsky.errors[res?.error] || t.sBsky.errors.failed })
       }
+    } catch (err) {
+      setError({ code: err.code || 'SERVER', message: err.message })
     } finally {
       setBusy(false)
     }
@@ -313,7 +328,8 @@ function Onboarding() {
 
   function onSkip() {
     clearMessages()
-    setLinkedin('skipped')
+    setAppPassword('')
+    setBluesky('skipped')
     setStep('done')
   }
 
@@ -527,37 +543,76 @@ function Onboarding() {
           </>
         )}
 
-        {/* ---------- Screen 4: LinkedIn (optional) ---------- */}
+        {/* ---------- Screen 4: Bluesky (optional) ---------- */}
         {step === 4 && (
           <>
             <header className="flex flex-col gap-3">
               <h1 ref={headingRef} tabIndex={-1} className={heading}>
-                {t.s3.title}
+                {t.sBsky.title}
               </h1>
-              <p>{t.s3.lead}</p>
+              <p>{t.sBsky.lead}</p>
             </header>
-            <form noValidate onSubmit={onLinkedIn} className="flex flex-1 flex-col gap-5">
+            <section className="flex flex-col gap-3">
+              <h2 className="text-xl font-bold text-tinta-900">{t.sBsky.howTitle}</h2>
+              <ol className="ml-7 flex list-decimal flex-col gap-2 text-lg">
+                {t.sBsky.how.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ol>
+              <a
+                href="https://bsky.app/settings/app-passwords"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex min-h-touch flex-wrap items-center gap-x-2 self-start rounded-xl px-1 text-xl font-bold text-talavera-700 underline underline-offset-4 hover:text-talavera-900"
+              >
+                {t.sBsky.link}
+                <span className="text-lg font-normal">{t.sBsky.linkNote}</span>
+              </a>
+            </section>
+            <form noValidate onSubmit={onBluesky} className="flex flex-1 flex-col gap-5">
               <TextField
-                id="linkedin"
-                type="url"
-                inputMode="url"
-                autoComplete="url"
-                label={t.s3.url}
-                hint={t.s3.urlHint}
-                error={fieldErrors.linkedin}
-                value={linkedinUrl}
-                onChange={(e) => setLinkedinUrl(e.target.value)}
+                id="bsky-handle"
+                autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                label={t.sBsky.handle}
+                hint={t.sBsky.handleHint}
+                error={fieldErrors.handle}
+                value={bskyHandle}
+                onChange={(e) => setBskyHandle(e.target.value)}
               />
+              <PasswordField
+                id="bsky-app-password"
+                autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                label={t.sBsky.password}
+                hint={t.sBsky.passwordHint}
+                error={fieldErrors.password}
+                labels={t.sBsky}
+                value={appPassword}
+                onChange={(e) => setAppPassword(e.target.value)}
+              />
+              <Note>{t.sBsky.safety}</Note>
+              <p className="text-lg font-bold">{t.sBsky.use}</p>
               <ErrorBanner>{errorText(error)}</ErrorBanner>
               <div className="flex-1" />
               <div className="flex flex-col gap-4">
-                <Button type="submit" icon={<LinkedInIcon />} disabled={busy}>
-                  {busy ? t.working : t.s3.save}
+                <Button type="submit" icon={<BlueskyIcon />} disabled={busy}>
+                  {busy ? t.sBsky.connecting : t.sBsky.save}
                 </Button>
                 <Button variant="secondary" onClick={onSkip} disabled={busy}>
-                  {t.s3.skip}
+                  {t.sBsky.skip}
                 </Button>
               </div>
+              <section className="flex flex-col gap-3">
+                <h2 className="text-xl font-bold text-tinta-900">{t.sBsky.otherTitle}</h2>
+                <Button variant="secondary" disabled>
+                  {t.sBsky.reddit}
+                </Button>
+              </section>
             </form>
           </>
         )}
@@ -568,8 +623,10 @@ function Onboarding() {
             t={t}
             name={name}
             characterName={characterName}
-            linkedin={linkedin}
+            bluesky={bluesky}
+            connectedHandle={connectedHandle}
             elderId={elderId}
+            token={token}
             headingRef={headingRef}
             headingClass={heading}
             errorText={errorText}
