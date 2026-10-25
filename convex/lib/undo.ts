@@ -275,21 +275,23 @@ export function publishedAt(c: LatestCandidate): number | undefined {
 }
 
 /**
- * The post "take down that last post" means: the newest one that went out, within 14 days,
- * not from `excludeCallId` (the call he asked on: its own post isn't "the last post").
- * An already-removed post still counts, so asking twice never reaches back to an older one.
+ * The post "take down that last post" means: the newest one that went out, within 14 days.
+ * When he asked on a call (`askedOn`): not that call's own post, and nothing that went out
+ * after the call ended (a late retry must never reach a newer post). An already-removed post
+ * still counts, so asking twice never reaches back to an older one.
  */
 export function pickLatestPost(
   candidates: LatestCandidate[],
   now: number,
-  opts: { excludeCallId?: string; windowMs?: number } = {},
+  opts: { askedOn?: { callId: string; endedAt: number }; windowMs?: number } = {},
 ): LatestCandidate | null {
-  const since = now - (opts.windowMs ?? LATEST_WINDOW_MS);
+  const until = opts.askedOn ? Math.min(now, opts.askedOn.endedAt) : now;
+  const since = until - (opts.windowMs ?? LATEST_WINDOW_MS);
   let best: { c: LatestCandidate; at: number } | null = null;
   for (const c of candidates) {
-    if (opts.excludeCallId && c.callId === opts.excludeCallId) continue;
+    if (opts.askedOn && c.callId === opts.askedOn.callId) continue;
     const at = publishedAt(c);
-    if (at === undefined || at < since) continue;
+    if (at === undefined || at < since || at > until) continue;
     if (!best || at > best.at || (at === best.at && c.createdAt > best.c.createdAt)) best = { c, at };
   }
   return best?.c ?? null;
@@ -372,6 +374,9 @@ const CONFIRM = [
   /\bse (?:quite|baje|borre|retire|elimine)\b/,
 ];
 
+/** Pip's line when he changes his mind ("No problem, I'll leave it up."). */
+const PIP_KEEP_UP = [/i'll leave it up/, /la dejamos/];
+
 /** He changed his mind later in the call. */
 const RETRACT = [
   /\b(?:leave|keep) (?:it|that|that one|the post|that post|the story) up\b/,
@@ -412,7 +417,10 @@ export function detectTakeDown(turns: TranscriptTurn[]): { asked: boolean; how?:
   let asked: "clear" | "confirmed" | undefined;
   for (let i = 0; i < turns.length; i++) {
     const t = turns[i];
-    if (t.role !== "elder") continue;
+    if (t.role !== "elder") {
+      if (asked && t.role === "pip" && PIP_KEEP_UP.some((r) => r.test(fold(t.text)))) asked = undefined;
+      continue;
+    }
     const text = fold(t.text);
     if (RETRACT.some((r) => r.test(text))) {
       asked = undefined;

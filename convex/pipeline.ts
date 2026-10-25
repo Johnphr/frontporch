@@ -24,6 +24,9 @@
 //        error "memories step failed (not retried)". A retry is safe: memories.addMany skips a
 //        callId it already has and the post row is reused, so no duplicate memories or post.
 //
+// Undo: before anything else, if he asked to take a post down on this call (any kind, even a
+// short one), undo.removeLatest is scheduled (isolated; never fails the call).
+//
 // Retry by hand: npx convex run pipeline:processCall '{"callId":"<id>"}'
 // Without a phone: pipeline:seedEndedCall with a tests/fixtures call (convex/README.md).
 // Owner: Core: Brain.
@@ -40,6 +43,7 @@ import { canClaimProcessing, finishPatch, isProfileUsable, mergeProfile, type Pr
 import { runSteps, type StepReport } from "./lib/planner";
 import { parseAutoPost } from "./lib/postFlow";
 import { MIN_POST_BUDGET_MS, holdDecision, postBudgetMs } from "./lib/postQuality";
+import { CALL_REASON, detectTakeDown } from "./lib/undo";
 import { postQuality } from "./schema";
 
 // Convex exposes env vars on process.env (declared so we don't need @types/node).
@@ -273,6 +277,21 @@ async function runStoryCall(
   ]);
 }
 
+/**
+ * Undo step, isolated: if he asked on this call to take a post down (lib/undo.detectTakeDown),
+ * schedule undo.removeLatest for his newest post (not this call's own). Never throws.
+ */
+async function takeDownIfAsked(ctx: ActionCtx, callId: Id<"calls">, elderId: Id<"elders">, turns: Turn[]): Promise<void> {
+  try {
+    const found = detectTakeDown(turns);
+    if (!found.asked) return;
+    await ctx.scheduler.runAfter(0, internal.undo.removeLatest, { elderId, reason: CALL_REASON, askedOnCallId: callId });
+    console.log(`pipeline.processCall: call ${callId} take-down request (${found.how}); undo.removeLatest scheduled`);
+  } catch {
+    console.warn(`pipeline.processCall: call ${callId} take-down step failed`);
+  }
+}
+
 export const processCall = internalAction({
   args: { callId: v.id("calls") },
   handler: async (ctx, { callId }): Promise<{ status: string; reason?: string }> => {
@@ -283,6 +302,7 @@ export const processCall = internalAction({
 
     try {
       const turns = call.transcript as Turn[];
+      await takeDownIfAsked(ctx, callId, elder._id, turns); // undo: before the short-call exit (a call can be just that)
       if (isNoConversation(call.endReason, turns)) {
         await ctx.runMutation(internal.pipeline.finishProcessing, { callId, status: "no_conversation" });
         console.log(`pipeline.processCall: call ${callId} no_conversation (${call.endReason ?? "few words"})`);

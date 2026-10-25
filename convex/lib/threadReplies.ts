@@ -10,6 +10,7 @@
 
 import { clampGraphemes, graphemeCount, MAX_POST_GRAPHEMES } from "./bluesky.ts";
 import { truncate } from "./linkedinPost.ts";
+import { callCharacter } from "./onboarding.ts";
 
 export type ReplyPlatform = "bluesky" | "reddit";
 export type ReplyMode = "auto" | "none";
@@ -206,6 +207,15 @@ export function wordCount(text: string): number {
 /** The writer's language field -> "en" | "es" (anything unknown is English). */
 export function replyLanguage(value: unknown): ReplyLanguage {
   return typeof value === "string" && value.trim().toLowerCase().startsWith("es") ? "es" : "en";
+}
+
+/**
+ * The language the call ran in: his character's (lib/characters.ts, picked the way
+ * cartesia.startCall picks it), else elders.language, else English.
+ */
+export function callLanguageOf(elder: { characterId?: string; language?: string } | null | undefined): string {
+  if (!elder) return "en";
+  return callCharacter(elder).language || elder.language || "en";
 }
 
 const LANGUAGE_NAME: Record<ReplyLanguage, string> = { en: "English", es: "Spanish" };

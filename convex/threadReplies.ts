@@ -34,6 +34,7 @@ import { parseAutoPost } from "./lib/postFlow";
 import { postBlueskyReply, postRedditReply, runPostReply, type PostOutcome } from "./lib/replyPosting";
 import {
   audienceIdForCall,
+  callLanguageOf,
   canClaimReply,
   draftCutoff,
   draftStatus,
@@ -89,7 +90,7 @@ export const getDraftContext = internalQuery({
       .first();
     return {
       elderId: call.elderId,
-      callLanguage: elder?.language ?? "en",
+      callLanguage: callLanguageOf(elder), // the character's language: what the call ran in
       turns: call.transcript,
       question: {
         _id: question._id,
