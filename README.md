@@ -51,6 +51,11 @@ coming soon. A shared demo account is used only with `DEMO_ACCOUNT_FALLBACK=on`.
 - Posts use **only what the person said**; the prompt forbids adding facts or advice.
 - Pip doesn't give or ask for medical, legal or financial advice, and doesn't push on painful topics.
 - Every post says it was written up with AI from a phone call.
+- He can take any post down by asking on the call ("Pip, please take that last post down").
+  Pip never argues; it confirms which post, and right after the call the post and the thread
+  replies from the same call come down from Bluesky and Reddit (LinkedIn posts are flagged for
+  removal by hand). Family can do the same with
+  `npx convex run undo:removePost '{"postId":"..."}'`. See ARCHITECTURE.md → Undo.
 - Posts go out automatically after a fact-check against the call. A post that fails the
   check is held as `needs_review` instead of posted; someone reviews held posts after each call.
 - LinkedAPI automates a personal account, which LinkedIn's terms don't allow. Use an

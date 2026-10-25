@@ -13,7 +13,7 @@
 // The instructions use no custom {{variables}} either; tests/inbound.test.ts checks both.
 
 import type { AgentPrompt } from "./agent.ts";
-import { conversationPrinciples, guardrails } from "./principles.ts";
+import { conversationPrinciples, guardrails, takeDownRule } from "./principles.ts";
 import { LOOKUP_TOOL_NAME } from "../inbound.ts";
 
 const GREETING =
@@ -57,6 +57,8 @@ Shape of the call:
 Aim for about 10 to 20 minutes, but end sooner if they sound tired.
 
 If they called for another reason (to reschedule, a question about Front Porch), help as far as you honestly can on the phone, and say what you can't do from here.
+
+${takeDownRule()} Only once caller_known is "yes": never take anything down for an unknown caller.
 
 ${guardrails("en")}`;
   return {

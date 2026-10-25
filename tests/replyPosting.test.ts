@@ -60,7 +60,7 @@ const post = (fetchFn: FetchFn, cache: SessionCache = new Map()) =>
 test("bluesky: posts under the question and returns the web link", async () => {
   const f = fakeFetch(blueskyRoutes(CREATED));
   const out = await post(f.fetchFn);
-  assert.deepEqual(out, { status: "posted", url: "https://bsky.app/profile/walter.bsky.social/post/r1" });
+  assert.deepEqual(out, { status: "posted", url: "https://bsky.app/profile/walter.bsky.social/post/r1", uri: "at://did:plc:him/app.bsky.feed.post/r1" });
   const body = JSON.parse(f.calls.find((c) => c.url.includes("createRecord"))?.body ?? "{}");
   assert.equal(body.record.reply.parent.uri, QUESTION_URI);
   assert.equal(body.record.reply.root.uri, QUESTION_URI);
@@ -97,7 +97,7 @@ test("bluesky: his existing reply under the post counts as posted (retry never a
   const mine = ok({ thread: { replies: [{ post: { uri: "at://did:plc:him/app.bsky.feed.post/old", author: { did: "did:plc:him" } } }] } });
   const f = fakeFetch(blueskyRoutes(CREATED, mine));
   const out = await post(f.fetchFn);
-  assert.deepEqual(out, { status: "posted", url: "https://bsky.app/profile/walter.bsky.social/post/old", alreadyThere: true });
+  assert.deepEqual(out, { status: "posted", url: "https://bsky.app/profile/walter.bsky.social/post/old", uri: "at://did:plc:him/app.bsky.feed.post/old", alreadyThere: true });
   assert.equal(f.count("createRecord"), 0, "no second reply");
   assert.equal(ownReplyIn({ thread: { replies: [{ post: { uri: "u", author: { did: "did:plc:x" } } }] } }, "did:plc:him"), undefined);
   assert.equal(ownReplyIn(null, "did:plc:him"), undefined);
