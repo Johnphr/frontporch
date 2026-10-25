@@ -1,6 +1,6 @@
-// Sign-up API: the public functions in convex/signup.ts (repo root), called over HTTP.
+// The public functions in convex/signup.ts and convex/account.ts (repo root), called over HTTP.
 // No codegen here: this UI is its own package, so functions are referenced by name with
-// anyApi (signup:register etc.). Errors are thrown with a `code` that exists in i18n `errors`;
+// anyApi (signup:register etc.). Errors are thrown with a `code` that exists in copy.js ERRORS;
 // a backend message we don't recognize is kept on `e.message` and shown as is.
 
 import { ConvexHttpClient } from 'convex/browser'
@@ -24,7 +24,7 @@ function coded(code, message) {
   return e
 }
 
-// Backend messages (convex/signup.ts, English only) -> our i18n codes, so Spanish users read Spanish.
+// Backend messages (English) -> our error codes, so the page words them the same way everywhere.
 const KNOWN = [
   [/enter your name/i, 'NAME_INVALID'],
   [/phone number/i, 'PHONE_INVALID'],
@@ -32,6 +32,7 @@ const KNOWN = [
   [/linkedin is already set up/i, 'LINKEDIN_LOCKED'],
   [/sign-up not found/i, 'NOT_FOUND'],
   [/unknown character/i, 'CHARACTER_UNKNOWN'],
+  [/choose a day and a time/i, 'SCHEDULE_INVALID'],
 ]
 
 function translate(err) {
@@ -47,9 +48,9 @@ function translate(err) {
   return coded('SERVER')
 }
 
-async function call(kind, name, args) {
+async function call(kind, name, args, module = 'signup') {
   try {
-    return await convex()[kind](anyApi.signup[name], args)
+    return await convex()[kind](anyApi[module][name], args)
   } catch (err) {
     throw translate(err)
   }
@@ -68,8 +69,17 @@ export const signupApi = {
   callStatus: (callId) => call('query', 'callStatus', { callId }),
 }
 
-// SMS verification: the backend has none yet (App.jsx VERIFY_PHONE = false skips this step).
-// Kept as a mock so the code screen still works when someone turns it on for a demo.
+/** His page (convex/account.ts). Host changes use signupApi.setCharacter. */
+export const accountApi = {
+  /** { name, characterId, callDay?, callHour?, timezone? } | null */
+  getProfile: (elderId) => call('query', 'getProfile', { elderId }, 'account'),
+  setSchedule: (elderId, callDay, callHour, timezone) =>
+    call('mutation', 'setSchedule', { elderId, callDay, callHour, timezone }, 'account'),
+  /** [{ id, text, linkedinUrl?, postedAt, reactions, comments }] newest first */
+  listPosts: (elderId) => call('query', 'listPosts', { elderId }, 'account'),
+}
+
+// Sign-in: the backend has no SMS codes or email links yet, so both are mocks (pages/SignIn.jsx).
 // Demo trigger: code "000000" -> BAD_CODE.
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 export const phoneVerification = {
@@ -79,6 +89,11 @@ export const phoneVerification = {
   async verifyCode(/* e164 */ _phone, code) {
     await wait(600)
     if (code === '000000') throw coded('BAD_CODE')
+  },
+}
+export const emailSignIn = {
+  async sendLink(/* email */) {
+    await wait(600)
   },
 }
 

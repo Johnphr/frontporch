@@ -28,14 +28,14 @@ into LinkedIn posts, then uses how readers react to steer the next interview.
 3. **Content:** his stories become LinkedIn posts, using only what he said.
 4. **Feedback loop:** reader reactions and comments, plus real audience questions, steer the next call.
 
-No family, no SMS. One small onboarding UI (`frontend/onboarding-ui/`); everything else is phone calls in and LinkedIn posts out.
+No family, no SMS. One small web app (`frontend/onboarding-ui/`): sign up, then his page (host, call time, posts); everything else is phone calls in and LinkedIn posts out.
 
 ## Decisions (locked)
 
 | Decision | Choice |
 |---|---|
 | Backend | Everything in Convex: tables, crons, actions, HTTP actions. No separate server |
-| UI | One onboarding UI (`frontend/onboarding-ui/`, design by Mafer): name + language, phone, who calls, LinkedIn URL, "Call me now". No phone verification for now (code screen off; anyone can be called once `PUBLIC_CALLS=all`, so keep the link private). Call time is still set by hand in the Convex dashboard; for testing, `CALL_INTERVAL_MINUTES` repeats calls. After "Call me now" the page shows the call's live status (`signup:callStatus`). Temporary: a key-protected `/posts` review page (`convex/postsPage.ts`) to iterate on post content |
+| UI | One web app (`frontend/onboarding-ui/`, "Large & Calm" design, English): landing → sign in (phone + code, or email link; both mocked until real auth) → setup (who sets up, name, language + host, weekly day + time, LinkedIn, review, Finish rings him) → his page: **Home** (switch host, change call day/time) and **Posts** (published posts with reaction/comment counts). Talks to `signup.*` and `account.*` with the elderId kept on the device (no real sign-in yet; keep the link private). After Finish the page shows the call's live status (`signup:callStatus`). For testing, `CALL_INTERVAL_MINUTES` repeats calls. Temporary: a key-protected `/posts` review page (`convex/postsPage.ts`) to iterate on post content |
 | Phone calls | **Cartesia Managed Agents** run the whole call: phone number, speech-to-text, in-call LLM, voice. No Vapi; no Twilio in our code |
 | Agent config | Lives in code (`convex/lib/prompts/`), pushed to Cartesia with `npx convex run cartesiaAgents:syncAgent` |
 | Characters | One Cartesia agent per character (`convex/lib/characters.ts`: voice, language, personality): **Pip** in English, **Juanito** (Latin American Spanish, "usted"). He picks one (`elders.characterId`), else the default for `elders.language`. All call from one number; the call's goal + context are per-call variables |
@@ -294,9 +294,9 @@ daily `apify.scrapeEngagement` and weekly `apify.findAudienceQuestions` for acti
 
 **v1 leftovers in `convex/`** (done): `questions.ts`, `answers.ts`, `replies.ts`, `calls.ts` and
 `lib/auth.ts` are deleted; `elders.ts` keeps only the internal `seed`. The **only public Convex
-functions are `signup.*`** (the sign-up page): anyone with the deployment URL can call public
+functions are `signup.*` and `account.*`** (the web app): anyone with the deployment URL can call public
 ones, and the v1 dashboard queries exposed call transcripts. `signup.*` return only ids and
-ok/reason results. Keep every other function `internal*`. The v1 `questions`, `answers`
+ok/reason results; `account.*` return only his name, host, call slot and published posts. Keep every other function `internal*`. The v1 `questions`, `answers`
 and `replies` tables stay in `schema.ts` until they're empty, so a deploy can't fail on old rows.
 
 ## Repo layout
@@ -309,7 +309,7 @@ voice/                                                                  Voice
   conversation-guide.md         how Pip talks (research-backed rules)
   prompts/story-call.md         pointer: the prompt lives in convex/lib/prompts/
 Cartesia/                       Pablo's Juanito draft + dashboard pull script (read-only)  Voice
-frontend/onboarding-ui/         onboarding UI (React + Vite), talks to convex/signup.ts   UI
+frontend/onboarding-ui/         web app (React + Vite), talks to signup.ts + account.ts   UI
 convex/
   schema.ts                     tables                                  Data
   cartesia.ts                   start call, poll transcript             Voice + Brain
