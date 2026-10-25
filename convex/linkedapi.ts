@@ -57,6 +57,7 @@ import {
   guardDecision,
   parseWorkflowResult,
   shouldRestartPolling,
+  shouldRunGuard,
   type GuardResult,
 } from "./lib/postFlow";
 import { canonicalLinkedInPostUrl } from "./lib/linkedinUrl";
@@ -165,6 +166,7 @@ export const updatePost = internalMutation({
     workflowId: v.optional(v.string()),
     guardIssues: v.optional(v.array(v.string())),
     guardSummary: v.optional(v.string()),
+    heldFor: v.optional(v.union(v.literal("quality"), v.literal("guard"))),
     pollAttempts: v.optional(v.number()),
     lastPolledAt: v.optional(v.number()),
     maybePosted: v.optional(v.boolean()),
@@ -239,7 +241,8 @@ async function runPosting(
   }
 
   let guard: GuardResult | null = null;
-  if (!opts.approve) {
+  // A post held for quality never went through the fact-check, so approving it still runs it.
+  if (shouldRunGuard(opts.approve, data.post.heldFor)) {
     let checked: GuardResult;
     try {
       checked = await ctx.runAction(internal.postGuard.checkPost, {
@@ -257,6 +260,7 @@ async function runPosting(
       await ctx.runMutation(internal.linkedapi.updatePost, {
         postId,
         status: "needs_review",
+        heldFor: "guard", // a second approvePost now skips the fact-check, as for any guard hold
         text: prepared.text,
         guardIssues: checked.issues,
         guardSummary: checked.summary,

@@ -265,6 +265,9 @@ export default defineSchema({
     // ---- post quality (lib/postQuality.ts): the judge's score for the text that was saved.
     // Below the bar the post is saved as needs_review with these notes in guardSummary/guardIssues.
     quality: v.optional(postQuality),
+    // Why a needs_review post is held. "quality": never fact-checked yet, so approvePost runs
+    // the guard first. "guard" (or missing, on older rows): approvePost skips it.
+    heldFor: v.optional(v.union(v.literal("quality"), v.literal("guard"))),
   })
     .index("by_elder", ["elderId"])
     .index("by_url", ["linkedinUrl"])

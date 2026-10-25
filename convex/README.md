@@ -259,7 +259,10 @@ said = score 0), code checks (120-250 words, hook ≤140 chars, ≤2 hashtags, s
 markdown, closing question, language), then up to 2 critique -> rewrite rounds on the best.
 It passes at 75/100 with no criterion under 5. Below the bar the post is saved as
 `needs_review` with the judge's notes (shown on `/posts`) and never auto-posts; after a look,
-post it with `npx convex run linkedapi:approvePost '{"postId":"<posts id>"}'`. Cost: up to ~10
+post it with `npx convex run linkedapi:approvePost '{"postId":"<posts id>"}'`. Such a post
+(`heldFor: "quality"`) was never fact-checked, so approving it runs the post guard first: if the
+guard fails, it's held again as a normal fact-check hold (`heldFor: "guard"`, the guard's issues),
+and a second `approvePost` skips the guard as before. Cost: up to ~10
 model calls per post; time: ~240 s at worst (each call has its own timeout).
 
 Unit tests for the formatter and posting decisions (no Convex needed): `node --test "tests/**/*.test.ts"`.

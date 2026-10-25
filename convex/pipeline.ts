@@ -121,7 +121,7 @@ export const insertPost = internalMutation({
       text: args.text,
       status: args.hold ? "needs_review" : "pending",
       ...(args.quality ? { quality: args.quality } : {}),
-      ...(args.hold ? { guardSummary: args.hold.summary, guardIssues: args.hold.issues } : {}),
+      ...(args.hold ? { heldFor: "quality" as const, guardSummary: args.hold.summary, guardIssues: args.hold.issues } : {}),
     });
     return { postId, created: true };
   },

@@ -15,6 +15,8 @@ export type PagePost = {
   error?: string;
   /** Post quality (lib/postQuality.ts), when writePost scored it. */
   quality?: { score: number; passed: boolean; rounds: number; notes: string[] };
+  /** Why a needs_review post is held (posts.heldFor; missing = the fact-check). */
+  heldFor?: "quality" | "guard";
 };
 
 export type PageCheck = { postId: string; pass: boolean; summary: string; issues: string[]; mode: string } | { postId: string; error: string };
@@ -44,6 +46,11 @@ function checkBlock(check: PageCheck | undefined): string {
   return `<div class="check ${check.pass ? "good" : "bad"}"><strong>Fact-check now: ${check.pass ? "pass" : "would be held"}</strong> (${escapeHtml(check.mode)}) ${escapeHtml(check.summary)}${issuesList(check.issues)}</div>`;
 }
 
+export function statusLabel(p: Pick<PagePost, "status" | "heldFor">): string {
+  if (p.status === "needs_review" && p.heldFor === "quality") return "Held: below the quality bar";
+  return STATUS_LABEL[p.status] ?? p.status;
+}
+
 function qualityBlock(q: PagePost["quality"]): string {
   if (!q) return "";
   const rewrites = `${q.rounds} rewrite${q.rounds === 1 ? "" : "s"}`;
@@ -57,7 +64,7 @@ function card(p: PagePost, key: string, check: PageCheck | undefined): string {
     : "";
   const href = `?key=${encodeURIComponent(key)}&check=${encodeURIComponent(p.id)}#${encodeURIComponent(p.id)}`;
   return `<article id="${escapeHtml(p.id)}">
-  <header><span class="who">${escapeHtml(p.elderFirstName)}</span><span class="badge s-${escapeHtml(p.status)}">${escapeHtml(STATUS_LABEL[p.status] ?? p.status)}</span><time>${date} UTC</time></header>
+  <header><span class="who">${escapeHtml(p.elderFirstName)}</span><span class="badge s-${escapeHtml(p.status)}">${escapeHtml(statusLabel(p))}</span><time>${date} UTC</time></header>
   ${p.question ? `<p class="q">Call question: ${escapeHtml(p.question)}</p>` : ""}
   <div class="post">${escapeHtml(p.text)}</div>
   ${p.error ? `<p class="err">${escapeHtml(p.error)}</p>` : ""}

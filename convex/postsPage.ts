@@ -47,6 +47,7 @@ export const listForPage = internalQuery({
           ...(p.quality
             ? { quality: { score: p.quality.score, passed: p.quality.passed, rounds: p.quality.rounds, notes: p.quality.notes } }
             : {}),
+          ...(p.heldFor ? { heldFor: p.heldFor } : {}),
         };
       }),
     );

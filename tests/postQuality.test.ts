@@ -213,3 +213,24 @@ test("posts page shows the quality score and notes", () => {
   assert.match(html, /2 rewrites/);
   assert.match(html, /Hook is flat/);
 });
+
+test("approve decision: quality holds get fact-checked on approve, guard holds don't", async () => {
+  const { shouldRunGuard } = await import("../convex/lib/postFlow.ts");
+  assert.equal(shouldRunGuard(false, undefined), true); // createPost always checks
+  assert.equal(shouldRunGuard(false, "quality"), true);
+  assert.equal(shouldRunGuard(true, "quality"), true); // never fact-checked yet
+  assert.equal(shouldRunGuard(true, "guard"), false); // already checked; a person approved it
+  assert.equal(shouldRunGuard(true, undefined), false); // older guard holds, as before
+});
+
+test("posts page labels quality holds apart from fact-check holds", async () => {
+  const { statusLabel } = await import("../convex/lib/postsPage.ts");
+  assert.equal(statusLabel({ status: "needs_review", heldFor: "quality" }), "Held: below the quality bar");
+  assert.equal(statusLabel({ status: "needs_review", heldFor: "guard" }), "Held by fact-check");
+  assert.equal(statusLabel({ status: "needs_review" }), "Held by fact-check");
+  const html = renderPostsPage(
+    [{ id: "p2", createdAt: 0, status: "needs_review", heldFor: "quality", elderFirstName: "Walter", text: "Hi" }],
+    { key: "k" },
+  );
+  assert.match(html, /Held: below the quality bar/);
+});
