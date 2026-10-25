@@ -147,6 +147,7 @@ function callbackDeps(over: Partial<CallbackDeps> = {}): CallbackDeps & { saved:
     exchange: async () => ({ accessToken: "AT", refreshToken: "RT", expiresAt: NOW, userId: "1", username: "joe", scopes: X_SCOPES }),
     save: async (elderId, t) => {
       saved.push({ elderId, t });
+      return { ok: true };
     },
     ...over,
   };
@@ -173,6 +174,15 @@ test("callback: bad state, denial, exchange failure, missing scope, save failure
   assert.equal(noWrite.saved.length, 0);
   const noKey = callbackDeps({ save: async () => Promise.reject(new Error("ACCOUNTS_ENC_KEY is not set")) });
   assert.deepEqual(await r(noKey, { state: "good", code: "C" }), { redirect: "https://frontporch.example/signup?connect_error=failed&platform=x" });
+});
+
+test("callback: locked once he's active (like Threads), and an unknown elder", async () => {
+  for (const error of ["locked", "not_found"] as const) {
+    const deps = callbackDeps({ save: async () => ({ ok: false, error }) });
+    assert.deepEqual(await runXCallback(deps, new URLSearchParams({ state: "good", code: "C" })), {
+      redirect: `https://frontporch.example/signup?connect_error=${error}&platform=x`,
+    });
+  }
 });
 
 test("callback redirect: returnTo only on the same site; plain text without a site", () => {

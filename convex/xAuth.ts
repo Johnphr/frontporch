@@ -89,9 +89,12 @@ export const saveTokens = internalMutation({
     handle: v.string(),
     tokenExpiresAt: v.number(),
     scopes: v.array(v.string()),
+    signup: v.optional(v.boolean()), // from the callback: keep the sign-up rule (no changes once he's active)
   },
-  handler: async (ctx, a): Promise<null> => {
-    if (!(await ctx.db.get(a.elderId))) throw new Error("Elder not found");
+  handler: async (ctx, a): Promise<{ ok: true } | { ok: false; error: "not_found" | "locked" }> => {
+    const elder = await ctx.db.get(a.elderId);
+    if (!elder) return { ok: false, error: "not_found" };
+    if (a.signup && elder.stage === "active") return { ok: false, error: "locked" };
     const now = Date.now();
     const fields = {
       secret: a.secret,
@@ -107,7 +110,7 @@ export const saveTokens = internalMutation({
     const existing = await xRow(ctx, a.elderId);
     if (existing) await ctx.db.patch(existing._id, fields);
     else await ctx.db.insert("elderAccounts", { elderId: a.elderId, platform: "x", ...fields });
-    return null;
+    return { ok: true };
   },
 });
 
@@ -178,7 +181,8 @@ export const xOAuthCallback = httpAction(async (ctx, request) => {
       save: async (elderId, t) => {
         const key = await loadAccountKey(process.env.ACCOUNTS_ENC_KEY);
         const secret = await encryptSecret(key, tokensToJson(t), elderId, X_PLATFORM);
-        await ctx.runMutation(internal.xAuth.saveTokens, {
+        return await ctx.runMutation(internal.xAuth.saveTokens, {
+          signup: true,
           elderId: elderId as Id<"elders">,
           secret,
           externalUserId: t.userId,

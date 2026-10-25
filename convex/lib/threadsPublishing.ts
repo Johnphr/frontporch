@@ -78,6 +78,8 @@ export type ThreadsStoryOptions = {
   done?: ThreadRecord[];
   /** An earlier attempt may have posted more than we know: look in his profile first. */
   recover?: boolean;
+  /** Called with the error when Meta refused his token (code 190 / 401): publish.ts marks his account invalid. Its own errors are ignored. */
+  onLoginError?: (error: unknown) => Promise<unknown> | void;
   sleep?: (ms: number) => Promise<void>;
   /** Longest wait for a container to be ready (default 30 s). */
   maxWaitMs?: number;
@@ -86,8 +88,8 @@ export type ThreadsStoryOptions = {
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-/** Wait for FINISHED. ERROR / EXPIRED -> an error text. Still not ready after maxWait: try publishing anyway. */
-async function waitReady(fetchFn: FetchFn, auth: ThreadsAuth, id: string, o: WaitOptions): Promise<string | null> {
+/** Wait for FINISHED. ERROR / EXPIRED / a refused token -> why not. Still not ready after maxWait: try publishing anyway. */
+async function waitReady(fetchFn: FetchFn, auth: ThreadsAuth, id: string, o: WaitOptions): Promise<{ error: string; cause?: unknown } | null> {
   const sleep = o.sleep ?? defaultSleep;
   const maxWait = o.maxWaitMs ?? 30_000;
   const step = o.pollMs ?? 3_000;
@@ -95,9 +97,9 @@ async function waitReady(fetchFn: FetchFn, auth: ThreadsAuth, id: string, o: Wai
     try {
       const s = await containerStatus(fetchFn, auth, id);
       if (s.status === "FINISHED") return null;
-      if (s.status === "ERROR" || s.status === "EXPIRED") return `Threads couldn't prepare the post (${s.status}${s.errorMessage ? `: ${s.errorMessage}` : ""})`;
+      if (s.status === "ERROR" || s.status === "EXPIRED") return { error: `Threads couldn't prepare the post (${s.status}${s.errorMessage ? `: ${s.errorMessage}` : ""})` };
     } catch (error) {
-      if (isThreadsAuthError(error)) return (error as Error).message;
+      if (isThreadsAuthError(error)) return { error: (error as Error).message, cause: error };
       // A status read failing isn't fatal: keep waiting, then try to publish.
     }
     if (waited >= maxWait) return null;
@@ -124,7 +126,8 @@ async function permalinkOf(fetchFn: FetchFn, auth: ThreadsAuth, records: ThreadR
   }
 }
 
-export type OnePost = { ok: true; id: string } | { ok: false; status: "failed" | "maybe_posted"; error: string };
+/** `cause`: the Threads error behind a failure, when there was one (to spot a refused token). */
+export type OnePost = { ok: true; id: string } | { ok: false; status: "failed" | "maybe_posted"; error: string; cause?: unknown };
 export type WaitOptions = Pick<ThreadsStoryOptions, "sleep" | "maxWaitMs" | "pollMs">;
 
 /**
@@ -136,16 +139,16 @@ export async function publishOnePost(fetchFn: FetchFn, auth: ThreadsAuth, text: 
   try {
     container = await createTextContainer(fetchFn, auth, text, o);
   } catch (error) {
-    return { ok: false, status: "failed", error: error instanceof Error ? error.message : "Threads create failed" };
+    return { ok: false, status: "failed", error: error instanceof Error ? error.message : "Threads create failed", cause: error };
   }
   const notReady = await waitReady(fetchFn, auth, container, wait);
-  if (notReady) return { ok: false, status: "failed", error: notReady };
+  if (notReady) return { ok: false, status: "failed", ...notReady };
   let id: string;
   try {
     id = await publishContainer(fetchFn, auth, container);
   } catch (error) {
     const status = error instanceof ThreadsHttpError ? writeFailureStatus(error.status || undefined) : "maybe_posted";
-    return { ok: false, status, error: error instanceof Error ? error.message : "Threads publish failed" };
+    return { ok: false, status, error: error instanceof Error ? error.message : "Threads publish failed", cause: error };
   }
   return id ? { ok: true, id } : { ok: false, status: "maybe_posted", error: "Threads answered without a post id" };
 }
@@ -154,11 +157,20 @@ export async function publishOnePost(fetchFn: FetchFn, auth: ThreadsAuth, text: 
 export async function postThreadsStory(fetchFn: FetchFn, login: ThreadsAuth | null, a: ThreadsStoryOptions): Promise<PlatformOutcome> {
   if (!login) return { status: "failed", error: "His Threads account isn't connected." };
   if (!a.texts.length) return { status: "failed", error: "Nothing to post." };
+  const reportRefused = async (error: unknown) => {
+    if (!isThreadsAuthError(error)) return;
+    try {
+      await a.onLoginError?.(error);
+    } catch {
+      // best effort
+    }
+  };
   let done = [...(a.done ?? [])];
   if (a.recover) {
     try {
       done = await recoverThreadsRecords(fetchFn, login, a.texts, done);
-    } catch {
+    } catch (error) {
+      await reportRefused(error);
       return {
         status: "maybe_posted",
         error: `Couldn't read his Threads posts to find the earlier attempt; ${CHECK_PROFILE}.`,
@@ -169,7 +181,10 @@ export async function postThreadsStory(fetchFn: FetchFn, login: ThreadsAuth | nu
 
   for (let i = done.length; i < a.texts.length; i++) {
     const one = await publishOnePost(fetchFn, login, a.texts[i], i > 0 ? { replyToId: done[i - 1].uri } : {}, a);
-    if (!one.ok) return failure(one.status, one.error, done, a.texts.length, await permalinkOf(fetchFn, login, done));
+    if (!one.ok) {
+      await reportRefused(one.cause);
+      return failure(one.status, one.error, done, a.texts.length, await permalinkOf(fetchFn, login, done));
+    }
     done.push({ uri: one.id, cid: "" });
   }
   const url = await permalinkOf(fetchFn, login, done);

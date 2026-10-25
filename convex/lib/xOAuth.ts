@@ -205,8 +205,8 @@ export type CallbackDeps = {
   /** Mark the state used and return it (null if unknown). Single use even when it fails. */
   consumeState(state: string): Promise<{ ok: true; elderId: string; codeVerifier: string; returnTo?: string } | { ok: false; error: StateError }>;
   exchange(code: string, codeVerifier: string): Promise<ExchangeResult>;
-  /** Encrypt + save his tokens. Throws on a missing key. */
-  save(elderId: string, tokens: ExchangeResult): Promise<void>;
+  /** Encrypt + save his tokens. Throws on a missing key. Refuses (locked) once he's active, like Threads. */
+  save(elderId: string, tokens: ExchangeResult): Promise<{ ok: true } | { ok: false; error: "not_found" | "locked" }>;
   siteUrl: string | undefined;
 };
 
@@ -285,11 +285,13 @@ export async function runXCallback(deps: CallbackDeps, query: URLSearchParams): 
   if (tokens.scopes && !tokens.scopes.includes("tweet.write")) {
     return callbackRedirect(deps.siteUrl, used.returnTo, { connect_error: "missing_scope" });
   }
+  let saved: Awaited<ReturnType<CallbackDeps["save"]>>;
   try {
-    await deps.save(used.elderId, tokens);
+    saved = await deps.save(used.elderId, tokens);
   } catch {
     return callbackRedirect(deps.siteUrl, used.returnTo, { connect_error: "server_config" });
   }
+  if (!saved.ok) return callbackRedirect(deps.siteUrl, used.returnTo, { connect_error: saved.error });
   return callbackRedirect(deps.siteUrl, used.returnTo, { connected: "x" });
 }
 

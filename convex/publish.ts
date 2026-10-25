@@ -79,7 +79,7 @@ import {
   type PublishResult,
 } from "./lib/postFlow";
 import { postBlueskyStory, publishThreadsStory, publishXStory, redditStoryParts, submitRedditStory } from "./lib/storyPublishing";
-import { threadsLoginForElder } from "./lib/threadsLogin";
+import { reportThreadsLoginError, threadsLoginForElder } from "./lib/threadsLogin";
 import { xLoginForElder } from "./lib/xLogin";
 import { xMode, xPostingOn } from "./lib/xPublishing";
 import type { Turn } from "./lib/linkedinPost";
@@ -366,7 +366,14 @@ async function postTo(
     if (error) return { status: "failed", error };
     const row = await ctx.runQuery(internal.publish.getPublication, { publicationId });
     // No repo check like Bluesky's: the recovery reads his recent posts and replies instead.
-    return publishThreadsStory(timedFetch, login, { text: post.text, lang, done: row?.records ?? [], recover: shouldRecover(previous, row?.records) });
+    return publishThreadsStory(timedFetch, login, {
+      text: post.text,
+      lang,
+      done: row?.records ?? [],
+      recover: shouldRecover(previous, row?.records),
+      // Meta refused his token (code 190): mark his Threads account invalid (lib/threadsLogin.ts).
+      onLoginError: (e) => reportThreadsLoginError(ctx, post.elderId, e),
+    });
   }
   if (platform === "x") {
     if (!xPostingOn(process.env)) return { status: "failed", error: skipReason("x") };

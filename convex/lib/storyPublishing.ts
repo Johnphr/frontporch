@@ -173,7 +173,7 @@ export async function submitRedditStory(
 export async function publishThreadsStory(
   fetchFn: FetchFn,
   login: ThreadsAuth | null,
-  a: { text: string; lang?: string; done?: ThreadRecord[]; recover?: boolean } & WaitOptions,
+  a: { text: string; lang?: string; done?: ThreadRecord[]; recover?: boolean; onLoginError?: (error: unknown) => Promise<unknown> | void } & WaitOptions,
 ): Promise<PlatformOutcome> {
   if (!login) return { status: "failed", error: "His Threads account isn't connected." };
   const split = splitThreadsThread(a.text, a.lang);
@@ -182,6 +182,7 @@ export async function publishThreadsStory(
     texts: split.posts,
     done: a.done ?? [],
     recover: Boolean(a.recover),
+    ...(a.onLoginError ? { onLoginError: a.onLoginError } : {}),
     ...(a.sleep ? { sleep: a.sleep } : {}),
     ...(a.maxWaitMs !== undefined ? { maxWaitMs: a.maxWaitMs } : {}),
     ...(a.pollMs !== undefined ? { pollMs: a.pollMs } : {}),

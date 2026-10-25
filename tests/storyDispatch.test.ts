@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import type { FetchFn } from "../convex/lib/blueskyClient.ts";
 import { disclosureFor } from "../convex/lib/linkedinPost.ts";
 import { publishThreadsStory, publishXStory } from "../convex/lib/storyPublishing.ts";
+import { reportThreadsLoginError } from "../convex/lib/threadsLogin.ts";
 import { splitThreadsThread } from "../convex/lib/threadsPublishing.ts";
 import { xStoryTexts } from "../convex/lib/xPublishing.ts";
 
@@ -138,4 +139,37 @@ test("X: no login -> failed, nothing sent", async () => {
   const api = xApi();
   assert.deepEqual(await publishXStory(api.fetchFn, null, { text: STORY, mode: "thread" }), { status: "failed", error: "His X account isn't connected." });
   assert.equal(api.calls.length, 0);
+});
+
+test("Threads: a refused token (Meta code 190) is reported so his account is marked invalid", async () => {
+  const refusing: FetchFn = async () => ({
+    ok: false,
+    status: 400,
+    json: async () => ({ error: { message: "Invalid OAuth access token", code: 190 } }),
+  });
+  const marked: unknown[] = [];
+  const ctx = { runMutation: async (_ref: unknown, args: unknown) => void marked.push(args) };
+  const out = await publishThreadsStory(refusing, THREADS_LOGIN, {
+    text: STORY,
+    lang: "en",
+    sleep: noSleep,
+    onLoginError: (e) => reportThreadsLoginError(ctx as never, "elder1", e),
+  });
+  assert.equal(out.status, "failed");
+  assert.equal(marked.length, 1);
+  assert.deepEqual(marked[0], { elderId: "elder1", platform: "threads", error: "Threads refused the token (HTTP 400)" });
+  assert.ok(!JSON.stringify(marked).includes("TOKEN-t"), "never the token");
+});
+
+test("Threads: other failures (a 500, a bad parameter) don't touch his account", async () => {
+  for (const [status, body] of [
+    [500, {}],
+    [400, { error: { code: 100 } }],
+  ] as const) {
+    const failing: FetchFn = async () => ({ ok: false, status, json: async () => body });
+    let reported = 0;
+    const out = await publishThreadsStory(failing, THREADS_LOGIN, { text: STORY, lang: "en", sleep: noSleep, onLoginError: () => void reported++ });
+    assert.equal(out.status, "failed");
+    assert.equal(reported, 0, String(status));
+  }
 });

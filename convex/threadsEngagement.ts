@@ -2,8 +2,9 @@
 //
 //   scrapeForElder       daily (schedule.dailyEngagement): for each Threads thread he
 //                        posted in the last 30 days -> likes + reposts on the root, replies by
-//                        others -> engagement:upsert (platform "threads"). One failing thread
-//                        doesn't stop the rest. Needs his Threads login (lib/threadsLogin.ts).
+//                        others -> engagement:upsert (platform "threads"). A thread he deleted
+//                        -> engagement:markGone. One failing thread doesn't stop the rest.
+//                        Needs his Threads login (lib/threadsLogin.ts).
 //   publicationsForElder his Threads postPublications rows (read only; publish.ts writes them)
 // Pure parsing: lib/threadsEngagement.ts. Errors carry HTTP statuses only, never tokens.
 
@@ -86,7 +87,15 @@ export const scrapeForElder = internalAction({
         e = await readThreadsEngagement(timedFetch, login, pub.records ?? []);
       } catch (error) {
         if (isThreadsGone(error)) {
-          result.gone += 1;
+          result.gone += 1; // he deleted it on Threads: its old replies must not feed the bank
+          const linkedinUrl = (pub.url ?? "").trim();
+          if (linkedinUrl) {
+            try {
+              await ctx.runMutation(internal.engagement.markGone, { elderId, linkedinUrl, platform: "threads" });
+            } catch (markError) {
+              result.errors.push(`engagement:markGone ${label}: ${short(markError)}`);
+            }
+          }
           continue;
         }
         result.errors.push(`${label}: ${short(error)}`);
