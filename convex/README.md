@@ -51,7 +51,8 @@ Local backend + `"use node"` files need Node 20–24: `npx -p node@24 -c 'npx co
 | `CARTESIA_VOICE_ID_ES` | Juanito's Spanish voice; required before syncing him |
 | `OPENAI_API_KEY` | LLM jobs (profile, memories, post, planner) + memory embeddings; `OPENAI_MODEL` optional (default `gpt-6-luna`) |
 | `APIFY_TOKEN` | optional: prefill his LinkedIn background (needs `linkedinUrl` on the elder) |
-| `AUTO_POST` | optional, default `on`. `off` = story posts are saved but not sent to LinkedIn (preview only, for tests) |
+| `AUTO_POST` | optional, default `on`. `off` = story posts are saved but not posted anywhere (for tests); post one with `publish:publishPost` |
+| `LINKEDIN_POSTING` | optional, default off. `on` also posts to LinkedIn through LinkedAPI (needs the LinkedAPI tokens) |
 | `PUBLIC_CALLS` | optional, default off. Lets the sign-up page start his first call (`signup:requestCall`; max 3 a day, 10 min apart). `on` = only `CALL_ALLOWLIST` numbers; `all` = anyone (only once SMS is real) |
 | `CALL_ALLOWLIST` | comma-separated E.164 test numbers the sign-up page may call when `PUBLIC_CALLS=on` |
 | `ACCOUNTS_ENC_KEY` | encrypts connected Bluesky app passwords (`accounts.ts`, `lib/accountCrypto.ts`). Base64 of 32 bytes: `openssl rand -base64 32` |
@@ -109,8 +110,8 @@ route in `http.ts` once posts are reviewed on LinkedIn.
 
 Fixtures in `../tests/fixtures/`. Use a throwaway seeded elder: fixture facts merge into his
 profile and memories. A story fixture ends in a post, so `seedEndedCall` refuses it while posting
-is live (both LinkedAPI tokens set and `AUTO_POST` on) unless you pass `"allowPost": true`;
-`npx convex env set AUTO_POST off` keeps the post `pending`.
+is live (`AUTO_POST` on and he has a Bluesky / Reddit login, or LinkedIn is on) unless you pass
+`"allowPost": true`; `npx convex env set AUTO_POST off` keeps the post `pending`.
 
 ```bash
 ID=$(npx convex run elders:seed '{"name":"Test Walter","phone":"+15550001111","profile":{"industry":"Baking","specialty":"Bread"}}' | tr -d '"')
@@ -132,7 +133,7 @@ For an elder who already did the onboarding call (his row has `stage: "active"` 
 
    ```bash
    npx convex run cartesiaAgents:syncAgent   # same agent per character for onboarding and story calls
-   npx convex env set AUTO_POST off          # posts stay `pending`, nothing goes to LinkedIn
+   npx convex env set AUTO_POST off          # posts stay `pending`, nothing is posted
    ```
 
    Also needed: `OPENAI_API_KEY` (planning, memories, post, memory search).
@@ -167,14 +168,15 @@ For an elder who already did the onboarding call (his row has `stage: "active"` 
    - `memories`: new facts, people, open threads from this call (`callId` = this call).
    - `posts`: one row for the call, `status: "pending"` (with `AUTO_POST=off`).
 
-6. Preview the post (formatting + fact-check, nothing is posted):
+6. Preview the post: the `/posts` page shows the Bluesky thread split; the fact-check alone
+   (nothing is posted, LinkedAPI isn't called):
 
    ```bash
    npx convex run linkedapi:previewPost '{"postId":"<posts id>"}'
    ```
 
-   Post it on purpose later with `npx convex run linkedapi:createPost '{"postId":"<posts id>"}'`
-   (or `linkedapi:approvePost` if the fact-check held it). Turn auto-posting back on with
+   Post it on purpose later with `npx convex run publish:publishPost '{"postId":"<posts id>"}'`
+   (or `publish:approvePost` if it was held). Turn auto-posting back on with
    `npx convex env set AUTO_POST on`.
 
 ## Test an inbound call (he calls the Front Porch number; `inbound.ts`)
@@ -245,7 +247,26 @@ npx convex run apify:findAudienceQuestions '{"elderId":"<id>","keywords":["baker
 
 Pure logic is unit-tested without Convex: `npm test` (Node's test runner, files in `../tests/`).
 
-## LinkedIn posting + post guard (Integrations)
+## Publishing story posts (Integrations)
+
+`publish.publishPost({ postId })` (scheduled after each story call) fact-checks the post once,
+then posts it to each platform that's on, one `postPublications` row per platform:
+Bluesky as a 3-5 post thread (his login), Reddit on his profile (only with `REDDIT_POSTING=on`),
+LinkedIn (only with `LINKEDIN_POSTING=on`, below). Off platforms get a `skipped` row.
+Row statuses: `pending` → `posting` → `posted` | `failed` (nothing new went out) |
+`maybe_posted` (unclear: check his profile first) | `skipped`; undo adds `removing` / `removed`.
+
+```bash
+npx convex run publish:approvePost '{"postId":"<posts id>"}'                       # post a held (needs_review) post
+npx convex run publish:retryPublication '{"publicationId":"<row id>"}'             # retry a failed platform
+npx convex run publish:retryPublication '{"publicationId":"<row id>","approve":true}'  # after checking a maybe_posted one
+```
+
+## LinkedIn posting (off) + post guard (Integrations)
+
+LinkedIn is switched off: nothing calls LinkedAPI unless `LINKEDIN_POSTING=on`. With it on,
+`publish.ts` posts through `linkedapi.startPublication` + `checkPublicationStatus`. The older
+one-platform flow below is kept (also gated).
 
 `linkedapi.createPost({ postId, context? })` claims the row (so it can't be posted
 twice), formats the post for LinkedIn, fact-checks it against the whole call plus his
@@ -268,6 +289,7 @@ npx convex run linkedapi:checkPostStatus '{"postId":"<posts id>"}'  # resume sta
 
 | Env var | Purpose |
 |---|---|
+| `LINKEDIN_POSTING` | default off; `on` lets anything here call LinkedAPI |
 | `LINKEDAPI_TOKEN`, `LINKEDAPI_ID_TOKEN` | LinkedAPI account + grandpa's connected LinkedIn |
 | `OPENAI_API_KEY` | Shared with Brain; the guard calls the LLM (`lib/openai.ts`) |
 | `POST_GUARD_MODE` | `enforce` (default: failing posts become `needs_review`, not posted) · `warn` (post anyway, keep issues) · `off` |
@@ -279,9 +301,10 @@ npx convex run linkedapi:previewText '{"text":"My first job...","turns":[{"role"
 npx convex run linkedapi:previewPost '{"postId":"<posts id>"}'
 ```
 
-The AI-disclosure footer follows the elder's language: Spanish (`es-*`) elders get
-`SPANISH_DISCLOSURE`, everyone else the English line (`lib/linkedinPost.ts`). `previewPost`
-uses the post's elder; `previewText` takes an optional `"language":"es-MX"`.
+The AI-disclosure footer follows the language his calls run in (his character's,
+`callCharacter(elder).language`): Spanish gets `SPANISH_DISCLOSURE`, everyone else the English
+line (`lib/linkedinPost.ts`). `previewPost` uses the post's elder; `previewText` takes an
+optional `"language":"es-MX"`.
 
 **Post quality** (`llm.writePost`, `lib/postQuality.ts`): the writer is platform-neutral: one
 short story (120-200 words, short paragraphs) whose first line works on its own as the opening

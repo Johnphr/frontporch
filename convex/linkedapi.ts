@@ -1,6 +1,15 @@
-// LinkedIn posting via LinkedAPI, on grandpa's own account.
+// LinkedIn posting via LinkedAPI, on grandpa's own account. SWITCHED OFF by default: nothing here
+// calls LinkedAPI unless LINKEDIN_POSTING=on (LinkedAPI needs a connected account per person).
+// Story posts go out through publish.ts (Bluesky thread first, Reddit gated, LinkedIn here).
 //
-// Flow (called by pipeline.processCall after it inserts a `posts` row):
+// With LINKEDIN_POSTING=on, publish.ts posts through:
+//   startPublication({ postId, publicationId })   format + POST /workflows (no fact-check:
+//       publish.ts ran it) -> the postPublications row is "pending" with the workflow id in
+//       externalId -> checkPublicationStatus polls and finishes the row (posted + canonical
+//       url; posts.linkedinUrl via publish.settlePost) | failed | maybe_posted.
+//
+// The older one-platform flow below (createPost / approvePost / checkPostStatus on the posts
+// row) is kept, also behind LINKEDIN_POSTING. It was called by pipeline.processCall:
 //   await ctx.runAction(internal.linkedapi.createPost, { postId, context? })
 //     context: optional background the fact-check may treat as his words
 //     (e.g. memories used to write the post). His profile and the call summary
@@ -29,10 +38,12 @@
 //   npx convex run linkedapi:previewText '{"text": "...", "turns": [{"role":"elder","text":"..."}]}'
 //   npx convex run linkedapi:previewPost '{"postId": "<posts id>"}'
 //
-// Env: LINKEDAPI_TOKEN, LINKEDAPI_ID_TOKEN (+ OPENAI_API_KEY, POST_GUARD_MODE for the guard)
+// Env: LINKEDIN_POSTING (default off), LINKEDAPI_TOKEN, LINKEDAPI_ID_TOKEN
+//      (+ OPENAI_API_KEY, POST_GUARD_MODE for the guard)
 // Owner: Integrations.
 
 import { v } from "convex/values";
+import { makeFunctionReference } from "convex/server";
 import { internal } from "./_generated/api";
 import {
   internalAction,
@@ -48,17 +59,19 @@ import {
   prepareLinkedInText,
   type Turn,
 } from "./lib/linkedinPost";
-import { callLanguage } from "./lib/onboarding";
+import { callCharacter, callLanguage } from "./lib/onboarding";
 import {
   MAYBE_POSTED_MESSAGE,
   buildGuardContext,
   canClaim,
   classifyStart,
   guardDecision,
+  linkedinPostingOn,
   parseWorkflowResult,
   shouldRestartPolling,
   shouldRunGuard,
   type GuardResult,
+  type PlatformOutcome,
 } from "./lib/postFlow";
 import { canonicalLinkedInPostUrl } from "./lib/linkedinUrl";
 
@@ -68,7 +81,13 @@ declare const process: { env: Record<string, string | undefined> };
 const LINKEDAPI = "https://api.linkedapi.io";
 const REQUEST_TIMEOUT_MS = 30_000;
 
-type PostStatus = "pending" | "posting" | "needs_review" | "published" | "failed" | "needs_attention";
+type PostStatus = "pending" | "posting" | "needs_review" | "published" | "failed" | "needs_attention" | "off";
+
+const LINKEDIN_OFF = "LinkedIn posting is off (LINKEDIN_POSTING). Story posts go out with publish:publishPost.";
+const linkedinOn = () => linkedinPostingOn(process.env.LINKEDIN_POSTING);
+
+// undo.ts (another branch) defines it with args { postId, reason? }.
+const removePost = makeFunctionReference<"action", { postId: Id<"posts">; reason?: string }>("undo:removePost");
 
 type CreatePostResult = {
   status: PostStatus;
@@ -108,8 +127,8 @@ export const getPostForPosting = internalQuery({
       profile: (elder as Record<string, unknown> | null)?.profile,
       summary: (call as Record<string, unknown> | null)?.summary,
     });
-    // Disclosure footer in his call language (Spanish for es-* elders).
-    const disclosure = disclosureFor(callLanguage(elder?.language));
+    // Disclosure footer in the language his calls run in (his character's).
+    const disclosure = disclosureFor(elder ? callCharacter(elder).language : "en");
     return { post, turns, context, disclosure };
   },
 });
@@ -334,7 +353,7 @@ async function runPosting(
 export const createPost = internalAction({
   args: { postId: v.id("posts"), context: v.optional(v.string()) },
   handler: async (ctx, { postId, context }): Promise<CreatePostResult> =>
-    runPosting(ctx, postId, { approve: false, context }),
+    linkedinOn() ? runPosting(ctx, postId, { approve: false, context }) : { status: "off", note: LINKEDIN_OFF },
 });
 
 /**
@@ -344,13 +363,15 @@ export const createPost = internalAction({
  */
 export const approvePost = internalAction({
   args: { postId: v.id("posts") },
-  handler: async (ctx, { postId }): Promise<CreatePostResult> => runPosting(ctx, postId, { approve: true }),
+  handler: async (ctx, { postId }): Promise<CreatePostResult> =>
+    linkedinOn() ? runPosting(ctx, postId, { approve: true }) : { status: "off", note: LINKEDIN_OFF },
 });
 
 /** Poll the LinkedAPI workflow until the post is live (or failed). Safe to run by hand. */
 export const checkPostStatus = internalAction({
   args: { postId: v.id("posts") },
   handler: async (ctx, { postId }): Promise<void> => {
+    if (!linkedinOn()) return;
     const data = await ctx.runQuery(internal.linkedapi.getPostForPosting, { postId });
     const post = data?.post;
     if (!post || !post.workflowId || !["pending", "needs_attention"].includes(post.status)) return;
@@ -423,6 +444,93 @@ export const checkPostStatus = internalAction({
       });
     } else {
       await retryLater(outcome.pendingReason);
+    }
+  },
+});
+
+// ---------- publish.ts path (one postPublications row) ----------
+
+/**
+ * Send the post to LinkedAPI for publish.ts (which claimed the row and ran the fact-check).
+ * started -> "pending" + the workflow id (polled by checkPublicationStatus); refused -> failed;
+ * no clear answer -> maybe_posted (a person checks his LinkedIn first).
+ */
+export const startPublication = internalAction({
+  args: { postId: v.id("posts"), publicationId: v.id("postPublications") },
+  handler: async (ctx, { postId, publicationId }): Promise<PlatformOutcome> => {
+    if (!linkedinOn()) return { status: "failed", error: LINKEDIN_OFF };
+    const data = await ctx.runQuery(internal.linkedapi.getPostForPosting, { postId });
+    if (!data) return { status: "failed", error: "Post not found" };
+    let text: string;
+    try {
+      text = prepareLinkedInText(data.post.text, { disclosure: data.disclosure }).text;
+    } catch (err) {
+      return { status: "failed", error: err instanceof Error ? err.message : "Couldn't format the post" };
+    }
+    const headers = linkedApiHeaders();
+    if (!headers) return { status: "failed", error: MISSING_TOKENS };
+    const res = await fetchJson(`${LINKEDAPI}/workflows`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ actionType: "st.createPost", label: "frontporch-post", text }),
+    });
+    const start = classifyStart(res.status, res.json, res.error);
+    if (start.kind === "rejected") return { status: "failed", error: start.error };
+    if (start.kind === "uncertain") return { status: "maybe_posted", error: `${MAYBE_POSTED_MESSAGE} (${start.error})` };
+    await ctx.runMutation(internal.linkedapi.updatePost, { postId, workflowId: start.workflowId, pollAttempts: 0, lastPolledAt: Date.now() });
+    await ctx.scheduler.runAfter(pollDelayMs(0, start.pendingReason), internal.linkedapi.checkPublicationStatus, { postId, publicationId });
+    return { status: "pending", externalId: start.workflowId };
+  },
+});
+
+/** Poll the LinkedAPI workflow for a publish.ts row until it's posted (or failed). Safe to run by hand. */
+export const checkPublicationStatus = internalAction({
+  args: { postId: v.id("posts"), publicationId: v.id("postPublications") },
+  handler: async (ctx, { postId, publicationId }): Promise<void> => {
+    if (!linkedinOn()) return;
+    const row = await ctx.runQuery(internal.publish.getPublication, { publicationId });
+    if (!row || row.platform !== "linkedin" || row.status !== "pending" || !row.externalId) return;
+    const workflowId = row.externalId;
+    const data = await ctx.runQuery(internal.linkedapi.getPostForPosting, { postId });
+    if (!data) return;
+    const finish = async (outcome: PlatformOutcome) => {
+      await ctx.runMutation(internal.publish.finishPublication, { publicationId, outcome });
+      await ctx.runMutation(internal.publish.settlePost, { postId });
+      if (outcome.status !== "failed" && (await ctx.runQuery(internal.publish.isRemoved, { postId }))) {
+        try {
+          await ctx.scheduler.runAfter(0, removePost, { postId });
+        } catch {
+          console.error(`linkedapi: post ${postId} was taken down while posting; run undo:removePost by hand`);
+        }
+      }
+    };
+    const headers = linkedApiHeaders();
+    if (!headers) {
+      await finish({ status: "maybe_posted", error: `${MISSING_TOKENS}. Status checks stopped: check his LinkedIn.` });
+      return;
+    }
+    const attempts = (data.post.pollAttempts ?? 0) + 1;
+    const again = async (pendingReason: string | null) => {
+      if (attempts >= MAX_POLL_ATTEMPTS) {
+        await finish({ status: "maybe_posted", error: `Still waiting on LinkedAPI after ${attempts} checks. Check his LinkedIn.` });
+        return;
+      }
+      await ctx.runMutation(internal.linkedapi.updatePost, { postId, pollAttempts: attempts, lastPolledAt: Date.now() });
+      await ctx.scheduler.runAfter(pollDelayMs(attempts, pendingReason), internal.linkedapi.checkPublicationStatus, { postId, publicationId });
+    };
+    const res = await fetchJson(`${LINKEDAPI}/workflows/${encodeURIComponent(workflowId)}`, { headers });
+    if (res.status < 200 || res.status >= 300 || !res.json?.result) {
+      await again(null);
+      return;
+    }
+    const outcome = parseWorkflowResult(res.json.result);
+    if (outcome.kind === "published") {
+      const url = outcome.url ? canonicalLinkedInPostUrl(outcome.url) : undefined;
+      await finish({ status: "posted", ...(url ? { url } : {}) });
+    } else if (outcome.kind === "failed") {
+      await finish({ status: "failed", error: outcome.error });
+    } else {
+      await again(outcome.pendingReason);
     }
   },
 });

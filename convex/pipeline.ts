@@ -12,10 +12,11 @@
 //          memories  llm.extractKnowledge -> memories.addMany (+ resolve the open threads he
 //                    finished; only thread ids we sent are passed back)
 //          post      llm.writePost, given the time left of the 10-min action limit
-//                    (lib/postQuality.postBudgetMs; may decline: no post; below the quality bar -> saved as
-//                    needs_review, not posted) -> one posts row per call
-//                    (posts.by_call) -> linkedapi.createPost, scheduled only for a new row
-//                    and only when AUTO_POST isn't "off" (off = preview-only, for tests)
+//                    (lib/postQuality.postBudgetMs; may decline: no post; below the quality bar,
+//                    or too long for a 5-post Bluesky thread -> saved as needs_review, not
+//                    posted) -> one posts row per call (posts.by_call) -> publish.publishPost
+//                    (Bluesky thread, Reddit when on, LinkedIn when on), scheduled only for a
+//                    new row and only when AUTO_POST isn't "off" (off = saved, not posted)
 //          reply     threadReplies.draftForCall (scheduled; only when the question came from
 //                    a Bluesky thread, or Reddit once REDDIT_POSTING is on)
 //          plan      conversation.refreshQuestionBank (scheduled)
@@ -42,8 +43,9 @@ import { postingMayBeLive } from "./lib/callLoop";
 import { inboundPlanToMark } from "./lib/inbound";
 import { canClaimProcessing, finishPatch, isProfileUsable, mergeProfile, type Profile } from "./lib/onboarding";
 import { runSteps, type StepReport } from "./lib/planner";
+import { threadFitProblem } from "./lib/blueskyThread";
 import { parseAutoPost } from "./lib/postFlow";
-import { MIN_POST_BUDGET_MS, holdDecision, postBudgetMs } from "./lib/postQuality";
+import { MIN_POST_BUDGET_MS, detectLanguage, holdDecision, postBudgetMs } from "./lib/postQuality";
 import { CALL_REASON, detectTakeDown } from "./lib/undo";
 import { postQuality } from "./schema";
 
@@ -237,8 +239,9 @@ async function runStoryCall(
           budgetMs,
         });
         if (post.skip) return `no post: ${post.reason}`;
-        // Below the quality bar: saved as needs_review (shown on /posts), never auto-posted.
-        const hold = holdDecision(post.quality);
+        // Below the quality bar, or too long for a Bluesky thread: saved as needs_review (shown
+        // on /posts), never auto-posted.
+        const hold = holdDecision(post.quality, threadFitProblem(post.text, detectLanguage(post.text) === "es" ? "es" : "en"));
         const { postId, created } = await ctx.runMutation(internal.pipeline.insertPost, {
           elderId: elder._id,
           callId,
@@ -247,14 +250,13 @@ async function runStoryCall(
           ...(hold ? { hold: { summary: hold.summary } } : {}),
         });
         if (!created) return `post ${postId} already exists`;
-        if (hold) return `post ${postId} held for review (quality ${post.quality.score}/100); post it with linkedapi:approvePost`;
-        // AUTO_POST=off (tests): keep the row `pending`; preview with linkedapi:previewPost,
-        // post on purpose with linkedapi:createPost.
+        if (hold) return `post ${postId} held for review (quality ${post.quality.score}/100); post it with publish:approvePost`;
+        // AUTO_POST=off (tests): keep the row `pending` (see it on /posts), post on purpose.
         if (!parseAutoPost(process.env.AUTO_POST)) {
-          return `post ${postId} saved, preview only (AUTO_POST=off)`;
+          return `post ${postId} saved, not posted (AUTO_POST=off); post it with: npx convex run publish:publishPost '{"postId":"${postId}"}'`;
         }
-        // Posting runs on its own (guard + LinkedAPI + polling) so it can't hold up the rest.
-        await ctx.scheduler.runAfter(0, internal.linkedapi.createPost, { postId });
+        // Publishing runs on its own (fact-check + every platform) so it can't hold up the rest.
+        await ctx.scheduler.runAfter(0, internal.publish.publishPost, { postId });
         return `post ${postId} scheduled`;
       },
     },

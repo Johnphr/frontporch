@@ -5,7 +5,12 @@
 // llm.writePost writes 3 drafts (ANGLES), a judge scores each one against CRITERIA, the best
 // goes through up to MAX_REWRITE_ROUNDS critique -> rewrite rounds, and a post that still
 // doesn't clear the bar is held as `needs_review` (pipeline.ts) instead of auto-posting.
+// The thread split itself is lib/blueskyThread.ts: a post that can't become a 3-5 post thread
+// (hook in post 1, the AI line in the last) is a blocker, so the writer gets a rewrite round
+// with that note, and a post that still doesn't fit is held (holdDecision).
 // No runtime imports: unit-tested directly with Node (tests/postQuality.test.ts).
+
+import { threadFitProblem } from "./blueskyThread.ts";
 //
 // Tuning: change the weights, PASS_SCORE or MIN_CRITERION here and re-run `npm test`.
 
@@ -190,6 +195,11 @@ export function hardChecks(text: string, expectedLang: Lang = "unknown"): CheckI
       message: `The first line is ${hookChars} characters; keep it under ${MAX_HOOK_CHARS} so it works as the opening post.`,
     });
   }
+  // The real split (hook in post 1, story + disclosure in at most 5 posts). Disclosure language:
+  // his call language, else the post's own.
+  const fitLang = expectedLang !== "unknown" ? expectedLang : detectLanguage(text);
+  const fit = threadFitProblem(text, fitLang === "es" ? "es" : "en");
+  if (fit) issues.push({ id: "thread_fit", severity: "major", message: `Doesn't fit a Bluesky thread: ${fit}` });
   const hashtags = text.match(/(^|\s)#\p{L}[\p{L}\p{N}_]*/gu) ?? [];
   if (hashtags.length > MAX_HASHTAGS) {
     issues.push({ id: "hashtags", severity: "minor", message: `${hashtags.length} hashtags; use at most ${MAX_HASHTAGS}.` });
@@ -232,6 +242,8 @@ export type Evaluation = {
   scores: CriterionScores;
   /** Why it didn't pass (or what's left to polish), for the rewrite and for humans. */
   notes: string[];
+  /** False when it can't be split into a Bluesky thread (missing = fits). */
+  fits?: boolean;
 };
 
 function clampScore(n: unknown): number {
@@ -257,9 +269,11 @@ const ZERO_SCORES = Object.fromEntries(CRITERIA.map((c) => [c, 0])) as Criterion
  * judgement (the judge failed) -> not passed.
  */
 export function evaluate(judgement: Judgement | null, issues: CheckIssue[]): Evaluation {
-  const issueNotes = issues.map((i) => i.message);
+  // Blockers first, so trimNotes never drops them.
+  const issueNotes = [...issues.filter((i) => i.severity === "major"), ...issues.filter((i) => i.severity !== "major")].map((i) => i.message);
+  const fit = issues.some((i) => i.id === "thread_fit") ? { fits: false } : {};
   if (!judgement) {
-    return { score: 0, passed: false, scores: ZERO_SCORES, notes: ["The quality check couldn't run, so it can't post on its own.", ...issueNotes] };
+    return { score: 0, passed: false, scores: ZERO_SCORES, notes: ["The quality check couldn't run, so it can't post on its own.", ...issueNotes], ...fit };
   }
   if (judgement.unsupportedFacts.length) {
     return {
@@ -267,6 +281,7 @@ export function evaluate(judgement: Judgement | null, issues: CheckIssue[]): Eva
       passed: false,
       scores: judgement.scores,
       notes: [...judgement.unsupportedFacts.map((f) => `Not something he said: ${f}`), ...judgement.notes, ...issueNotes],
+      ...fit,
     };
   }
   const weighted = CRITERIA.reduce((sum, c) => sum + judgement.scores[c] * WEIGHTS[c], 0) * 10;
@@ -280,7 +295,7 @@ export function evaluate(judgement: Judgement | null, issues: CheckIssue[]): Eva
     ...judgement.notes,
     ...issueNotes,
   ];
-  return { score, passed, scores: judgement.scores, notes };
+  return { score, passed, scores: judgement.scores, notes, ...fit };
 }
 
 export type Candidate = { index: number; text: string; hook: string; evaluation: Evaluation };
@@ -306,9 +321,15 @@ export function nextStep(a: { passed: boolean; round: number; timeLeftMs: number
   return "hold";
 }
 
-/** A rewrite replaces the best only if it's better (passes, or scores higher). */
+/**
+ * A rewrite replaces the best only if it's better: passes, or (neither passing) fits a thread
+ * where the best doesn't, or scores higher. A post that can't be a thread can't go out at all.
+ */
 export function keepRewrite(current: Evaluation, rewritten: Evaluation): boolean {
   if (rewritten.passed !== current.passed) return rewritten.passed;
+  const fitsNow = current.fits !== false;
+  const fitsNew = rewritten.fits !== false;
+  if (fitsNow !== fitsNew) return fitsNew;
   return rewritten.score > current.score;
 }
 
@@ -445,14 +466,26 @@ export async function runQualityLoop(deps: QualityDeps): Promise<WrittenPost> {
 }
 
 /**
- * Pipeline: a post below the bar is saved as `needs_review` with a short summary (the judge's
- * notes are on posts.quality, shown once on /posts) and isn't posted; `linkedapi:approvePost`
- * posts it after a human review. null = post as usual.
+ * Pipeline: a post below the bar, or one that can't be split into a Bluesky thread
+ * (`threadProblem`, lib/blueskyThread.threadFitProblem), is saved as `needs_review` with a short
+ * summary (the judge's notes are on posts.quality, shown once on /posts) and isn't posted;
+ * `publish:approvePost` posts it after a human review (and an edit, for a thread that doesn't
+ * fit). null = post as usual.
  */
-export function holdDecision(quality: QualityReport | undefined): { status: "needs_review"; summary: string } | null {
+export function holdDecision(
+  quality: QualityReport | undefined,
+  threadProblem?: string | null,
+): { status: "needs_review"; summary: string } | null {
+  const rewrites = (q: QualityReport) => `${q.rounds} rewrite${q.rounds === 1 ? "" : "s"}`;
+  if (threadProblem) {
+    return {
+      status: "needs_review",
+      summary: `Held: doesn't fit a Bluesky thread of at most 5 posts (${threadProblem})${quality ? ` after ${rewrites(quality)}` : ""}. Shorten it, then publish:approvePost.`,
+    };
+  }
   if (!quality || quality.passed) return null;
   return {
     status: "needs_review",
-    summary: `Held by the quality check: ${quality.score}/100 (bar ${PASS_SCORE}) after ${quality.rounds} rewrite${quality.rounds === 1 ? "" : "s"}.`,
+    summary: `Held by the quality check: ${quality.score}/100 (bar ${PASS_SCORE}) after ${rewrites(quality)}.`,
   };
 }

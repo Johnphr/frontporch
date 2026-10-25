@@ -40,3 +40,50 @@ test("renderPostsPage: empty state and an on-demand fact-check result", () => {
   const other = renderPostsPage([post], { key: "k", check: { postId: "p2", error: "x" } });
   assert.doesNotMatch(other, /Fact-check failed to run/); // only shown on its own post
 });
+
+test("renderPostsPage: the Bluesky thread preview (post 1/N) and each platform's status + link", () => {
+  const html = renderPostsPage(
+    [
+      {
+        ...post,
+        status: "published",
+        thread: ["Hook <b>", "Story.", "Question?\n\nDisclosure."],
+        publications: [
+          { id: "pb1", platform: "bluesky", status: "posted", url: "https://bsky.app/profile/w/post/1", posts: 3 },
+          { id: "pb2", platform: "reddit", status: "maybe_posted", error: "Reddit HTTP 503" },
+          { id: "pb3", platform: "linkedin", status: "skipped", error: "LinkedIn posting is off (LINKEDIN_POSTING)." },
+          { id: "pb4", platform: "x", status: "posted", url: "javascript:alert(1)" },
+        ],
+      },
+    ],
+    { key: "k" },
+  );
+  assert.match(html, /1\/3/);
+  assert.match(html, /3\/3/);
+  assert.match(html, /Hook &lt;b&gt;/);
+  assert.match(html, /Bluesky<\/strong>: <span class="pstatus s-posted">Posted<\/span> \(3 posts\)/);
+  assert.match(html, /href="https:\/\/bsky\.app\/profile\/w\/post\/1"/);
+  assert.match(html, /Maybe posted: check his profile/);
+  assert.match(html, /publish:retryPublication &#39;\{&quot;publicationId&quot;:&quot;pb2&quot;,&quot;approve&quot;:true\}&#39;/);
+  assert.match(html, /LinkedIn<\/strong>: <span class="pstatus s-skipped">Off<\/span>/);
+  assert.doesNotMatch(html, /javascript:alert/);
+  assert.doesNotMatch(html, /linkedapi:approvePost/);
+});
+
+test("renderPostsPage: held posts show publish:approvePost; saved posts show publish:publishPost; a thread that doesn't fit says why", () => {
+  const held = renderPostsPage([{ ...post, threadProblem: "It needs 6 posts; a thread holds at most 5." }], { key: "k" });
+  assert.match(held, /publish:approvePost &#39;\{&quot;postId&quot;:&quot;p1&quot;\}&#39;/);
+  assert.match(held, /Doesn't fit a Bluesky thread: It needs 6 posts/);
+  const saved = renderPostsPage([{ ...post, status: "pending" }], { key: "k" });
+  assert.match(saved, /publish:publishPost &#39;\{&quot;postId&quot;:&quot;p1&quot;\}&#39;/);
+  assert.match(saved, /Saved \(not posted\)/);
+});
+
+test("statusLabel follows the real state: a post that went out is never 'Saved (not posted)'", async () => {
+  const { statusLabel } = await import("../convex/lib/postsPage.ts");
+  assert.equal(statusLabel({ status: "pending", publications: [{ id: "a", platform: "bluesky", status: "posted" }] }), "Published");
+  assert.equal(statusLabel({ status: "pending", publications: [{ id: "a", platform: "linkedin", status: "pending" }] }), "Posting");
+  assert.equal(statusLabel({ status: "posting", publications: [{ id: "a", platform: "bluesky", status: "maybe_posted" }] }), "Maybe posted: check");
+  assert.equal(statusLabel({ status: "pending" }), "Saved (not posted)");
+  assert.equal(statusLabel({ status: "needs_review", heldFor: "quality" }), "Held: below the quality bar");
+});
