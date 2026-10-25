@@ -29,6 +29,7 @@ import type { MemoryDoc, MemoryHit } from "./lib/dataRefs";
 import {
   FALLBACK_MAIN_QUESTION,
   buildCallPlan,
+  dropJustUsed,
   fallbackCandidates,
   firstBankQuestion,
   rankCandidates,
@@ -141,8 +142,18 @@ export const replaceQueued = internalMutation({
     items: v.array(bankItemValidator),
     feedbackLine: v.optional(v.string()),
     resonated: v.optional(v.string()),
+    /** when the refresh read its context: rows used since then must not come back queued */
+    startedAt: v.optional(v.number()),
   },
-  handler: async (ctx, { elderId, items, feedbackLine, resonated }) => {
+  handler: async (ctx, { elderId, items: ranked, feedbackLine, resonated, startedAt }) => {
+    const usedSince =
+      startedAt === undefined
+        ? []
+        : await ctx.db
+            .query("questionBank")
+            .withIndex("by_elder_status_usedAt", (q) => q.eq("elderId", elderId).eq("status", "used").gte("usedAt", startedAt))
+            .collect();
+    const items = dropJustUsed(ranked, usedSince);
     const old = await ctx.db
       .query("questionBank")
       .withIndex("by_elder_status_priority", (q) => q.eq("elderId", elderId).eq("status", "queued"))
@@ -226,6 +237,7 @@ export const refreshQuestionBank = internalAction({
   },
   handler: async (ctx, args): Promise<RefreshResult> => {
     const errors: string[] = [];
+    const startedAt = Date.now();
     const context: PlanningContext = await ctx.runQuery(internal.conversation.getPlanningContext, {
       elderId: args.elderId,
     });
@@ -341,6 +353,7 @@ export const refreshQuestionBank = internalAction({
     });
     await ctx.runMutation(internal.conversation.replaceQueued, {
       elderId: args.elderId,
+      startedAt,
       feedbackLine: feedback.line,
       resonated: feedback.resonated,
       items: ranked.map((r) => ({
@@ -365,6 +378,10 @@ export const prepareCall = internalAction({
     const errors: string[] = [];
     const context: PlanningContext = await ctx.runQuery(internal.conversation.getPlanningContext, { elderId });
     if (!context.elder) throw new Error("Elder not found");
+    // The onboarding call doesn't use the bank, and his field isn't known yet: skip the paid searches.
+    if (isOnboarding(context.elder)) {
+      return { refreshScheduled: false, recentTopics: 0, audience: "skipped (onboarding)", errors };
+    }
 
     // Both lookups run at once (each can take minutes). Apify saves its own results;
     // refreshQuestionBank reads the best ones back via topAudienceQuestions.

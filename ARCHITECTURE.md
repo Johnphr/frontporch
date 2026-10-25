@@ -352,8 +352,9 @@ tests/                          node --test + fixtures/
 | `OPENAI_MODEL` | optional, default `gpt-6-luna` |
 | `PUBLIC_CALLS` | optional, default off. Lets the sign-up page start his first call (`signup:requestCall`; max 3 a day, 10 min apart). `on` = only `CALL_ALLOWLIST` numbers; `all` = anyone (only once SMS is real) |
 | `CALL_ALLOWLIST` | comma-separated E.164 test numbers the sign-up page may call when `PUBLIC_CALLS=on` |
-| `CALL_INTERVAL_MINUTES` | optional, default off. Repeat calls this many minutes after the last call ENDS (`callLoop.tick`, every minute); covers only `CALL_ALLOWLIST` numbers unless `CALL_LOOP=all` |
+| `CALL_INTERVAL_MINUTES` | optional, default off. Repeat calls this many minutes after the last call ENDS (`callLoop.tick`, every minute); covers only `CALL_ALLOWLIST` numbers unless `CALL_LOOP=all`. Under a day it needs `AUTO_POST=off` |
 | `CALL_LOOP` | optional. `all` = the repeating loop covers every elder (default: only `CALL_ALLOWLIST`) |
+| `POSTS_PAGE_KEY` | optional. Turns on the `/posts?key=...` review page (404 without it); a long random string |
 
 Share keys through a password manager, never the repo or chat.
 
@@ -364,7 +365,7 @@ Share keys through a password manager, never the repo or chat.
 | 1 | Onboarding length | One 15–20 min call; repeat if the profile is thin | Voice + Brain |
 | 2 | Prefill profile from LinkedIn | Yes when he has a profile (`apify.scrapeProfile`) | Integrations |
 | 3 | Post from onboarding | No; first post after story call 1 | Brain |
-| 4 | Agents | Two Cartesia agents (onboarding / story) per language (en Pip, es Juanito) | Voice |
+| 4 | Agents | One Cartesia agent per character (en Pip, es Juanito; onboarding vs story is the `{{goal}}` text), plus the inbound agent | Voice |
 | 5 | Memory at call time | Prefetch into dynamic variables, no mid-call tool | Data + Brain |
 | 6 | Posts per call | One; extra stories stay as seeds/memories | Brain |
 | 7 | When to post | Right after the call | Brain |

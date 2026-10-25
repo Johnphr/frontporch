@@ -111,15 +111,16 @@ test("retryAllowedAt / retryOffer: same limits as requestCall (10 min apart, 3 a
   assert.deepEqual(retryOffer("no_answer", { ...base, callsOn: false, callTimes: [] }), { canRetry: false });
 });
 
-test("loopInterval / loopCovers: off while posting is live (short interval); allowlist unless CALL_LOOP=all", async () => {
+test("loopInterval / loopCovers: off unless AUTO_POST=off (short interval); allowlist unless CALL_LOOP=all", async () => {
   const { loopCovers, loopInterval } = await import("../convex/lib/callLoop.ts");
-  assert.deepEqual(loopInterval({ CALL_INTERVAL_MINUTES: "5" }), { minutes: 5 });
+  assert.deepEqual(loopInterval({ CALL_INTERVAL_MINUTES: "5", AUTO_POST: "off" }), { minutes: 5 });
   assert.deepEqual(loopInterval({}), { minutes: null });
-  const live = { CALL_INTERVAL_MINUTES: "5", LINKEDAPI_TOKEN: "x", LINKEDAPI_ID_TOKEN: "y" };
+  // AUTO_POST on (the default) may post on any platform: no fast loop, whatever keys are set.
+  const live = { CALL_INTERVAL_MINUTES: "5" };
   assert.deepEqual(loopInterval(live), { minutes: null, blocked: "posting_live" });
   assert.deepEqual(loopInterval({ ...live, AUTO_POST: "off" }), { minutes: 5 });
   assert.deepEqual(loopInterval({ ...live, CALL_INTERVAL_MINUTES: "10080" }), { minutes: 10080 });
-  const env = { CALL_INTERVAL_MINUTES: "5", CALL_ALLOWLIST: "+14155550123, +5215512345678" };
+  const env = { CALL_INTERVAL_MINUTES: "5", AUTO_POST: "off", CALL_ALLOWLIST: "+14155550123, +5215512345678" };
   assert.equal(loopCovers(env, "+14155550123"), true);
   assert.equal(loopCovers(env, "+14155550999"), false);
   assert.equal(loopCovers({ ...env, CALL_LOOP: "all" }, "+14155550999"), true);

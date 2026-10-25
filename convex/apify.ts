@@ -284,7 +284,7 @@ export const findAudienceQuestions = internalAction({
     const now = Date.now();
 
     // Bluesky needs his login: skip it unless it's configured (or asked for by name).
-    const bluesky = await blueskyLoginForElder(args.elderId);
+    const bluesky = await blueskyLoginForElder(ctx, args.elderId);
     const sources = enabledSources(args.sources).filter(
       (s) => s.kind !== "bluesky_search" || bluesky !== null || Boolean(args.sources?.includes(s.name)),
     );

@@ -73,8 +73,10 @@ async function embed(texts: string[]): Promise<number[][]> {
       response = await send();
     }
     if (!response.ok) {
-      const detail = (await response.text()).slice(0, 300);
-      throw new Error(`memories: OpenAI embeddings failed (HTTP ${response.status}): ${detail}`);
+      // Only OpenAI's error code, never the body (it can echo part of the key).
+      const body = (await response.json().catch(() => null)) as { error?: { code?: unknown; type?: unknown } } | null;
+      const code = [body?.error?.code, body?.error?.type].find((c) => typeof c === "string" && /^[\w.-]{1,60}$/.test(c));
+      throw new Error(`memories: OpenAI embeddings failed (HTTP ${response.status}${code ? `, ${code}` : ""})`);
     }
     const json = (await response.json()) as { data?: { index: number; embedding: number[] }[] };
     const data = [...(json.data ?? [])].sort((a, b) => a.index - b.index);
@@ -243,10 +245,13 @@ export const applyChanges = internalMutation({
     // runs for one call conflict here and the retry sees the first run's rows.
     if (args.callId) {
       const callId = args.callId;
-      const already = await ctx.db
-        .query("memories")
-        .withIndex("by_call", (q) => q.eq("callId", callId))
-        .first();
+      // A call whose items all merged leaves no row with its callId, so memoriesAppliedAt marks it too.
+      const already =
+        Boolean((await ctx.db.get(callId))?.memoriesAppliedAt) ||
+        (await ctx.db
+          .query("memories")
+          .withIndex("by_call", (q) => q.eq("callId", callId))
+          .first()) !== null;
       if (already) return { inserted: 0, merged: 0, resolved: 0 };
     }
     const now = Date.now();
@@ -282,6 +287,7 @@ export const applyChanges = internalMutation({
       });
     }
     const resolved = await resolveOpenThreads(ctx, args.resolveIds, args.elderId);
+    if (args.callId && (await ctx.db.get(args.callId))) await ctx.db.patch(args.callId, { memoriesAppliedAt: now });
     return { inserted: args.inserts.length, merged, resolved };
   },
 });
@@ -311,11 +317,10 @@ export const resolveThreads = internalMutation({
 /** True if memories were already inserted for this call (addMany idempotency). */
 export const hasCallMemories = internalQuery({
   args: { callId: v.id("calls") },
-  handler: async (ctx, { callId }): Promise<boolean> =>
-    (await ctx.db
-      .query("memories")
-      .withIndex("by_call", (q) => q.eq("callId", callId))
-      .first()) !== null,
+  handler: async (ctx, { callId }): Promise<boolean> => {
+    if ((await ctx.db.get(callId))?.memoriesAppliedAt) return true;
+    return (await ctx.db.query("memories").withIndex("by_call", (q) => q.eq("callId", callId)).first()) !== null;
+  },
 });
 
 // ---------- read ----------

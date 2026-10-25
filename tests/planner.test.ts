@@ -6,6 +6,7 @@ import {
   FALLBACK_MAIN_QUESTION,
   SOURCE_WEIGHTS,
   buildCallPlan,
+  dropJustUsed,
   fallbackCandidates,
   filterTopicsByUrls,
   formatMemoriesBrief,
@@ -329,4 +330,14 @@ test("formatProfile lists his topics and the avoid line", () => {
   });
   assert.match(text, /Topics he knows well: sourdough; running a crew\./);
   assert.doesNotMatch(text, /Topics to avoid/);
+});
+
+test("dropJustUsed: a question used while the bank refreshed never comes back queued", () => {
+  const items = [
+    { question: "How did you price bread?", topicKey: "bread price" },
+    { question: "What was your first shop like?", topicKey: "first shop" },
+  ];
+  assert.deepEqual(dropJustUsed(items, []), items);
+  assert.deepEqual(dropJustUsed(items, [{ question: "Other wording", topicKey: "bread price" }]), [items[1]]);
+  assert.deepEqual(dropJustUsed(items, [{ question: " what was your first shop like? ", topicKey: "x" }]), [items[0]]);
 });

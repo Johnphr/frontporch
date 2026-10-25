@@ -207,7 +207,7 @@ export function buildLookupTool(a: { url: string; secret: string }) {
           caller_id: { type: "string", dynamic_variable: "system__caller_id" },
           conversation_id: { type: "string", dynamic_variable: "system__conversation_id" },
         },
-        required: ["caller_id"],
+        required: ["caller_id", "conversation_id"],
       },
       authentication: { mode: "bearer", token: { type: "secret", secret_value: a.secret } },
     },

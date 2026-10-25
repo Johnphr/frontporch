@@ -105,18 +105,24 @@ export type LoopEnv = {
   CALL_LOOP?: string; // "all" = loop everyone; otherwise only CALL_ALLOWLIST numbers
   CALL_ALLOWLIST?: string;
   AUTO_POST?: string;
-  LINKEDAPI_TOKEN?: string;
-  LINKEDAPI_ID_TOKEN?: string;
 };
 
 /**
- * The loop's interval, or off. Off while real posting is live (same check as pipeline.ts) and
- * the interval is under a day, so fast iteration can never post to LinkedIn every few minutes.
+ * Could a finished call post anywhere public? Yes unless AUTO_POST=off: logins are per elder
+ * (Bluesky, Reddit) and thread replies post too, so env keys can't tell us it's safe.
+ */
+export function postingMayBeLive(env: { AUTO_POST?: string }): boolean {
+  return parseAutoPost(env.AUTO_POST);
+}
+
+/**
+ * The loop's interval, or off. Off while posting may be live and the interval is under a day,
+ * so fast iteration can never post every few minutes. Set AUTO_POST=off to loop.
  */
 export function loopInterval(env: LoopEnv): { minutes: number | null; blocked?: "posting_live" } {
   const minutes = parseIntervalMinutes(env.CALL_INTERVAL_MINUTES);
   if (minutes === null) return { minutes: null };
-  const postingLive = parseAutoPost(env.AUTO_POST) && Boolean(env.LINKEDAPI_TOKEN && env.LINKEDAPI_ID_TOKEN);
+  const postingLive = postingMayBeLive(env);
   if (postingLive && minutes < 24 * 60) return { minutes: null, blocked: "posting_live" };
   return { minutes };
 }

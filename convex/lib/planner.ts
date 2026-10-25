@@ -225,6 +225,20 @@ export function normalizePlannedCandidates(raw: unknown): Candidate[] {
 }
 
 /** Questions we can still ask when the LLM is unavailable: no invention, just the inputs. */
+/**
+ * Drop ranked items that were used while the refresh ran (same topicKey or same question), so a
+ * question asked on the call that just happened never goes back in the queue.
+ */
+export function dropJustUsed<T extends { question: string; topicKey: string }>(
+  items: T[],
+  used: Array<{ question: string; topicKey: string }>,
+): T[] {
+  if (used.length === 0) return items;
+  const keys = new Set(used.map((u) => u.topicKey));
+  const questions = new Set(used.map((u) => u.question.trim().toLowerCase()));
+  return items.filter((i) => !keys.has(i.topicKey) && !questions.has(i.question.trim().toLowerCase()));
+}
+
 export function fallbackCandidates(input: {
   openThreads: { id: string; text: string }[];
   readerQuestions: string[];

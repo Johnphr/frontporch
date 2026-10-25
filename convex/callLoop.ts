@@ -9,7 +9,7 @@
 // - Never the first call (that's "Call me now" or a call started by hand).
 // - Stops calling him after 3 missed calls in a row until he really talks (a call by hand, or
 //   "Call me now" during onboarding).
-// - Off while real posting is live with an interval under a day (no LinkedIn post every 5 min).
+// - Off with an interval under a day unless AUTO_POST=off (no public post every 5 min).
 // - Starts are spaced 30 s apart. No quiet hours: it's a testing tool, keep the list small.
 // Decisions: lib/callLoop.ts (tested). Owner: Brain.
 
