@@ -31,6 +31,18 @@ export function GoogleIcon() {
   )
 }
 
+export function BlueskyIcon() {
+  return (
+    <svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true">
+      <rect width="24" height="24" rx="5" fill="#fff" />
+      <path
+        fill="#1185FE"
+        d="M6.3 5.2c1.9 1.4 3.9 4.3 4.6 5.9.7-1.6 2.7-4.5 4.6-5.9 1.4-1 3.6-1.8 3.6.7 0 .5-.3 4.2-.5 4.8-.6 2.1-2.8 2.7-4.7 2.3 3.4.6 4.2 2.5 2.4 4.4-3.5 3.6-5-.9-5.4-2l-.1-.3-.1.3c-.4 1.1-1.9 5.6-5.4 2-1.9-1.9-1-3.8 2.4-4.4-2 .4-4.1-.2-4.7-2.3-.2-.6-.5-4.3-.5-4.8 0-2.5 2.2-1.7 3.6-.7z"
+      />
+    </svg>
+  )
+}
+
 export function LinkedInIcon() {
   return (
     <svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true">

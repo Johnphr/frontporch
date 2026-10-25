@@ -99,7 +99,7 @@ function useCallStatus(callId) {
   return { status, stopped, offline }
 }
 
-export function DoneStep({ t, name, characterName, linkedin, elderId, headingRef, headingClass, errorText, onStartOver }) {
+export function DoneStep({ t, name, characterName, bluesky, connectedHandle, elderId, token, headingRef, headingClass, errorText, onStartOver }) {
   const [callId, setCallId] = useState(loadCallId)
   const [requestResult, setRequestResult] = useState(null) // i18n key in t.done when no call was placed
   const [busy, setBusy] = useState(false)
@@ -118,8 +118,8 @@ export function DoneStep({ t, name, characterName, linkedin, elderId, headingRef
     setError(null)
     setRequestResult(null)
     try {
-      if (!elderId) throw Object.assign(new Error('NOT_FOUND'), { code: 'NOT_FOUND' })
-      const res = await signupApi.requestCall(elderId)
+      if (!elderId || !token) throw Object.assign(new Error('NOT_FOUND'), { code: 'NOT_FOUND' })
+      const res = await signupApi.requestCall(elderId, token)
       if (res?.callId) {
         saveCallId(res.callId)
         setCallId(res.callId)
@@ -165,7 +165,13 @@ export function DoneStep({ t, name, characterName, linkedin, elderId, headingRef
         <p>{name ? t.done.lead(name) : t.done.leadNoName}</p>
       </header>
       {characterName && <Note>{t.done.character(characterName)}</Note>}
-      <Note>{linkedin === 'saved' ? t.done.linkedinYes : t.done.linkedinNo}</Note>
+      <Note>
+        {bluesky === 'saved' && connectedHandle
+          ? t.done.blueskyYes(connectedHandle)
+          : bluesky === 'locked'
+            ? t.done.blueskyLocked
+            : t.done.blueskyNo}
+      </Note>
       <div aria-live="polite" className="flex flex-col gap-4">
         {message}
         {followUp}
