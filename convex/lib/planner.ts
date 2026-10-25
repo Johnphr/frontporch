@@ -224,7 +224,6 @@ export function normalizePlannedCandidates(raw: unknown): Candidate[] {
   return out;
 }
 
-/** Questions we can still ask when the LLM is unavailable: no invention, just the inputs. */
 /**
  * Drop ranked items that were used while the refresh ran (same topicKey or same question), so a
  * question asked on the call that just happened never goes back in the queue.
@@ -239,6 +238,24 @@ export function dropJustUsed<T extends { question: string; topicKey: string }>(
   return items.filter((i) => !keys.has(i.topicKey) && !questions.has(i.question.trim().toLowerCase()));
 }
 
+/** Calls whose plan's bank row may still be marked used (ended = not processed yet). */
+const PLAN_OPEN_STATUSES = new Set(["queued", "in_progress", "ended"]);
+
+/**
+ * Bank row ids that open calls' plans point at (calls.plan.bankId). replaceQueued keeps
+ * those rows, so markBankRowUsed still finds them when the call is placed or processed.
+ */
+export function bankIdsHeldByOpenCalls(calls: Array<{ status: string; plan?: unknown }>): Set<string> {
+  const ids = new Set<string>();
+  for (const call of calls) {
+    if (!PLAN_OPEN_STATUSES.has(call.status)) continue;
+    const bankId = (call.plan as { bankId?: unknown } | null | undefined)?.bankId;
+    if (typeof bankId === "string" && bankId) ids.add(bankId);
+  }
+  return ids;
+}
+
+/** Questions we can still ask when the LLM is unavailable: no invention, just the inputs. */
 export function fallbackCandidates(input: {
   openThreads: { id: string; text: string }[];
   readerQuestions: string[];

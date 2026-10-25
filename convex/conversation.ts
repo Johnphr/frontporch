@@ -28,6 +28,7 @@ import { internalAction, internalMutation, internalQuery, type MutationCtx } fro
 import type { MemoryDoc, MemoryHit } from "./lib/dataRefs";
 import {
   FALLBACK_MAIN_QUESTION,
+  bankIdsHeldByOpenCalls,
   buildCallPlan,
   dropJustUsed,
   fallbackCandidates,
@@ -81,6 +82,10 @@ type PlanningContext = {
 };
 
 const RECENTLY_USED_COUNT = 10;
+/** Look this far before the refresh's start for rows just used (clock slack between functions). */
+const JUST_USED_SLACK_MS = 60_000;
+/** Recent calls checked for a plan still holding a queued bank row. */
+const OPEN_CALLS_CHECKED = 10;
 
 // ---------- queries + mutations ----------
 
@@ -135,7 +140,10 @@ export const getSavedFeedback = internalQuery({
   },
 });
 
-/** Swap the queued bank for a freshly ranked one. Used rows stay as history. */
+/**
+ * Swap the queued bank for a freshly ranked one. Used rows stay as history. Queued rows an
+ * open call's plan points at stay too (that call marks them used later), and aren't re-added.
+ */
 export const replaceQueued = internalMutation({
   args: {
     elderId: v.id("elders"),
@@ -151,14 +159,23 @@ export const replaceQueued = internalMutation({
         ? []
         : await ctx.db
             .query("questionBank")
-            .withIndex("by_elder_status_usedAt", (q) => q.eq("elderId", elderId).eq("status", "used").gte("usedAt", startedAt))
+            .withIndex("by_elder_status_usedAt", (q) =>
+              q.eq("elderId", elderId).eq("status", "used").gte("usedAt", startedAt - JUST_USED_SLACK_MS),
+            )
             .collect();
-    const items = dropJustUsed(ranked, usedSince);
+    const recentCalls = await ctx.db
+      .query("calls")
+      .withIndex("by_elder", (q) => q.eq("elderId", elderId))
+      .order("desc")
+      .take(OPEN_CALLS_CHECKED);
+    const held = bankIdsHeldByOpenCalls(recentCalls);
     const old = await ctx.db
       .query("questionBank")
       .withIndex("by_elder_status_priority", (q) => q.eq("elderId", elderId).eq("status", "queued"))
       .collect();
-    for (const row of old) await ctx.db.delete(row._id);
+    const kept = old.filter((row) => held.has(row._id));
+    const items = dropJustUsed(ranked, [...usedSince, ...kept]);
+    for (const row of old) if (!held.has(row._id)) await ctx.db.delete(row._id);
     for (const item of items) {
       await ctx.db.insert("questionBank", { elderId, ...item, status: "queued" });
     }
@@ -171,7 +188,7 @@ export const replaceQueued = internalMutation({
       if (meta) await ctx.db.patch(meta._id, fields);
       else await ctx.db.insert("questionBankMeta", { elderId, ...fields });
     }
-    return { removed: old.length, queued: items.length };
+    return { removed: old.length - kept.length, kept: kept.length, queued: items.length };
   },
 });
 
@@ -205,7 +222,11 @@ export async function markBankRowUsed(
   callId?: Id<"calls">,
 ): Promise<{ ok: boolean }> {
   const row = await ctx.db.get(bankId);
-  if (!row || row.elderId !== elderId) return { ok: false };
+  if (!row) {
+    console.warn(`conversation.markBankRowUsed: bank row not found for call ${callId ?? "(none)"}`);
+    return { ok: false };
+  }
+  if (row.elderId !== elderId) return { ok: false };
   const now = Date.now();
   await ctx.db.patch(bankId, { status: "used", usedAt: now, ...(callId ? { usedInCallId: callId } : {}) });
   if (row.source === "audience" && row.sourceRef) {

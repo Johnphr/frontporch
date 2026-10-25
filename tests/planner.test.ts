@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  bankIdsHeldByOpenCalls,
   FALLBACK_MAIN_QUESTION,
   SOURCE_WEIGHTS,
   buildCallPlan,
@@ -340,4 +341,27 @@ test("dropJustUsed: a question used while the bank refreshed never comes back qu
   assert.deepEqual(dropJustUsed(items, []), items);
   assert.deepEqual(dropJustUsed(items, [{ question: "Other wording", topicKey: "bread price" }]), [items[1]]);
   assert.deepEqual(dropJustUsed(items, [{ question: " what was your first shop like? ", topicKey: "x" }]), [items[0]]);
+});
+
+test("bankIdsHeldByOpenCalls: queued / in_progress / ended calls hold their plan's bank row", () => {
+  const held = bankIdsHeldByOpenCalls([
+    { status: "in_progress", plan: { kind: "story", bankId: "b1" } },
+    { status: "ended", plan: { bankId: "b2" } }, // inbound, not processed yet
+    { status: "queued", plan: { bankId: "b3" } },
+    { status: "done", plan: { bankId: "b4" } },
+    { status: "no_conversation", plan: { bankId: "b5" } },
+    { status: "in_progress" },
+    { status: "in_progress", plan: { kind: "onboarding" } },
+    { status: "queued", plan: null },
+  ]);
+  assert.deepEqual([...held].sort(), ["b1", "b2", "b3"]);
+});
+
+test("replaceQueued's rule: a kept row isn't inserted again", () => {
+  const ranked = [
+    { question: "How did you price bread?", topicKey: "bread price" },
+    { question: "What was your first shop like?", topicKey: "first shop" },
+  ];
+  const kept = [{ question: "How did you price bread?", topicKey: "bread price" }];
+  assert.deepEqual(dropJustUsed(ranked, kept), [ranked[1]]);
 });
