@@ -44,6 +44,9 @@ export const listForPage = internalQuery({
           ...(p.guardSummary ? { guardSummary: p.guardSummary } : {}),
           ...(p.guardIssues?.length ? { guardIssues: p.guardIssues } : {}),
           ...(p.error ? { error: p.error } : {}),
+          ...(p.quality
+            ? { quality: { score: p.quality.score, passed: p.quality.passed, rounds: p.quality.rounds, notes: p.quality.notes } }
+            : {}),
         };
       }),
     );

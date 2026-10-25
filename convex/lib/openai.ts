@@ -136,6 +136,9 @@ export async function structuredOutput<T>(opts: {
   schema: Json;
   effort: Effort;
   maxOutputTokens?: number;
+  /** Defaults: 2-minute timeout, one retry. writePost's quality loop uses shorter, no-retry calls. */
+  timeoutMs?: number;
+  retries?: number;
 }): Promise<T> {
   const response = await createResponse(
     {
@@ -147,7 +150,7 @@ export async function structuredOutput<T>(opts: {
       text: { format: { type: "json_schema", name: opts.name, schema: opts.schema, strict: true } },
     },
     // 2-minute timeout, one retry: a hung request must not stall the pipeline.
-    { timeoutMs: 120_000, retries: 1 },
+    { timeoutMs: opts.timeoutMs ?? 120_000, retries: opts.retries ?? 1 },
   );
   const text = readOutputText(response);
   try {

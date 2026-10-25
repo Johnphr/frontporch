@@ -13,6 +13,8 @@ export type PagePost = {
   guardSummary?: string;
   guardIssues?: string[];
   error?: string;
+  /** Post quality (lib/postQuality.ts), when writePost scored it. */
+  quality?: { score: number; passed: boolean; rounds: number; notes: string[] };
 };
 
 export type PageCheck = { postId: string; pass: boolean; summary: string; issues: string[]; mode: string } | { postId: string; error: string };
@@ -42,6 +44,12 @@ function checkBlock(check: PageCheck | undefined): string {
   return `<div class="check ${check.pass ? "good" : "bad"}"><strong>Fact-check now: ${check.pass ? "pass" : "would be held"}</strong> (${escapeHtml(check.mode)}) ${escapeHtml(check.summary)}${issuesList(check.issues)}</div>`;
 }
 
+function qualityBlock(q: PagePost["quality"]): string {
+  if (!q) return "";
+  const rewrites = `${q.rounds} rewrite${q.rounds === 1 ? "" : "s"}`;
+  return `<div class="check ${q.passed ? "good" : "bad"}"><strong>Quality: ${q.score}/100 (${q.passed ? "passed" : "below the bar"})</strong>, ${rewrites}${issuesList(q.notes)}</div>`;
+}
+
 function card(p: PagePost, key: string, check: PageCheck | undefined): string {
   const date = new Date(p.createdAt).toISOString().slice(0, 16).replace("T", " ");
   const stored = p.guardSummary || p.guardIssues?.length
@@ -53,7 +61,7 @@ function card(p: PagePost, key: string, check: PageCheck | undefined): string {
   ${p.question ? `<p class="q">Call question: ${escapeHtml(p.question)}</p>` : ""}
   <div class="post">${escapeHtml(p.text)}</div>
   ${p.error ? `<p class="err">${escapeHtml(p.error)}</p>` : ""}
-  ${stored}${checkBlock(check?.postId === p.id ? check : undefined)}
+  ${qualityBlock(p.quality)}${stored}${checkBlock(check?.postId === p.id ? check : undefined)}
   <footer><a href="${href}">Fact-check now</a> <span class="id">${escapeHtml(p.id)}</span></footer>
 </article>`;
 }
