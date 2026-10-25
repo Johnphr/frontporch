@@ -5,6 +5,7 @@
 // waits; the interval only starts once it has ended. Unset / 0 / invalid = loop off. Only numbers in
 // CALL_ALLOWLIST are looped unless CALL_LOOP=all (remove a number to stop calling it).
 
+import { HANDOFF_END_REASON } from "./inbound.ts";
 import { hasOpenCall, OPEN_CALL_WINDOW_MS } from "./onboarding.ts";
 import { parseAutoPost } from "./postFlow.ts";
 import { publicCallAllowed } from "./signupRules.ts";
@@ -39,6 +40,7 @@ const OUR_SIDE_REASONS = new Set(["concurrency_limit", "config_error", "agent_er
 function outcome(call: LoopCall): "his" | "ours" | "talked" | "other" {
   if (call.status === "done" || call.status === "process_failed") return "talked";
   if (call.status === "failed") return "ours";
+  if (call.endReason === HANDOFF_END_REASON) return "other"; // he called in; his host calls back
   if (call.status === "no_conversation") return OUR_SIDE_REASONS.has((call.endReason ?? "").toLowerCase()) ? "ours" : "his";
   if (call.status === "start_unknown" || call.status === "poll_timeout" || call.status === "poll_error") return "his";
   return "other";

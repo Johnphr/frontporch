@@ -224,10 +224,12 @@ Our one number routes to one Cartesia agent: the bilingual inbound agent
 (`config.audio.output.voice_id`), and there is no mid-call voice change and no hand-off to
 another agent (only `transfer_to_number`, to a phone), so the call-in line **is one host for
 everyone**: `CARTESIA_INBOUND_HOST` (a character id, default `daniel`; `diana` implies Spanish)
-sets its voice, language and persona. **For the demo, set `CARTESIA_INBOUND_HOST` to the host
-the demo elder picks, then re-sync `cartesiaAgents:syncAgent '{"inbound":true}'`.** An elder
-whose host is someone else hears that host introduce itself as his host's colleague
-("it's Daniel, Oscar's colleague at MEMORIA"); it never claims to be a voice it isn't.
+sets its voice, language and persona (voice: `CARTESIA_VOICE_ID_<HOST>`, else copied from that
+host's synced agent). Re-sync `cartesiaAgents:syncAgent '{"inbound":true}'` after changing it.
+An elder whose host is someone else gets a **callback**: the line's host says his host will call
+right back and hangs up; `inbound.recordHandoff` writes a closed row (`no_conversation`,
+`endReason: "handoff"`, not counted as a miss) and runs `cartesia.startCall` ~20 s later, so his
+own host calls him in their own voice. The line's host never claims to be a voice it isn't.
 
 Cartesia has no pre-call hook, so the agent greets with fixed bilingual text ("one moment while
 I pull up your notes") and first calls the `lookup_caller` webhook tool (filled from

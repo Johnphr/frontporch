@@ -13,8 +13,9 @@
 // voice in their language; never an English one).
 // The inbound agent is ONE host for every caller (a Cartesia agent has one voice, and there is
 // no mid-call voice change or agent hand-off): CARTESIA_INBOUND_HOST (a character id, default
-// daniel; diana implies Spanish) sets its voice, language and persona. For the demo, set it to
-// the host the demo elder picks, then re-sync '{"inbound":true}'.
+// daniel; diana implies Spanish) sets its voice, language and persona. Its voice: that host's
+// voice env var, else copied from that host's synced agent. Callers with another host get a
+// callback from their host (inbound.ts). Re-sync '{"inbound":true}' after changing it.
 // Env: CARTESIA_API_KEY, CARTESIA_MODEL (optional), each character's voiceEnv; inbound:
 //      CARTESIA_TOOL_SECRET, CARTESIA_INBOUND_AGENT_ID + CARTESIA_LOOKUP_TOOL_ID (printed on create),
 //      CARTESIA_INBOUND_HOST (optional, character id), CARTESIA_INBOUND_LANGUAGE (optional, en|es;
@@ -93,12 +94,26 @@ async function syncOne(c: CharacterConfig, existing: string | undefined): Promis
 type InboundResult = { toolId: string; agentId: string; created: string[]; numberAssigned?: boolean };
 
 /**
+ * The line host's voice: the host's voice env var, else the voice on the host's synced agent
+ * (GET), so the inbound agent sounds exactly like that host. Undefined only if neither exists.
+ */
+async function inboundVoice(host: CharacterConfig, hostAgentId: string | undefined): Promise<string | undefined> {
+  const fromEnv = process.env[host.voiceEnv];
+  if (fromEnv || !hostAgentId) return fromEnv;
+  const res = await cartesiaFetch(`/v1/agents/${hostAgentId}`, { method: "GET" });
+  if (classifyHttp(res.status) !== "ok") throw new Error(`${host.id} agent: ${httpError(res, true)}`);
+  const cfg = res.json?.config ?? res.json;
+  const voiceId = cfg?.audio?.output?.voice_id ?? cfg?.voice_id;
+  return typeof voiceId === "string" && voiceId ? voiceId : undefined;
+}
+
+/**
  * The inbound agent + its lookup_caller tool (lib/inbound.ts, lib/prompts/inbound.ts). Created
  * only when asked ('{"inbound":true}'); a plain sync updates them once their ids are set.
  * `assignNumber` routes CARTESIA_FROM_NUMBER_ID's inbound calls to this agent (outbound calls
  * from the number keep working: docs.cartesia.ai phone-numbers).
  */
-async function syncInbound(mayCreate: boolean, assignNumber: boolean): Promise<InboundResult | null> {
+async function syncInbound(mayCreate: boolean, assignNumber: boolean, agentIds: Record<string, string>): Promise<InboundResult | null> {
   const toolEnv = "CARTESIA_LOOKUP_TOOL_ID";
   const agentEnv = "CARTESIA_INBOUND_AGENT_ID";
   const existingTool = process.env[toolEnv];
@@ -128,10 +143,10 @@ async function syncInbound(mayCreate: boolean, assignNumber: boolean): Promise<I
   const hostProblem = inboundHostProblem(process.env);
   if (hostProblem) throw new Error(hostProblem);
   const host = inboundHost(process.env);
-  const voiceId = process.env[host.voiceEnv];
+  const voiceId = await inboundVoice(host, agentIds[host.id]);
   if (!voiceId) {
     // The whole point of the host setting is the voice: refuse rather than sync a mismatched one.
-    if (process.env.CARTESIA_INBOUND_HOST) throw new Error(`${host.voiceEnv} is not set (needed so the call-in line sounds like ${host.name})`);
+    if (process.env.CARTESIA_INBOUND_HOST) throw new Error(`No voice for ${host.name}: set ${host.voiceEnv} or sync that host's agent first`);
     console.warn(`cartesiaAgents.syncAgent: ${host.voiceEnv} is not set; the inbound agent keeps its current voice`);
   }
   const prompt = inboundAgent(host);
@@ -175,7 +190,8 @@ export const syncAgent = internalAction({
   handler: async (ctx, { characterId, inbound, assignNumber }): Promise<{ agents: SyncResult[]; inbound?: InboundResult }> => {
     requireEnv(["CARTESIA_API_KEY"]);
     if (inbound) {
-      const result = await syncInbound(true, assignNumber ?? false);
+      const ids = await ctx.runQuery(internal.cartesiaAgents.agentIds, {});
+      const result = await syncInbound(true, assignNumber ?? false, ids);
       return { agents: [], ...(result ? { inbound: result } : {}) };
     }
     if (characterId && !getCharacter(characterId)) throw new Error(`Unknown character "${characterId}" (see lib/characters.ts)`);
@@ -197,7 +213,7 @@ export const syncAgent = internalAction({
     let inboundResult: InboundResult | null = null;
     if (!characterId) {
       try {
-        inboundResult = await syncInbound(false, false);
+        inboundResult = await syncInbound(false, false, ids);
       } catch (err) {
         errors.push(err instanceof Error ? err.message : String(err));
       }

@@ -11,6 +11,10 @@
 //                        plan as an outbound call (onboarding: known background; story:
 //                        conversation.planNextCall) -> calls row (direction "inbound",
 //                        in_progress, the verified Cartesia call id) + cartesia.pollCall.
+//                     His host isn't the line's host (CARTESIA_INBOUND_HOST) -> no plan: the
+//                        line's host says his host will call back; recordHandoff writes a closed
+//                        row (no_conversation, endReason "handoff") and schedules
+//                        cartesia.startCall from his host's agent after CALLBACK_DELAY_MS.
 //                     Unknown number -> { caller_known: "no" }: no row, nothing revealed.
 //                     Returns { response, reason, elderId? }; http.ts logs ONE line per lookup
 //                     (`inbound-lookup: known|unknown|error <reason>`) and keeps the outcome in
@@ -37,11 +41,15 @@ import { classifyHttp, nextPollDelayMs, templateVariables } from "./lib/cartesia
 import { cartesiaFetch, httpError } from "./lib/cartesiaHttp";
 import {
   BACKSTOP_WINDOW_MS,
+  CALLBACK_DELAY_MS,
+  HANDOFF_END_REASON,
   VERIFY_TIMEOUT_MS,
   backstopDecision,
   callPath,
+  callbackResponse,
   callerCandidates,
   inboundHost,
+  inboundNextStep,
   knownCallerResponse,
   lookupErrorResponse,
   lookupReuseDecision,
@@ -193,6 +201,42 @@ export const recordInboundCall = internalMutation({
   },
 });
 
+/**
+ * The inbound call ends in a callback from his host: a closed row (so a repeated lookup gets the
+ * same answer and the backstop doesn't ingest the short call), then his host's outbound call.
+ * Only the first lookup of a call schedules the callback.
+ */
+export const recordHandoff = internalMutation({
+  args: {
+    elderId: v.id("elders"),
+    cartesiaCallId: v.string(),
+    conversationId: v.optional(v.string()),
+    kind: v.union(v.literal("onboarding"), v.literal("story")),
+    response: v.any(),
+  },
+  handler: async (ctx, { elderId, cartesiaCallId, conversationId, kind, response }) => {
+    const existing =
+      (await rowByAnyId(ctx, cartesiaCallId)) ?? (conversationId ? await rowByAnyId(ctx, conversationId) : null);
+    const decision = lookupReuseDecision(existing ? { _id: existing._id, inboundLookup: existing.inboundLookup } : null);
+    if (decision.action === "cached") return { cached: decision.response, scheduled: false };
+    if (existing) return { cached: null, scheduled: false }; // the backstop recorded it already: too late for a callback
+    await ctx.db.insert("calls", {
+      elderId,
+      kind,
+      direction: "inbound",
+      status: "no_conversation",
+      endReason: HANDOFF_END_REASON,
+      transcript: [],
+      cartesiaCallId,
+      ...(conversationId && conversationId !== cartesiaCallId ? { cartesiaConversationId: conversationId } : {}),
+      inboundLookup: response,
+      endedAt: Date.now(),
+    });
+    await ctx.scheduler.runAfter(CALLBACK_DELAY_MS, internal.cartesia.startCall, { elderId });
+    return { cached: null, scheduled: true };
+  },
+});
+
 /** The plan (with bankId, marked used later by pipeline.finishProcessing) + the exact answer sent. */
 export const saveLookup = internalMutation({
   args: { callId: v.id("calls"), plan: v.optional(v.any()), response: v.any() },
@@ -275,6 +319,25 @@ export const handleLookup = internalAction({
     const kind: CallKind = planNextCall(normalized).kind;
     const character = callCharacter(elder); // the host who calls him (his voice is NOT on this line unless it's `host`)
     const lang = character.language;
+
+    // 4. His host isn't the line's host: hand off, his host calls him back in his own voice.
+    if (inboundNextStep(host.id, character.id) === "callback") {
+      const response = callbackResponse({ kind, lang, character, host, firstName: firstName(elder.name, lang) });
+      try {
+        const rec = await ctx.runMutation(internal.inbound.recordHandoff, {
+          elderId: elder._id,
+          cartesiaCallId: verified.callId,
+          conversationId,
+          kind,
+          response,
+        });
+        if (rec.cached) return { response: rec.cached, reason: "cached", elderId: elder._id };
+        if (!rec.scheduled) return { response: lookupErrorResponse(host), reason: "callback:already_recorded", elderId: elder._id };
+      } catch {
+        return { response: lookupErrorResponse(host), reason: "callback:not_scheduled", elderId: elder._id };
+      }
+      return { response, reason: `callback:${character.id}`, elderId: elder._id };
+    }
 
     let callId: Id<"calls"> | undefined;
     try {

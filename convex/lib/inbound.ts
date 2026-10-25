@@ -12,8 +12,9 @@
 // Voice: a Cartesia agent has ONE voice (config.audio.output.voice_id), fixed for the call; no
 // mid-call voice change and no hand-off to another agent exist (docs.cartesia.ai/agents/
 // configuration, /agents/system-tools). So the call-in line speaks as one host for everyone:
-// CARTESIA_INBOUND_HOST (inboundHost). An elder whose host is someone else hears that host
-// introduce itself as his host's colleague; it never claims to be a voice it isn't.
+// CARTESIA_INBOUND_HOST (inboundHost). An elder whose host is someone else gets a callback: the
+// line's host says his host will call right back and hangs up, then his host's own agent calls
+// him (inbound.recordHandoff). It never claims to be a voice it isn't.
 
 import { characterFor, getCharacter, type CharacterConfig } from "./characters.ts";
 import type { CallLanguage } from "./prompts/principles.ts";
@@ -113,6 +114,16 @@ export function inboundHost(env: { CARTESIA_INBOUND_HOST?: string; CARTESIA_INBO
   const id = (env.CARTESIA_INBOUND_HOST ?? "").trim().toLowerCase();
   const lang: CallLanguage = env.CARTESIA_INBOUND_LANGUAGE === "es" ? "es" : "en";
   return getCharacter(id) ?? characterFor(undefined, lang);
+}
+
+/** Wait before his host calls back: the line's host says goodbye and hangs up first (a busy line won't ring). */
+export const CALLBACK_DELAY_MS = 20_000;
+/** endReason of the short inbound call that ended in a callback (no conversation, not a miss). */
+export const HANDOFF_END_REASON = "handoff";
+
+/** After the lookup: talk now (his host is the line's host) or hand off to his host's callback. */
+export function inboundNextStep(lineHostId: string, hisHostId: string): "talk" | "callback" {
+  return lineHostId === hisHostId ? "talk" : "callback";
 }
 
 /** The env says a host that doesn't exist: syncAgent refuses rather than silently using Daniel. */
@@ -221,9 +232,33 @@ export function knownCallerResponse(a: {
     speak_as: host.name,
     his_host: a.character.name,
     same_host: host.name === a.character.name ? "yes" : "no",
+    next_step: "talk",
   };
   for (const [k, value] of Object.entries(a.variables)) out[k] = String(value);
   return clampResponse(out);
+}
+
+/**
+ * Known caller whose host is someone else: only what the line's host needs to say "<his_host>
+ * will call you right back" in his language. No goal or context: she never runs the conversation.
+ */
+export function callbackResponse(a: {
+  kind: "onboarding" | "story";
+  lang: CallLanguage;
+  character: { name: string };
+  host: { name: string };
+  firstName: string;
+}): LookupResponse {
+  return {
+    caller_known: "yes",
+    call_kind: a.kind,
+    language: a.lang,
+    speak_as: a.host.name,
+    his_host: a.character.name,
+    same_host: "no",
+    next_step: "callback",
+    first_name: a.firstName.trim() || "none",
+  };
 }
 
 /** Keep the answer under Cartesia's 16 KiB tool-result cap by trimming the longest field. */
@@ -245,6 +280,7 @@ export const LOOKUP_ASSIGNMENTS = [
   { dynamic_variable: "first_name", value_path: "first_name" },
   { dynamic_variable: "language", value_path: "language" },
   { dynamic_variable: "his_host", value_path: "his_host" },
+  { dynamic_variable: "next_step", value_path: "next_step" },
 ];
 
 /** POST /v1/agents/tools body for the lookup (shape from docs.cartesia.ai/agents/webhook-tools). */

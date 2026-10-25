@@ -46,9 +46,9 @@ Env on the deployment (once):
 The MEMORIA number must route its inbound calls to the inbound agent in Cartesia (in the
 Cartesia dashboard, or once with `cartesiaAgents:syncAgent "{inbound:true,assignNumber:true}"`,
 section 9). The host agents and the inbound agent must be synced with the current prompts
-(section 9). **For the demo, set `CARTESIA_INBOUND_HOST` to the host the demo elder picks, then
-re-sync `cartesiaAgents:syncAgent "{inbound:true}"`.** A caller whose host is a different one
-still gets his name, notes and question, from the line's host speaking as his host's colleague.
+(section 9). `CARTESIA_INBOUND_HOST` picks the call-in line's host; re-sync
+`cartesiaAgents:syncAgent "{inbound:true}"` after changing it. A caller whose host is a different
+one hears the line's host say his host will call right back; his host calls him ~20 s later.
 
 If something looks stuck, check in the Convex dashboard (Data): `calls` (the newest row reaches
 `done`), `posts` / `postPublications` (`posted`, with the `url`), `engagement` (the reply in
