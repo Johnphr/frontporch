@@ -84,6 +84,22 @@ export default defineSchema({
     loopRequestedAt: v.optional(v.number()), // epoch ms; when callLoop last scheduled a call (may be ahead)
   }).index("by_phone", ["phone"]),
 
+  // His own social accounts, connected at sign-up (convex/accounts.ts). The app password is
+  // AES-GCM encrypted (lib/accountCrypto.ts, key ACCOUNTS_ENC_KEY) and only decrypted inside
+  // actions (lib/logins.ts). One row per elder + platform.
+  elderAccounts: defineTable({
+    elderId: v.id("elders"),
+    platform: v.union(v.literal("bluesky"), v.literal("reddit")),
+    handle: v.optional(v.string()), // Bluesky handle or Reddit username
+    did: v.optional(v.string()), // Bluesky DID, e.g. did:plc:...
+    secret: v.optional(v.object({ ciphertext: v.string(), iv: v.string() })), // base64; removed on disconnect
+    status: v.union(v.literal("connected"), v.literal("invalid"), v.literal("disconnected")),
+    connectedAt: v.optional(v.number()), // epoch ms
+    lastCheckedAt: v.optional(v.number()), // epoch ms, last time the login was verified
+    lastError: v.optional(v.string()), // short, never a secret
+    attemptTimes: v.optional(v.array(v.number())), // recent connect attempts (rate limit)
+  }).index("by_elder_platform", ["elderId", "platform"]),
+
   // One Cartesia agent per character (lib/characters.ts), written by cartesiaAgents.syncAgent.
   characterAgents: defineTable({
     characterId: v.string(),

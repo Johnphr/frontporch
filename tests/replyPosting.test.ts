@@ -270,10 +270,10 @@ test("draftCutoff: default 7 days, clamped to 1-60", () => {
   assert.equal(draftCutoff(now, 365), now - 60 * 86_400_000);
 });
 
-test("logins: env for now, null when missing; Reddit only when REDDIT_POSTING is on", async () => {
-  const env = { BLUESKY_HANDLE: "walter.bsky.social", BLUESKY_APP_PASSWORD: "p", REDDIT_CLIENT_ID: "a", REDDIT_CLIENT_SECRET: "b", REDDIT_USERNAME: "w", REDDIT_PASSWORD: "c" };
+test("logins: env demo account (DEMO_ACCOUNT_FALLBACK=on), null when missing; Reddit only when REDDIT_POSTING is on", async () => {
+  const env = { DEMO_ACCOUNT_FALLBACK: "on", BLUESKY_HANDLE: "walter.bsky.social", BLUESKY_APP_PASSWORD: "p", REDDIT_CLIENT_ID: "a", REDDIT_CLIENT_SECRET: "b", REDDIT_USERNAME: "w", REDDIT_PASSWORD: "c" };
   assert.deepEqual(await blueskyLoginForElder(null, "e1", env), { service: "https://bsky.social", identifier: "walter.bsky.social", password: "p" });
-  assert.equal(await blueskyLoginForElder(null, "e1", { BLUESKY_HANDLE: "x" }), null);
+  assert.equal(await blueskyLoginForElder(null, "e1", { DEMO_ACCOUNT_FALLBACK: "on", BLUESKY_HANDLE: "x" }), null);
   assert.equal(await redditLoginForElder(null, "e1", env), null, "off by default");
   const on = await redditLoginForElder(null, "e1", { ...env, REDDIT_POSTING: "on" });
   assert.equal(on?.userAgent, "web:frontporch:v1 (by /u/w)");

@@ -1,4 +1,4 @@
-// Sign-up page API (public): sign up -> choose a character -> optional LinkedIn -> first call -> its status.
+// Sign-up page API (public): sign up -> choose a character -> connect Bluesky (optional) -> first call -> its status.
 // These are the only public functions: anyone with the deployment URL can call them, so they
 // return only ids, characters and ok/reason results (never elder rows or transcripts), and
 // validate every argument. Rules live in lib/signupRules.ts (unit-tested).
@@ -7,8 +7,9 @@
 // elderId from `register`, change its character, and make it ring (onboarding only, at most
 // CALLS_PER_DAY a day, 10 min apart). Each new number gets its own limit: there is no global cap.
 // That's why `requestCall` is off by default: PUBLIC_CALLS=on rings only CALL_ALLOWLIST numbers,
-// PUBLIC_CALLS=all rings anyone (lib/signupRules.publicCallAllowed). LinkedIn is locked once he's active,
-// since his posts' engagement is scraped from it.
+// PUBLIC_CALLS=all rings anyone (lib/signupRules.publicCallAllowed). LinkedIn and Bluesky are locked
+// once he's active. Knowing his elderId also lets someone attach a Bluesky account before then,
+// but only one they hold an app password for, and only CONNECT_ATTEMPTS_PER_HOUR tries an hour.
 
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -16,6 +17,8 @@ import type { Id } from "./_generated/dataModel";
 import { action, internalQuery, mutation, query } from "./_generated/server";
 import { callState, retryOffer, type CallState } from "./lib/callStatus";
 import { getCharacter, publicCharacters, type Character } from "./lib/characters";
+import { connectBlueskyAccount, type ConnectResult } from "./lib/accountConnect";
+import type { FetchFn } from "./lib/blueskyClient";
 import { planNextCall } from "./lib/onboarding";
 import {
   CALLS_PER_DAY,
@@ -76,6 +79,7 @@ export const setCharacter = mutation({
   },
 });
 
+/** Retired from the website (it connects Bluesky now); kept for old clients and scripts. */
 export const setLinkedin = mutation({
   args: { elderId: v.id("elders"), url: v.string() },
   handler: async (ctx, { elderId, url }): Promise<null> => {
@@ -88,6 +92,41 @@ export const setLinkedin = mutation({
     // A cached background came from the old profile: drop it so onboarding scrapes the new one.
     await ctx.db.patch(elderId, { linkedinUrl, knownBackground: undefined });
     return null;
+  },
+});
+
+const timedFetch: FetchFn = async (url, init) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+/**
+ * Connect his own Bluesky account: handle + an app password (never his real password: an app
+ * password can't change his password or delete his account, and he can revoke it any time). Logs in once to check it,
+ * then saves it encrypted (convex/accounts.ts). Rate limited, and locked once he's active.
+ * Returns { ok, handle } or { ok: false, error: code }; never echoes the password.
+ */
+export const connectBluesky = action({
+  args: { elderId: v.id("elders"), handle: v.string(), appPassword: v.string() },
+  handler: async (ctx, { elderId, handle, appPassword }): Promise<ConnectResult> => {
+    const now = Date.now();
+    return connectBlueskyAccount(
+      {
+        fetchFn: timedFetch,
+        env: process.env,
+        reserve: () => ctx.runMutation(internal.accounts.reserveConnect, { elderId, platform: "bluesky", now }),
+        save: ({ handle: h, did, secret }) =>
+          ctx.runMutation(internal.accounts.saveAccount, { elderId, platform: "bluesky", handle: h, did, secret, now, signup: true }),
+        warn: (message) => console.warn(message),
+      },
+      elderId,
+      { handle, appPassword },
+    );
   },
 });
 

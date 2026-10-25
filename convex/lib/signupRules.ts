@@ -78,3 +78,57 @@ export function publicCallAllowed(mode: string | undefined, allowlist: string | 
   const allowed = (allowlist ?? "").split(",").map((p) => normalizePhone(p)).filter(Boolean);
   return allowed.includes(phone);
 }
+
+// ---------- Connect Bluesky (signup.connectBluesky) ----------
+
+export const CONNECT_ATTEMPTS_PER_HOUR = 5;
+export const CONNECT_COOLDOWN_MS = 5_000;
+const HOUR_MS = 60 * 60_000;
+
+/**
+ * "@Walter", "walter.bsky.social", "bsky.app/profile/walter.bsky.social" -> "walter.bsky.social".
+ * No dot means a bsky.social handle. Undefined if it isn't a valid handle once tidied.
+ */
+export function normalizeBlueskyHandle(raw: string): string | undefined {
+  let text = raw.trim().toLowerCase();
+  if (!text || text.length > 300) return undefined;
+  text = text.replace(/^(?:https?:\/\/)?(?:www\.)?bsky\.app\/profile\//, "").replace(/\/.*$/, "");
+  text = text.replace(/^@/, "").replace(/\.$/, "");
+  if (!text) return undefined;
+  if (!text.includes(".")) text = `${text}.bsky.social`;
+  return isBlueskyHandle(text) ? text : undefined;
+}
+
+/** atproto handle syntax: dot-separated labels (letters, digits, inner hyphens), at least two, TLD not starting with a digit. */
+export function isBlueskyHandle(handle: string): boolean {
+  if (handle.length > 253) return false;
+  const labels = handle.split(".");
+  if (labels.length < 2) return false;
+  if (!labels.every((l) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(l))) return false;
+  return /^[a-z]/.test(labels[labels.length - 1]);
+}
+
+/**
+ * A Bluesky app password ("abcd-efgh-ijkl-mnop") tidied, or undefined. We only take app
+ * passwords: his real password could change or delete his account; an app password can't,
+ * and he can revoke it any time in Bluesky settings.
+ */
+export function normalizeAppPassword(raw: string): string | undefined {
+  const text = raw.replace(/\s+/g, "").toLowerCase();
+  return /^[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}$/.test(text) ? text : undefined;
+}
+
+/**
+ * May he try connecting again now? `attemptTimes` = his recent connect attempts (any result).
+ * At most CONNECT_ATTEMPTS_PER_HOUR in the last hour, none in the last CONNECT_COOLDOWN_MS.
+ */
+export function connectRateLimit(attemptTimes: number[], now: number): { ok: true } | { ok: false } {
+  if (attemptTimes.some((t) => now - t < CONNECT_COOLDOWN_MS)) return { ok: false };
+  if (attemptTimes.filter((t) => now - t < HOUR_MS).length >= CONNECT_ATTEMPTS_PER_HOUR) return { ok: false };
+  return { ok: true };
+}
+
+/** The attempt list to store after one more attempt: only the ones the limit still looks at. */
+export function recordAttempt(attemptTimes: number[], now: number): number[] {
+  return [...attemptTimes.filter((t) => now - t < HOUR_MS), now].slice(-CONNECT_ATTEMPTS_PER_HOUR);
+}
