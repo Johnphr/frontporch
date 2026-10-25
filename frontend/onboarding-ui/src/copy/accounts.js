@@ -62,6 +62,9 @@ const EN = {
     opening: (name) => `Opening ${name}…`,
     done: (name) => `${name} connected. Stories will be posted there too.`,
     connected: (name) => `All set! The ${name} account is connected.`,
+    notConnected: (name) => `The ${name} account was not connected.`,
+    inNewTab: (name) => `${name} opened in a new tab. Finish there, then come back to this one.`,
+    closeTab: 'You can close this tab and go back to the other one.',
     note: 'It opens the official page so you can give permission. We never see the password.',
     notes: {
       x: 'Posting on X costs a few cents per post, so it stays off unless the team turns it on.',
@@ -152,6 +155,9 @@ const ES = {
     opening: (name) => `Abriendo ${name}…`,
     done: (name) => `${name} conectado. Ahí también se publicarán las historias.`,
     connected: (name) => `¡Listo! La cuenta de ${name} quedó conectada.`,
+    notConnected: (name) => `La cuenta de ${name} no se conectó.`,
+    inNewTab: (name) => `${name} se abrió en una pestaña nueva. Termine ahí y luego vuelva a esta.`,
+    closeTab: 'Puede cerrar esta pestaña y volver a la otra.',
     note: 'Se abre la página oficial para dar permiso. Nunca vemos la contraseña.',
     notes: {
       x: 'Publicar en X cuesta unos centavos por publicación, así que queda apagado hasta que el equipo lo active.',

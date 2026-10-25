@@ -70,8 +70,8 @@ export default defineSchema({
     language: v.string(), // BCP-47, e.g. en-US, es-MX
     bio: v.optional(v.string()),
     // ---- v2 (onboarding slice, PR #7) ----
-    // missing = onboarding. archived = he started over (signup.startOver): the phone is freed
-    // (`archived:<ms>:<phone>`), no token or code works, crons skip him; his posts and calls stay.
+    // missing = onboarding. archived = an old sign-up retired by the removed "start over": the
+    // phone was freed (`archived:<ms>:<phone>`), no token works, crons skip him; posts and calls stay.
     stage: v.optional(v.union(v.literal("onboarding"), v.literal("active"), v.literal("archived"))),
     linkedinUrl: v.optional(v.string()),
     knownBackground: v.optional(v.string()), // cached apify.scrapeProfile result
@@ -86,7 +86,7 @@ export default defineSchema({
     characterId: v.optional(v.string()), // who calls him (lib/characters.ts); missing = default for his language
     loopRequestedAt: v.optional(v.number()), // epoch ms; when callLoop last scheduled a call (may be ahead)
     signupTokenHash: v.optional(v.string()), // SHA-256 hex of the sign-up page's token (signup.register)
-    familyCodeHash: v.optional(v.string()), // SHA-256 hex of his 6-digit family code (signup.signIn); missing = can't sign in from a new device
+    familyCodeHash: v.optional(v.string()), // unused: the family code was removed (sign-in is phone only); older rows still have it
   }).index("by_phone", ["phone"]),
 
   // His own social accounts, connected at sign-up (convex/accounts.ts). The app password is
@@ -124,7 +124,7 @@ export default defineSchema({
 
   // Connect-attempt caps across sign-ups (accounts.reserveConnect): one row per Bluesky handle
   // ("bluesky:<handle>") plus one "global" row. Only the last hour's times are kept.
-  // Also wrong family codes per phone ("signin:<phone>", signup.signIn / startOver; last 15 min).
+  // Also sign-in tries per phone ("signin:<phone>", signup.signIn; last 15 min).
   connectAttempts: defineTable({
     key: v.string(),
     times: v.array(v.number()), // epoch ms

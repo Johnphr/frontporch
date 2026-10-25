@@ -95,8 +95,7 @@ export const ERRORS = {
     LINKEDIN_LOCKED: 'Your LinkedIn is already set up.',
     SCHEDULE_INVALID: 'Please choose a day and a time for the call.',
     NOT_FOUND: "We couldn't find your sign-up. Please sign in again.",
-    ALREADY_SIGNED_UP: 'This number is already signed up. Sign in with your family code.',
-    WRONG_CODE: "That code didn't match. Check the number on your card.",
+    ALREADY_SIGNED_UP: 'This number is already signed up. Sign in with it instead.',
     TOO_MANY_TRIES: 'Too many tries. Please wait 15 minutes and try again.',
     CHARACTER_UNKNOWN: 'That host is no longer available. Please choose another.',
     SETUP: 'This page is not set up yet.',
@@ -110,8 +109,7 @@ export const ERRORS = {
     LINKEDIN_LOCKED: 'Su LinkedIn ya está configurado.',
     SCHEDULE_INVALID: 'Elija un día y una hora para la llamada.',
     NOT_FOUND: 'No encontramos su registro. Inicie sesión otra vez, por favor.',
-    ALREADY_SIGNED_UP: 'Este número ya está registrado. Inicie sesión con su código familiar.',
-    WRONG_CODE: 'Ese código no coincide. Revise el número en su tarjeta.',
+    ALREADY_SIGNED_UP: 'Este número ya está registrado. Inicie sesión con él.',
     TOO_MANY_TRIES: 'Demasiados intentos. Espere 15 minutos e intente otra vez.',
     CHARACTER_UNKNOWN: 'Esa opción ya no está disponible. Elija otra.',
     SETUP: 'La página no está configurada todavía.',
@@ -119,29 +117,6 @@ export const ERRORS = {
     NETWORK: 'No hay conexión. Revise su internet e intente otra vez.',
   },
 }
-
-// His 6-digit family code: shown once on the last setup screen, and behind a button on Home.
-export const FAMILY_CODE_BY_LANG = {
-  en: {
-    title: 'Your family code',
-    code: (digits) => `Your family code: ${digits}.`,
-    lead: "Write it down. You'll use it with your phone number to sign in on any device.",
-    keep: 'Keep it with your phone number, like a key. Anyone who has both can open this page.',
-    show: 'Show my family code',
-    hide: 'Hide my family code',
-  },
-  es: {
-    title: 'Su código familiar',
-    code: (digits) => `Su código familiar: ${digits}.`,
-    lead: 'Anótelo. Lo usará junto con su número de teléfono para entrar desde cualquier aparato.',
-    keep: 'Guárdelo junto con su número de teléfono, como una llave. Quien tenga ambos puede abrir esta página.',
-    show: 'Ver mi código familiar',
-    hide: 'Ocultar mi código familiar',
-  },
-}
-
-/** "482917" -> "4 8 2 9 1 7": one digit at a time, easier to copy onto a card and to read out. */
-export const spacedCode = (code) => (code || '').split('').join(' ')
 
 /** An api.js error -> a sentence to show (unknown backend text is shown as is). */
 export function errorText(error, lang = 'en') {
