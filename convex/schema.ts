@@ -263,7 +263,7 @@ export default defineSchema({
     lastPolledAt: v.optional(v.number()), // epoch ms; stale polling is restarted by createPost
     maybePosted: v.optional(v.boolean()), // LinkedAPI didn't confirm the send: check before retrying
     // ---- post quality (lib/postQuality.ts): the judge's score for the text that was saved.
-    // Below the bar the post is saved as needs_review with these notes in guardSummary/guardIssues.
+    // Below the bar the post is saved as needs_review with a one-line guardSummary; the notes stay here.
     quality: v.optional(postQuality),
     // Why a needs_review post is held. "quality": never fact-checked yet, so approvePost runs
     // the guard first. "guard" (or missing, on older rows): approvePost skips it.

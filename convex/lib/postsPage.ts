@@ -59,8 +59,11 @@ function qualityBlock(q: PagePost["quality"]): string {
 
 function card(p: PagePost, key: string, check: PageCheck | undefined): string {
   const date = new Date(p.createdAt).toISOString().slice(0, 16).replace("T", " ");
-  const stored = p.guardSummary || p.guardIssues?.length
-    ? `<div class="check bad"><strong>Held:</strong> ${escapeHtml(p.guardSummary ?? "")}${issuesList(p.guardIssues ?? [])}</div>`
+  // A quality hold's notes are already in the quality block: show its summary only (older
+  // rows also copied the notes into guardIssues).
+  const heldIssues = p.heldFor === "quality" && p.quality ? [] : (p.guardIssues ?? []);
+  const stored = p.guardSummary || heldIssues.length
+    ? `<div class="check bad"><strong>Held:</strong> ${escapeHtml(p.guardSummary ?? "")}${issuesList(heldIssues)}</div>`
     : "";
   const href = `?key=${encodeURIComponent(key)}&check=${encodeURIComponent(p.id)}#${encodeURIComponent(p.id)}`;
   return `<article id="${escapeHtml(p.id)}">

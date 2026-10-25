@@ -8,23 +8,32 @@ import {
   MIN_CRITERION,
   MINOR_PENALTY,
   PASS_SCORE,
+  JUDGE_RETRY_DELAY_MS,
+  JUDGE_TIMEOUT_MS,
+  MAX_TOTAL_CHARS,
+  MIN_POST_BUDGET_MS,
   QUALITY_BUDGET_MS,
   ROUND_COST_MS,
   WEIGHTS,
   detectLanguage,
+  draftOutcome,
   evaluate,
   hardChecks,
+  hasMarkdown,
   holdDecision,
   keepRewrite,
   nextStep,
   normalizeJudgement,
   pickBest,
+  postBudgetMs,
   qualityReport,
-  shouldSkip,
+  runQualityLoop,
   trimNotes,
   wordCount,
   type CriterionScores,
+  type DraftResult,
   type Judgement,
+  type QualityDeps,
 } from "../convex/lib/postQuality.ts";
 import { renderPostsPage } from "../convex/lib/postsPage.ts";
 
@@ -87,12 +96,31 @@ test("hardChecks: length, hook, hashtags, stock phrases, markdown, question", ()
   const ids = (t: string, lang: "en" | "es" | "unknown" = "en") => hardChecks(t, lang).map((i) => `${i.id}:${i.severity}`);
   assert.deepEqual(ids(`Short hook.\n\n${words(50)}?`), ["length:major"]);
   assert.deepEqual(ids(`Short hook.\n\n${words(110)}?`), ["length:minor"]);
-  const longHook = `${"A very long first line that just keeps going ".repeat(4)}\n\n${words(130)}\n\nWhat do you think?`;
+  const longHook = `${"A very long first line that just keeps going ".repeat(5)}\n\n${words(130)}\n\nWhat do you think?`;
   assert.ok(ids(longHook).includes("hook_length:minor"));
   assert.ok(ids(`${EN_POST} #bread #baking #family`).includes("hashtags:minor"));
   assert.ok(ids(EN_POST.replace("The lesson", "Let's delve into it. The lesson")).includes("stock_phrases:minor"));
   assert.ok(ids(EN_POST.replace("The lesson", "**The lesson**")).includes("markdown:minor"));
   assert.ok(ids(EN_POST.replace("What old tool has saved your day at work?", "Thanks for reading.")).includes("no_question:minor"));
+});
+
+test("hardChecks: the whole text must fit a short thread (MAX_TOTAL_CHARS is a blocker)", () => {
+  assert.ok(Array.from(EN_POST).length <= MAX_TOTAL_CHARS);
+  const long = `Short hook.\n\n${words(150, "extraordinarily")}\n\nWhat do you think?`; // 150+ words, far over 1,250 chars
+  assert.ok(hardChecks(long, "en").some((i) => i.id === "total_length" && i.severity === "major"));
+  assert.ok(!hardChecks(EN_POST, "en").some((i) => i.id === "total_length"));
+});
+
+test("hasMarkdown: real lists and markers only; a line that starts with a year is fine", () => {
+  assert.equal(hasMarkdown("1987. That was the year we opened the bakery.\n\nWe had two ovens."), false);
+  assert.equal(hasMarkdown("In 1971. Or was it 1972?\n1975. We moved."), false);
+  assert.equal(hasMarkdown("3. That was how many ovens we had."), false); // one line isn't a list
+  assert.equal(hasMarkdown("1. Knead\n2. Rest\n3. Bake"), true);
+  assert.equal(hasMarkdown("1) Knead\n\n2) Rest"), true);
+  assert.equal(hasMarkdown("We needed:\n- flour\n- water"), true);
+  assert.equal(hasMarkdown("The **best** loaf"), true);
+  assert.equal(hasMarkdown("# Title\nText"), true);
+  assert.ok(!hardChecks(EN_POST.replace("The lesson", "1987. The lesson"), "en").some((i) => i.id === "markdown"));
 });
 
 test("hardChecks: wrong language is a blocker, unknown language is not", () => {
@@ -175,18 +203,29 @@ test("keepRewrite: only a better rewrite replaces the best", () => {
   assert.equal(keepRewrite(e(70, false), e(72, false)), true);
 });
 
-test("shouldSkip: majority of drafts decline", () => {
-  assert.equal(shouldSkip(2, 3), true);
-  assert.equal(shouldSkip(1, 3), false);
-  assert.equal(shouldSkip(1, 1), true);
-  assert.equal(shouldSkip(0, 0), false);
+test("draftOutcome: counts against the 3 intended drafts, so failures never become a skip", () => {
+  assert.equal(draftOutcome(2, 1, 3), "skip");
+  assert.equal(draftOutcome(2, 0, 3), "skip"); // 2 skips + 1 failed: still a majority
+  assert.equal(draftOutcome(1, 0, 3), "fail"); // 1 skip + 2 failed: can't tell -> retry
+  assert.equal(draftOutcome(1, 1, 3), "fail"); // 1 skip, 1 post, 1 failed: the failed one decides
+  assert.equal(draftOutcome(1, 2, 3), "write");
+  assert.equal(draftOutcome(0, 2, 3), "write"); // 1 failed
+  assert.equal(draftOutcome(0, 1, 3), "fail"); // 2 failed
+  assert.equal(draftOutcome(0, 0, 3), "fail");
 });
 
-test("holdDecision: below the bar -> needs_review with the notes; passed -> post as usual", () => {
+test("postBudgetMs: what's left of the 10-minute action, capped at QUALITY_BUDGET_MS", () => {
+  assert.equal(postBudgetMs(0, 30_000), QUALITY_BUDGET_MS);
+  assert.equal(postBudgetMs(0, 400_000), 140_000); // 600 - 400 - 60
+  assert.ok(postBudgetMs(0, 450_000) < MIN_POST_BUDGET_MS); // the pipeline won't start the step
+  assert.equal(postBudgetMs(0, 700_000), 0);
+});
+
+test("holdDecision: below the bar -> needs_review with a summary; passed -> post as usual", () => {
   const held = holdDecision(qualityReport(evaluate(judgement(6, { notes: ["Hook is flat"] }), []), 2));
   assert.equal(held?.status, "needs_review");
   assert.match(held?.summary ?? "", /Held by the quality check: 60\/100 \(bar 75\) after 2 rewrites/);
-  assert.ok(held?.issues.includes("Hook is flat"));
+  assert.equal("issues" in (held ?? {}), false); // the notes live on posts.quality only
   assert.equal(holdDecision(qualityReport(evaluate(judgement(9), []), 0)), null);
   assert.equal(holdDecision(undefined), null);
 });
@@ -214,6 +253,27 @@ test("posts page shows the quality score and notes", () => {
   assert.match(html, /Hook is flat/);
 });
 
+test("posts page shows a quality hold's notes once (older rows copied them into guardIssues)", () => {
+  const html = renderPostsPage(
+    [
+      {
+        id: "p3",
+        createdAt: 0,
+        status: "needs_review",
+        heldFor: "quality",
+        elderFirstName: "Walter",
+        text: "Hello",
+        guardSummary: "Held by the quality check: 62/100 (bar 75) after 2 rewrites.",
+        guardIssues: ["Hook is flat"],
+        quality: { score: 62, passed: false, rounds: 2, notes: ["Hook is flat"] },
+      },
+    ],
+    { key: "k" },
+  );
+  assert.equal(html.split("Hook is flat").length - 1, 1);
+  assert.match(html, /Held by the quality check/);
+});
+
 test("approve decision: quality holds get fact-checked on approve, guard holds don't", async () => {
   const { shouldRunGuard } = await import("../convex/lib/postFlow.ts");
   assert.equal(shouldRunGuard(false, undefined), true); // createPost always checks
@@ -233,4 +293,203 @@ test("posts page labels quality holds apart from fact-check holds", async () => 
     { key: "k" },
   );
   assert.match(html, /Held: below the quality bar/);
+});
+
+// ---------- runQualityLoop (the orchestration, with fake model calls and a fake clock) ----------
+
+const post = (text: string): DraftResult => ({ skip: false, text, hook: text.split("\n")[0] });
+const skip = (reason = "small talk"): DraftResult => ({ skip: true, reason });
+
+/** Fake deps: each model call takes `costMs` of fake time; override any call. */
+function loop(over: Partial<QualityDeps> = {}, costMs = 1_000) {
+  const clock = { t: 0 };
+  const calls = { draft: 0, judge: 0, rewrite: 0, sleeps: [] as number[], timeouts: [] as number[] };
+  const tick = (timeoutMs: number) => {
+    calls.timeouts.push(timeoutMs);
+    clock.t += costMs;
+  };
+  const deps: QualityDeps = {
+    budgetMs: QUALITY_BUDGET_MS,
+    now: () => clock.t,
+    sleep: async (ms) => {
+      calls.sleeps.push(ms);
+      clock.t += ms;
+    },
+    draft: async (angle, timeoutMs) => {
+      calls.draft++;
+      tick(timeoutMs);
+      return post(`${angle}\n\n${EN_POST}`);
+    },
+    judge: async (_text, timeoutMs) => {
+      calls.judge++;
+      tick(timeoutMs);
+      return judgement(9);
+    },
+    rewrite: async (text, _notes, timeoutMs) => {
+      calls.rewrite++;
+      tick(timeoutMs);
+      return post(`REWRITE ${text}`);
+    },
+    checks: () => [],
+    ...over,
+  };
+  return { deps, calls, clock };
+}
+
+test("runQualityLoop: a good draft passes with no rewrite", async () => {
+  const { deps, calls } = loop();
+  const out = await runQualityLoop(deps);
+  assert.equal(out.skip, false);
+  if (out.skip) return;
+  assert.equal(out.hold, false);
+  assert.equal(out.quality.passed, true);
+  assert.equal(out.quality.rounds, 0);
+  assert.equal(calls.draft, 3);
+  assert.equal(calls.judge, 3);
+  assert.equal(calls.rewrite, 0);
+});
+
+test("runQualityLoop: skips only when most of the 3 drafts decline", async () => {
+  let n = 0;
+  const { deps, calls } = loop({ draft: async () => (n++ < 2 ? skip("only scheduling") : post(EN_POST)) });
+  assert.deepEqual(await runQualityLoop(deps), { skip: true, reason: "only scheduling" });
+  assert.equal(calls.judge, 0);
+});
+
+test("runQualityLoop: failed drafts never turn into a skip", async () => {
+  // 1 skip + 2 failed: throws (retry later) instead of skipping the call
+  let a = 0;
+  const failing = loop({ draft: async () => (a++ === 0 ? skip() : Promise.reject(new Error("timeout"))) });
+  await assert.rejects(runQualityLoop(failing.deps), /too many drafts failed \(2 of 3\)/);
+  // 1 skip + 1 failed + 1 post: the failed one could have decided it -> throws too
+  let b = 0;
+  const mixed = loop({ draft: async () => [skip(), post(EN_POST)][b++] ?? Promise.reject(new Error("timeout")) });
+  await assert.rejects(runQualityLoop(mixed.deps), /too many drafts failed \(1 of 3\)/);
+  // 2 posts + 1 failed: writes from the 2
+  let c = 0;
+  const ok = loop({ draft: async () => (c++ === 0 ? Promise.reject(new Error("timeout")) : post(EN_POST)) });
+  const out = await runQualityLoop(ok.deps);
+  assert.equal(out.skip, false);
+  assert.equal(ok.calls.judge, 2);
+});
+
+test("runQualityLoop: a judge call that fails is retried once after a short pause", async () => {
+  let judged = 0;
+  const { deps, calls } = loop({
+    judge: async () => {
+      if (judged++ === 0) throw new Error("rate limited");
+      return judgement(9);
+    },
+  });
+  const out = await runQualityLoop(deps);
+  assert.equal(out.skip, false);
+  if (out.skip) return;
+  assert.equal(out.quality.passed, true);
+  assert.equal(judged, 4); // 3 drafts + 1 retry
+  assert.deepEqual(calls.sleeps, [JUDGE_RETRY_DELAY_MS]);
+});
+
+test("runQualityLoop: a judge that never answers fails closed (held, never posted on its own)", async () => {
+  let judged = 0;
+  const { deps } = loop({
+    judge: async () => {
+      judged++;
+      throw new Error("down");
+    },
+  });
+  const out = await runQualityLoop(deps);
+  assert.equal(out.skip, false);
+  if (out.skip) return;
+  assert.equal(out.hold, true);
+  assert.equal(out.quality.passed, false);
+  assert.equal(out.quality.score, 0);
+  assert.ok(out.quality.notes.some((n) => /couldn't run/.test(n)));
+  assert.equal(judged, (3 + MAX_REWRITE_ROUNDS) * 2); // every judgement tried twice
+});
+
+test("runQualityLoop: picks the best draft, and keeps a rewrite only when it's better", async () => {
+  // The second angle's draft scores best (6, below the bar); the first rewrite scores 9 and passes.
+  const SECOND = "Angle: the hard lesson";
+  const score = (text: string) => (text.startsWith("REWRITE") ? 9 : text.startsWith(SECOND) ? 6 : 4);
+  const better = loop({ judge: async (text) => judgement(score(text)) });
+  const out = await runQualityLoop(better.deps);
+  assert.equal(out.skip, false);
+  if (out.skip) return;
+  assert.ok(out.text.startsWith(`REWRITE ${SECOND}`));
+  assert.equal(out.quality.rounds, 1);
+  assert.equal(out.hold, false);
+
+  // Every rewrite is worse: the best draft stays, held after MAX_REWRITE_ROUNDS.
+  const worse = loop({ judge: async (text) => judgement(text.startsWith("REWRITE") ? 3 : score(text)) });
+  const held = await runQualityLoop(worse.deps);
+  assert.equal(held.skip, false);
+  if (held.skip) return;
+  assert.ok(held.text.startsWith(SECOND));
+  assert.equal(held.quality.rounds, MAX_REWRITE_ROUNDS);
+  assert.equal(held.hold, true);
+  assert.equal(worse.calls.rewrite, MAX_REWRITE_ROUNDS);
+});
+
+test("runQualityLoop: a failed or declined rewrite keeps the best so far", async () => {
+  let r = 0;
+  const { deps } = loop({
+    judge: async () => judgement(6),
+    rewrite: async () => (r++ === 0 ? Promise.reject(new Error("timeout")) : skip()),
+  });
+  const out = await runQualityLoop(deps);
+  assert.equal(out.skip, false);
+  if (out.skip) return;
+  assert.equal(out.hold, true);
+  assert.equal(out.quality.rounds, MAX_REWRITE_ROUNDS);
+  assert.ok(!out.text.startsWith("REWRITE"));
+});
+
+test("runQualityLoop: stays inside the time budget", async () => {
+  // Not enough time for drafts + a judge pass: throws before any model call.
+  const tooLate = loop({ budgetMs: MIN_POST_BUDGET_MS - 1 });
+  await assert.rejects(runQualityLoop(tooLate.deps), /not enough time/);
+  assert.equal(tooLate.calls.draft, 0);
+
+  // Drafts take 60 s of a 150 s budget: the judges run, but a rewrite round (120 s) doesn't fit.
+  const budget = MIN_POST_BUDGET_MS + 30_000;
+  const tight = loop({ budgetMs: budget, judge: async () => judgement(6) }, 0);
+  let first = true;
+  const timeouts: number[] = [];
+  tight.deps.draft = async (_angle, ms) => {
+    timeouts.push(ms);
+    if (first) tight.clock.t += 60_000; // the three run in parallel: count the time once
+    first = false;
+    return post(EN_POST);
+  };
+  const out = await runQualityLoop(tight.deps);
+  assert.equal(out.skip, false);
+  if (out.skip) return;
+  assert.equal(tight.calls.rewrite, 0);
+  assert.equal(out.quality.rounds, 0);
+  assert.equal(out.hold, true);
+  // Draft timeouts leave room for one judge pass inside the budget.
+  assert.ok(timeouts.every((ms) => ms > 0 && ms + JUDGE_TIMEOUT_MS <= budget));
+  assert.ok(ROUND_COST_MS > budget - 60_000);
+
+  // No time left for a judge retry: it isn't attempted, and the post fails closed.
+  let judged = 0;
+  const noRetry = loop({
+    budgetMs: MIN_POST_BUDGET_MS,
+    judge: async () => {
+      judged++;
+      throw new Error("down");
+    },
+  }, 0);
+  let once = true;
+  noRetry.deps.draft = async () => {
+    if (once) noRetry.clock.t += MIN_POST_BUDGET_MS - 11_000; // 11 s left: one judge call, no retry
+    once = false;
+    return post(EN_POST);
+  };
+  const closed = await runQualityLoop(noRetry.deps);
+  assert.equal(closed.skip, false);
+  if (closed.skip) return;
+  assert.equal(closed.hold, true);
+  assert.equal(judged, 3); // one try per draft
+  assert.deepEqual(noRetry.calls.sleeps, []);
 });
