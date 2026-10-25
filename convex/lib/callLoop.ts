@@ -127,6 +127,15 @@ export function loopInterval(env: LoopEnv): { minutes: number | null; blocked?: 
   return { minutes };
 }
 
+export const BLOCKED_WARNING =
+  "callLoop.tick: loop is off: CALL_INTERVAL_MINUTES is under a day and AUTO_POST isn't off. Set AUTO_POST=off to loop.";
+
+/** The warning to log while the loop is blocked: once an hour (minute 0, UTC), else null. */
+export function blockedWarning(blocked: string | undefined, nowMs: number): string | null {
+  if (blocked !== "posting_live") return null;
+  return new Date(nowMs).getUTCMinutes() === 0 ? BLOCKED_WARNING : null;
+}
+
 /** Does the loop handle this number? (Then the weekly schedule leaves him alone.) */
 export function loopCovers(env: LoopEnv, phone: string): boolean {
   if (loopInterval(env).minutes === null) return false;

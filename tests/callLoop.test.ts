@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { callEndedAt, loopDecision, missedInARow, parseIntervalMinutes, REQUEST_COOLDOWN_MS } from "../convex/lib/callLoop.ts";
+import { BLOCKED_WARNING, blockedWarning, callEndedAt, loopDecision, missedInARow, parseIntervalMinutes, REQUEST_COOLDOWN_MS } from "../convex/lib/callLoop.ts";
 import { callState, LIVE_STATES } from "../convex/lib/callStatus.ts";
 import { NOW } from "./helpers.ts";
 
@@ -125,4 +125,12 @@ test("loopInterval / loopCovers: off unless AUTO_POST=off (short interval); allo
   assert.equal(loopCovers(env, "+14155550999"), false);
   assert.equal(loopCovers({ ...env, CALL_LOOP: "all" }, "+14155550999"), true);
   assert.equal(loopCovers({ CALL_ALLOWLIST: "+14155550123" }, "+14155550123"), false); // loop off
+});
+
+test("blockedWarning: once an hour (minute 0) while blocked, fixed text naming AUTO_POST=off", () => {
+  const top = Date.UTC(2026, 9, 24, 15, 0, 20);
+  assert.equal(blockedWarning("posting_live", top), BLOCKED_WARNING);
+  assert.ok(BLOCKED_WARNING.includes("AUTO_POST=off"));
+  assert.equal(blockedWarning("posting_live", top + 60_000), null, "minute 1: quiet");
+  assert.equal(blockedWarning(undefined, top), null, "loop simply off: nothing to warn about");
 });
