@@ -11,8 +11,9 @@
 // Remaining risk: the SMS check is fake for now, so anyone can sign up a NEW number and make it
 // ring (onboarding only, at most CALLS_PER_DAY a day, 10 min apart; no global cap). That's why
 // `requestCall` is off by default: PUBLIC_CALLS=on rings only CALL_ALLOWLIST numbers,
-// PUBLIC_CALLS=all rings anyone (lib/signupRules.publicCallAllowed). LinkedIn and Bluesky are
-// locked once he's active.
+// PUBLIC_CALLS=all rings anyone (lib/signupRules.publicCallAllowed). The weekly cron uses the
+// same gate for website sign-ups in onboarding (lib/signupRules.cronMayCall), and their first
+// weekly slot is tomorrow. LinkedIn and Bluesky are locked once he's active.
 
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
