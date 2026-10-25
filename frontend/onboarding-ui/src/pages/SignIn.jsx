@@ -1,10 +1,11 @@
 // Sign in (#/signin): welcome -> phone -> #/setup (or straight to #/home if this device already set
-// up that phone); welcome -> email -> #/setup. No codes or links: the backend has no SMS or email
-// sign-in yet, so the device just remembers the phone (lib/session.js).
+// up that phone, even after signing out: lib/session.js knownSignup); welcome -> email -> #/setup.
+// No codes or links: the backend has no SMS or email sign-in yet, so the device just remembers
+// the phone and the sign-up it made for it.
 import { useEffect, useRef, useState } from 'react'
 import { SIGNIN as S } from '../copy/signin'
 import { go } from '../lib/route'
-import { clearSession, loadSession, saveSession } from '../lib/session'
+import { clearSession, knownSignup, loadSession, saveSession } from '../lib/session'
 import { COUNTRIES, digitsOf, formatNational, toE164 } from '../phone'
 import { BackChevron, MailIcon, PhoneIcon, ReadingArt } from '../art/setup'
 import { Footer, Header } from '../ui/Header'
@@ -56,8 +57,13 @@ export default function SignIn() {
     if (digitsOf(national).length < country.digits) return fieldError('phone', S.phone.tooShort(country.digits))
     const e164 = toE164(country, national)
     const before = loadSession()
-    if (before.elderId && before.phone === e164) return go('/home') // already set up on this device
-    clearSession() // someone else's sign-up must not carry over
+    if (before.elderId && before.token && before.phone === e164) return go('/home') // already set up on this device
+    clearSession() // someone else's sign-up must not carry over (it stays a known device)
+    const known = knownSignup(e164)
+    if (known) {
+      saveSession(known) // this device set up that phone before: his token comes back
+      return go('/home')
+    }
     saveSession({ phone: e164 })
     return go('/setup')
   }

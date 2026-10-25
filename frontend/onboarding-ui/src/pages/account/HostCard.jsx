@@ -9,7 +9,7 @@ import { Button, Card, ErrorText, cx } from '../../ui/controls'
 import { QualityChips } from '../../ui/QualityChips'
 
 /** current: a known host id (HomeTab maps old ids to a default first). */
-export default function HostCard({ elderId, current, onSaved }) {
+export default function HostCard({ elderId, token, current, onSaved }) {
   const [picked, setPicked] = useState(current)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -25,10 +25,10 @@ export default function HostCard({ elderId, current, onSaved }) {
     setBusy(true)
     setError('')
     try {
-      await signupApi.setCharacter(elderId, picked)
+      await signupApi.setCharacter(elderId, token, picked)
       onSaved(picked)
     } catch (e) {
-      console.error('setCharacter failed', e)
+      console.error('setCharacter failed', e.code || 'error')
       setError(errorText(e)) // keep their choice so they can try again
     } finally {
       setBusy(false)

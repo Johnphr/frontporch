@@ -1,30 +1,42 @@
-// Sign-up page API (public): sign up -> choose a character -> optional LinkedIn -> first call -> its status.
+// Sign-up page API (public): sign up -> choose a character -> connect Bluesky (optional) -> first call -> its status.
 // These are the only public functions: anyone with the deployment URL can call them, so they
-// return only ids, characters and ok/reason results (never elder rows or transcripts), and
-// validate every argument. Rules live in lib/signupRules.ts (unit-tested).
+// return only ids, tokens, characters and ok/reason results (never elder rows or transcripts),
+// and validate every argument. Rules live in lib/signupRules.ts (unit-tested).
 //
-// Remaining risk: the SMS check is fake for now, so whoever knows a phone number can get its
-// elderId from `register`, change its character, and make it ring (onboarding only, at most
-// CALLS_PER_DAY a day, 10 min apart). Each new number gets its own limit: there is no global cap.
-// That's why `requestCall` is off by default: PUBLIC_CALLS=on rings only CALL_ALLOWLIST numbers,
-// PUBLIC_CALLS=all rings anyone (lib/signupRules.publicCallAllowed). LinkedIn is locked once he's active,
-// since his posts' engagement is scraped from it.
+// Sign-up token: `register` creates his row and returns a random token (only its SHA-256 hash is
+// stored). Every later step (setCharacter, connectBluesky, setLinkedin, requestCall) needs it, so
+// knowing a phone number or an elderId isn't enough to change a sign-up. An existing number gets
+// no token (and no elderId): re-issuing one would hand it to anyone who types his number.
+//
+// Remaining risk: the SMS check is fake for now, so anyone can sign up a NEW number and make it
+// ring (onboarding only, at most CALLS_PER_DAY a day, 10 min apart; no global cap). That's why
+// `requestCall` is off by default: PUBLIC_CALLS=on rings only CALL_ALLOWLIST numbers,
+// PUBLIC_CALLS=all rings anyone (lib/signupRules.publicCallAllowed). The weekly cron uses the
+// same gate for website sign-ups in onboarding (lib/signupRules.cronMayCall), and their first
+// weekly slot is tomorrow. LinkedIn and Bluesky are locked once he's active.
 
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { action, internalQuery, mutation, query } from "./_generated/server";
+import { action, internalMutation, internalQuery, query } from "./_generated/server";
 import { callState, retryOffer, type CallState } from "./lib/callStatus";
 import { getCharacter, publicCharacters, type Character } from "./lib/characters";
+import { connectBlueskyAccount, type ConnectResult } from "./lib/accountConnect";
+import { startOAuthConnectFlow, startXConnectFlow, type StartResult } from "./lib/oauthFlow";
+import type { FetchFn } from "./lib/blueskyClient";
 import { planNextCall } from "./lib/onboarding";
 import {
   CALLS_PER_DAY,
   callRateLimit,
   canonicalLinkedInProfileUrl,
   languageTag,
+  newElderFields,
+  newSignupToken,
   normalizeName,
   normalizePhone,
   publicCallAllowed,
+  sameTokenHash,
+  signupTokenHash,
 } from "./lib/signupRules";
 import { asElderV2 } from "./lib/v2Fields";
 
@@ -35,74 +47,196 @@ type CallRequest =
   | { ok: true; callId: Id<"calls"> }
   | { ok: false; reason: "disabled" | "rate_limited" | "already_onboarded" | "failed"; message: string; callId?: Id<"calls"> };
 
+type Registration = { ok: true; elderId: Id<"elders">; token: string } | { ok: false; reason: "already_signed_up" };
+
 const DISABLED = "Calls from the sign-up page are turned off for now.";
 const FAILED = "We couldn't start the call. Please try again later.";
+const NOT_FOUND = "Sign-up not found.";
+const language = v.union(v.literal("en"), v.literal("es"));
 
 export const listCharacters = query({
   args: {},
   handler: async (): Promise<Character[]> => publicCharacters(),
 });
 
-/** New elder in onboarding, or the existing id for a known phone (nothing on his row changes). */
-export const register = mutation({
-  args: { name: v.string(), phone: v.string(), language: v.union(v.literal("en"), v.literal("es")) },
-  handler: async (ctx, args): Promise<Id<"elders">> => {
+/**
+ * New elder in onboarding -> { elderId, token }. A known phone -> already_signed_up (his row
+ * isn't touched and no id or token is given out). An action so the token comes from real
+ * randomness. `timeZone` is the browser's (checked; else from the phone's country).
+ * Known, accepted leak: already_signed_up tells anyone whether a number is signed up. Hiding
+ * it would mean telling a real person "done" when nothing happened; nothing else is revealed.
+ */
+export const register = action({
+  args: { name: v.string(), phone: v.string(), language, timeZone: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<Registration> => {
     const name = normalizeName(args.name);
     if (!name) throw new ConvexError("Please enter your name (up to 100 characters).");
     const phone = normalizePhone(args.phone);
     if (!phone) throw new ConvexError("Please enter a phone number with country code, e.g. +14155550123.");
-    const existing = await ctx.db
-      .query("elders")
-      .withIndex("by_phone", (q) => q.eq("phone", phone))
-      .unique();
-    if (existing) return existing._id;
-    return await ctx.db.insert("elders", {
+    const token = newSignupToken();
+    const tokenHash = await signupTokenHash(token);
+    if (!tokenHash) throw new Error("signup token malformed"); // can't happen
+    const elderId: Id<"elders"> | null = await ctx.runMutation(internal.signup.createElder, {
       name,
       phone,
-      language: languageTag(args.language),
-      stage: "onboarding",
-      expertise: [], // v1 field, still required by the schema
+      language: args.language,
+      ...(args.timeZone ? { timeZone: args.timeZone.slice(0, 100) } : {}),
+      tokenHash,
+      now: Date.now(),
     });
+    return elderId ? { ok: true, elderId, token } : { ok: false, reason: "already_signed_up" };
   },
 });
 
-export const setCharacter = mutation({
-  args: { elderId: v.id("elders"), characterId: v.string() },
-  handler: async (ctx, { elderId, characterId }): Promise<null> => {
+/** For register: insert his row, or null if the phone is already signed up (nothing changes). */
+export const createElder = internalMutation({
+  args: { name: v.string(), phone: v.string(), language, timeZone: v.optional(v.string()), tokenHash: v.string(), now: v.number() },
+  handler: async (ctx, { tokenHash, now, ...input }): Promise<Id<"elders"> | null> => {
+    const existing = await ctx.db
+      .query("elders")
+      .withIndex("by_phone", (q) => q.eq("phone", input.phone))
+      .unique();
+    if (existing) return null;
+    return await ctx.db.insert("elders", newElderFields(input, now, tokenHash));
+  },
+});
+
+// setCharacter / setLinkedin are actions: the token is hashed here (Web Crypto), then an
+// internal mutation checks the hash, like reserveConnect / callCheck.
+
+type Saved = { ok: true } | { ok: false; error: "not_found" | "locked" };
+
+export const setCharacter = action({
+  args: { elderId: v.id("elders"), token: v.string(), characterId: v.string() },
+  handler: async (ctx, { elderId, token, characterId }): Promise<null> => {
+    if (!getCharacter(characterId)) throw new ConvexError("Unknown character.");
+    const tokenHash = (await signupTokenHash(token)) ?? "";
+    const saved: Saved = await ctx.runMutation(internal.signup.saveCharacter, { elderId, tokenHash, characterId });
+    if (!saved.ok) throw new ConvexError(NOT_FOUND);
+    return null;
+  },
+});
+
+/** For setCharacter: check the token hash, then save his character. */
+export const saveCharacter = internalMutation({
+  args: { elderId: v.id("elders"), tokenHash: v.string(), characterId: v.string() },
+  handler: async (ctx, { elderId, tokenHash, characterId }): Promise<Saved> => {
+    const elder = await ctx.db.get(elderId);
     const character = getCharacter(characterId);
-    if (!character) throw new ConvexError("Unknown character.");
-    if (!(await ctx.db.get(elderId))) throw new ConvexError("Sign-up not found.");
+    if (!elder || !character || !sameTokenHash(elder.signupTokenHash, tokenHash)) return { ok: false, error: "not_found" };
     // One language per character: switching host switches his call language too.
     await ctx.db.patch(elderId, { characterId, language: languageTag(character.language) });
+    return { ok: true };
+  },
+});
+
+/** Retired from the website (it connects Bluesky now); kept for old clients and scripts. */
+export const setLinkedin = action({
+  args: { elderId: v.id("elders"), token: v.string(), url: v.string() },
+  handler: async (ctx, { elderId, token, url }): Promise<null> => {
+    const linkedinUrl = canonicalLinkedInProfileUrl(url);
+    if (!linkedinUrl) throw new ConvexError("Please enter a LinkedIn profile link, e.g. linkedin.com/in/your-name.");
+    const tokenHash = (await signupTokenHash(token)) ?? "";
+    const saved: Saved = await ctx.runMutation(internal.signup.saveLinkedin, { elderId, tokenHash, linkedinUrl });
+    if (!saved.ok) throw new ConvexError(saved.error === "locked" ? "Your LinkedIn is already set up." : NOT_FOUND);
     return null;
   },
 });
 
-export const setLinkedin = mutation({
-  args: { elderId: v.id("elders"), url: v.string() },
-  handler: async (ctx, { elderId, url }): Promise<null> => {
-    const linkedinUrl = canonicalLinkedInProfileUrl(url);
-    if (!linkedinUrl) throw new ConvexError("Please enter a LinkedIn profile link, e.g. linkedin.com/in/your-name.");
+/** For setLinkedin: check the token hash, then save the (already canonical) profile URL. */
+export const saveLinkedin = internalMutation({
+  args: { elderId: v.id("elders"), tokenHash: v.string(), linkedinUrl: v.string() },
+  handler: async (ctx, { elderId, tokenHash, linkedinUrl }): Promise<Saved> => {
     const elder = await ctx.db.get(elderId);
-    if (!elder) throw new ConvexError("Sign-up not found.");
-    if (elder.stage === "active") throw new ConvexError("Your LinkedIn is already set up.");
-    if (elder.linkedinUrl === linkedinUrl) return null;
+    if (!elder || !sameTokenHash(elder.signupTokenHash, tokenHash)) return { ok: false, error: "not_found" };
+    if (elder.stage === "active") return { ok: false, error: "locked" };
+    if (elder.linkedinUrl === linkedinUrl) return { ok: true };
     // A cached background came from the old profile: drop it so onboarding scrapes the new one.
     await ctx.db.patch(elderId, { linkedinUrl, knownBackground: undefined });
-    return null;
+    return { ok: true };
+  },
+});
+
+const timedFetch: FetchFn = async (url, init) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+/**
+ * Connect his own Bluesky account (needs his sign-up token): handle + an app password (never his real password: an app
+ * password can't change his password or delete his account, and he can revoke it any time). Logs in once to check it,
+ * then saves it encrypted (convex/accounts.ts). Rate limited (his tries, per handle, and in all), and locked once he's active.
+ * Returns { ok, handle } or { ok: false, error: code }; never echoes the password.
+ */
+export const connectBluesky = action({
+  args: { elderId: v.id("elders"), token: v.string(), handle: v.string(), appPassword: v.string() },
+  handler: async (ctx, { elderId, token, handle, appPassword }): Promise<ConnectResult> => {
+    const now = Date.now();
+    const tokenHash = (await signupTokenHash(token)) ?? "";
+    return connectBlueskyAccount(
+      {
+        fetchFn: timedFetch,
+        env: process.env,
+        reserve: (h) => ctx.runMutation(internal.accounts.reserveConnect, { elderId, tokenHash, platform: "bluesky", handle: h, now }),
+        save: ({ handle: h, did, secret }) =>
+          ctx.runMutation(internal.accounts.saveAccount, { elderId, platform: "bluesky", handle: h, did, secret, now, signup: true }),
+        warn: (message) => console.warn(message),
+      },
+      elderId,
+      { handle, appPassword },
+    );
+  },
+});
+
+/**
+ * "Connect Threads" / "Connect X": needs his sign-up token. Rate limited like connectBluesky and
+ * locked once he's active. Returns { ok, url } (the platform's consent page; the browser goes
+ * there and comes back through http.ts /oauth/<platform>/callback) or { ok: false, error: code }.
+ * X has its own state row + PKCE in xAuth.startConnect (one callback per platform).
+ */
+export const startOAuthConnect = action({
+  args: { elderId: v.id("elders"), token: v.string(), platform: v.union(v.literal("threads"), v.literal("x")) },
+  handler: async (ctx, { elderId, token, platform }): Promise<StartResult> => {
+    const now = Date.now();
+    const tokenHash = (await signupTokenHash(token)) ?? "";
+    const reserve = () => ctx.runMutation(internal.oauth.reserveConnect, { elderId, tokenHash, platform, now });
+    if (platform === "x") {
+      return startXConnectFlow({
+        env: process.env,
+        reserve,
+        start: () => ctx.runAction(internal.xAuth.startConnect, { elderId }),
+        warn: (message) => console.warn(message),
+      });
+    }
+    return startOAuthConnectFlow(
+      {
+        env: process.env,
+        reserve,
+        createState: async ({ state, codeVerifier }) => {
+          await ctx.runMutation(internal.oauth.createState, { elderId, platform, state, now, ...(codeVerifier ? { codeVerifier } : {}) });
+        },
+        warn: (message) => console.warn(message),
+      },
+      platform,
+    );
   },
 });
 
 /** For requestCall: is his next call onboarding, and when were his latest calls created. */
 export const callCheck = internalQuery({
-  args: { elderId: v.id("elders") },
+  args: { elderId: v.id("elders"), tokenHash: v.string() },
   handler: async (
     ctx,
-    { elderId },
+    { elderId, tokenHash },
   ): Promise<{ phone: string; onboarding: boolean; callTimes: number[] } | null> => {
     const row = await ctx.db.get(elderId);
     const elder = asElderV2(row);
-    if (!row || !elder) return null;
+    if (!row || !elder || !sameTokenHash(row.signupTokenHash, tokenHash)) return null;
     const recent = await ctx.db
       .query("calls")
       .withIndex("by_elder", (q) => q.eq("elderId", elderId))
@@ -117,16 +251,16 @@ export const callCheck = internalQuery({
 });
 
 /**
- * Ring him for his onboarding call. Gated by PUBLIC_CALLS (+ CALL_ALLOWLIST), then the rate limit; startCall's
+ * Ring him for his onboarding call (needs his sign-up token). Gated by PUBLIC_CALLS (+ CALL_ALLOWLIST), then the rate limit; startCall's
  * reserveCall still refuses a second open call, so two requests at once can't both ring.
  */
 export const requestCall = action({
-  args: { elderId: v.id("elders") },
-  handler: async (ctx, { elderId }): Promise<CallRequest> => {
+  args: { elderId: v.id("elders"), token: v.string() },
+  handler: async (ctx, { elderId, token }): Promise<CallRequest> => {
     const mode = process.env.PUBLIC_CALLS;
     if (mode !== "on" && mode !== "all") return { ok: false, reason: "disabled", message: DISABLED };
-    const check = await ctx.runQuery(internal.signup.callCheck, { elderId });
-    if (!check) return { ok: false, reason: "failed", message: "Sign-up not found." };
+    const check = await ctx.runQuery(internal.signup.callCheck, { elderId, tokenHash: (await signupTokenHash(token)) ?? "" });
+    if (!check) return { ok: false, reason: "failed", message: NOT_FOUND };
     if (!publicCallAllowed(mode, process.env.CALL_ALLOWLIST, check.phone)) {
       return { ok: false, reason: "disabled", message: DISABLED };
     }

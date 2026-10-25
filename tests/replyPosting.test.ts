@@ -60,7 +60,7 @@ const post = (fetchFn: FetchFn, cache: SessionCache = new Map()) =>
 test("bluesky: posts under the question and returns the web link", async () => {
   const f = fakeFetch(blueskyRoutes(CREATED));
   const out = await post(f.fetchFn);
-  assert.deepEqual(out, { status: "posted", url: "https://bsky.app/profile/walter.bsky.social/post/r1" });
+  assert.deepEqual(out, { status: "posted", url: "https://bsky.app/profile/walter.bsky.social/post/r1", uri: "at://did:plc:him/app.bsky.feed.post/r1" });
   const body = JSON.parse(f.calls.find((c) => c.url.includes("createRecord"))?.body ?? "{}");
   assert.equal(body.record.reply.parent.uri, QUESTION_URI);
   assert.equal(body.record.reply.root.uri, QUESTION_URI);
@@ -93,11 +93,20 @@ test("bluesky: failures before the post request are failed (nothing went out)", 
   });
 });
 
+test("bluesky: a refused login is failed with loginRefused (the caller marks his account invalid)", async () => {
+  const refused = fakeFetch([{ match: "createSession", respond: () => ({ status: 401, json: { error: "AuthenticationRequired" } }) }]);
+  const out = await post(refused.fetchFn);
+  assert.deepEqual(out, { status: "failed", error: "Bluesky login HTTP 401 (AuthenticationRequired)", loginRefused: true });
+  assert.equal(refused.count("createRecord"), 0);
+  const busy = await post(fakeFetch([{ match: "createSession", respond: () => ({ status: 503 }) }]).fetchFn);
+  assert.equal((busy as { loginRefused?: boolean }).loginRefused, undefined, "Bluesky down isn't a refusal");
+});
+
 test("bluesky: his existing reply under the post counts as posted (retry never answers twice)", async () => {
   const mine = ok({ thread: { replies: [{ post: { uri: "at://did:plc:him/app.bsky.feed.post/old", author: { did: "did:plc:him" } } }] } });
   const f = fakeFetch(blueskyRoutes(CREATED, mine));
   const out = await post(f.fetchFn);
-  assert.deepEqual(out, { status: "posted", url: "https://bsky.app/profile/walter.bsky.social/post/old", alreadyThere: true });
+  assert.deepEqual(out, { status: "posted", url: "https://bsky.app/profile/walter.bsky.social/post/old", uri: "at://did:plc:him/app.bsky.feed.post/old", alreadyThere: true });
   assert.equal(f.count("createRecord"), 0, "no second reply");
   assert.equal(ownReplyIn({ thread: { replies: [{ post: { uri: "u", author: { did: "did:plc:x" } } }] } }, "did:plc:him"), undefined);
   assert.equal(ownReplyIn(null, "did:plc:him"), undefined);
@@ -270,10 +279,10 @@ test("draftCutoff: default 7 days, clamped to 1-60", () => {
   assert.equal(draftCutoff(now, 365), now - 60 * 86_400_000);
 });
 
-test("logins: env for now, null when missing; Reddit only when REDDIT_POSTING is on", async () => {
-  const env = { BLUESKY_HANDLE: "walter.bsky.social", BLUESKY_APP_PASSWORD: "p", REDDIT_CLIENT_ID: "a", REDDIT_CLIENT_SECRET: "b", REDDIT_USERNAME: "w", REDDIT_PASSWORD: "c" };
+test("logins: env demo account (DEMO_ACCOUNT_FALLBACK=on), null when missing; Reddit only when REDDIT_POSTING is on", async () => {
+  const env = { DEMO_ACCOUNT_FALLBACK: "on", BLUESKY_HANDLE: "walter.bsky.social", BLUESKY_APP_PASSWORD: "p", REDDIT_CLIENT_ID: "a", REDDIT_CLIENT_SECRET: "b", REDDIT_USERNAME: "w", REDDIT_PASSWORD: "c" };
   assert.deepEqual(await blueskyLoginForElder(null, "e1", env), { service: "https://bsky.social", identifier: "walter.bsky.social", password: "p" });
-  assert.equal(await blueskyLoginForElder(null, "e1", { BLUESKY_HANDLE: "x" }), null);
+  assert.equal(await blueskyLoginForElder(null, "e1", { DEMO_ACCOUNT_FALLBACK: "on", BLUESKY_HANDLE: "x" }), null);
   assert.equal(await redditLoginForElder(null, "e1", env), null, "off by default");
   const on = await redditLoginForElder(null, "e1", { ...env, REDDIT_POSTING: "on" });
   assert.equal(on?.userAgent, "web:frontporch:v1 (by /u/w)");

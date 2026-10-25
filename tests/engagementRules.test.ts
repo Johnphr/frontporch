@@ -2,10 +2,17 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   BANK_REFRESH_DEBOUNCE_MS,
+  canonicalBlueskyPostUrl,
+  canonicalEngagementUrl,
   cleanComments,
   engagementChanged,
   feedbackWindowStart,
+  linkedinEngagementOn,
   nextSnapshot,
+  LINKEDIN_AFTER_BLUESKY_MS,
+  feedbackVisible,
+  planDailyEngagement,
+  platformOf,
   shouldRefreshBank,
 } from "../convex/lib/engagementRules.ts";
 import { canonicalLinkedInPostUrl } from "../convex/lib/linkedinUrl.ts";
@@ -79,4 +86,109 @@ test("feedbackWindowStart: days back from now, 14 by default", () => {
   assert.equal(feedbackWindowStart(now, -3), now - 14 * day);
   assert.equal(feedbackWindowStart(now, Number.NaN), now - 14 * day);
   assert.equal(feedbackWindowStart(now, 0), now);
+});
+
+// ---------- platforms + daily schedule ----------
+
+test("canonicalBlueskyPostUrl drops query/hash/trailing slash and never rewrites to LinkedIn", () => {
+  const url = "https://bsky.app/profile/walt.bsky.social/post/3lroot";
+  assert.equal(canonicalBlueskyPostUrl(" https://BSKY.app/profile/walt.bsky.social/post/3lroot/?ref=x#top "), url);
+  assert.equal(canonicalBlueskyPostUrl(url), url);
+  assert.equal(canonicalBlueskyPostUrl(""), "");
+  assert.equal(canonicalBlueskyPostUrl(undefined), "");
+  assert.ok(!canonicalBlueskyPostUrl(url).includes("linkedin"));
+});
+
+test("platformOf: rows from before Bluesky are LinkedIn", () => {
+  assert.equal(platformOf({}), "linkedin");
+  assert.equal(platformOf(null), "linkedin");
+  assert.equal(platformOf({ platform: "bluesky" }), "bluesky");
+  assert.equal(platformOf({ platform: "linkedin" }), "linkedin");
+});
+
+test("linkedinEngagementOn: only when LINKEDIN_POSTING is on", () => {
+  assert.equal(linkedinEngagementOn({}), false);
+  assert.equal(linkedinEngagementOn({ LINKEDIN_POSTING: "off" }), false);
+  assert.equal(linkedinEngagementOn({ LINKEDIN_POSTING: "" }), false);
+  for (const on of ["on", " ON ", "true", "1", "yes"]) assert.equal(linkedinEngagementOn({ LINKEDIN_POSTING: on }), true, on);
+});
+
+test("planDailyEngagement: Bluesky for every active elder; LinkedIn only behind the gate", () => {
+  const elders = [
+    { _id: "a", stage: "active", linkedinUrl: "https://www.linkedin.com/in/a" },
+    { _id: "b", stage: "onboarding", linkedinUrl: "https://www.linkedin.com/in/b" },
+    { _id: "c", stage: "active" },
+    { _id: "d" },
+    { _id: "e", stage: "active", linkedinUrl: "https://www.linkedin.com/in/e" },
+  ];
+  assert.deepEqual(planDailyEngagement(elders, false, 30_000).filter((j) => j.kind === "bluesky"), [
+    { kind: "bluesky", elderId: "a", delayMs: 0 },
+    { kind: "bluesky", elderId: "c", delayMs: 30_000 },
+    { kind: "bluesky", elderId: "e", delayMs: 60_000 },
+  ]);
+  const on = planDailyEngagement(elders, true, 30_000).filter((j) => j.kind === "linkedin");
+  // After the 3 Bluesky runs (90 s) plus 12 minutes, so the refresh debounce has passed.
+  assert.equal(LINKEDIN_AFTER_BLUESKY_MS, 12 * 60_000);
+  assert.deepEqual(on, [
+    { kind: "linkedin", elderId: "a", delayMs: 90_000 + 12 * 60_000 },
+    { kind: "linkedin", elderId: "e", delayMs: 120_000 + 12 * 60_000 },
+  ]);
+  assert.equal(planDailyEngagement(elders, true, 30_000).length, 8, "3 Bluesky + 3 Threads + 2 LinkedIn");
+  // Each elder's LinkedIn run is past the debounce window after his Bluesky run.
+  const all = planDailyEngagement(elders, true, 30_000);
+  for (const li of on) {
+    const bs = all.find((j) => j.kind === "bluesky" && j.elderId === li.elderId)!;
+    assert.ok(li.delayMs - bs.delayMs >= LINKEDIN_AFTER_BLUESKY_MS);
+  }
+});
+
+test("feedbackVisible: a post deleted on its platform or taken down stays out of recentFeedback", () => {
+  assert.equal(feedbackVisible({}, null), true);
+  assert.equal(feedbackVisible({}, {}), true);
+  assert.equal(feedbackVisible({ goneAt: 1 }, null), false, "he deleted the thread in the app");
+  assert.equal(feedbackVisible({}, { removedAt: 1 }), false, "taken down by undo");
+});
+
+test("LinkedIn canonicalization is unchanged for LinkedIn rows", () => {
+  assert.equal(
+    canonicalLinkedInPostUrl("https://www.linkedin.com/posts/walt_bread-activity-7123456789012345678-abcd?utm=x"),
+    "https://www.linkedin.com/feed/update/urn:li:activity:7123456789012345678",
+  );
+});
+
+test("planDailyEngagement: Threads for every active elder, a little after his Bluesky run; X only when on", () => {
+  const elders = [
+    { _id: "a", stage: "active", linkedinUrl: "https://www.linkedin.com/in/a" },
+    { _id: "b", stage: "onboarding" },
+    { _id: "c", stage: "active" },
+  ];
+  const off = planDailyEngagement(elders, false, 30_000);
+  assert.deepEqual(off.filter((j) => j.kind === "threads"), [
+    { kind: "threads", elderId: "a", delayMs: 10_000 },
+    { kind: "threads", elderId: "c", delayMs: 40_000 },
+  ]);
+  assert.equal(off.some((j) => j.kind === "x"), false, "X_READ_FEEDBACK off");
+  const on = planDailyEngagement(elders, true, 30_000, true);
+  assert.deepEqual(on.filter((j) => j.kind === "x"), [
+    { kind: "x", elderId: "a", delayMs: 20_000 },
+    { kind: "x", elderId: "c", delayMs: 50_000 },
+  ]);
+  // LinkedIn still starts after the whole batch (Threads and X included), past the debounce.
+  const li = on.filter((j) => j.kind === "linkedin");
+  assert.deepEqual(li, [{ kind: "linkedin", elderId: "a", delayMs: 60_000 + LINKEDIN_AFTER_BLUESKY_MS }]);
+  for (const j of on.filter((j) => j.kind !== "linkedin")) assert.ok(li[0].delayMs - j.delayMs >= LINKEDIN_AFTER_BLUESKY_MS);
+});
+
+test("canonicalEngagementUrl: only LinkedIn links get the LinkedIn cleanup", () => {
+  const threads = "https://www.threads.com/@walter/post/DAbc123";
+  const x = "https://x.com/grandpa_joe/status/1234567890";
+  assert.equal(canonicalEngagementUrl("threads", ` ${threads}/?xmt=abc#top `), threads);
+  assert.equal(canonicalEngagementUrl("x", `${x}?s=20`), x);
+  assert.equal(canonicalEngagementUrl("bluesky", "https://BSKY.app/profile/w.bsky.social/post/3l/"), "https://bsky.app/profile/w.bsky.social/post/3l");
+  const li = "https://www.linkedin.com/feed/update/urn:li:activity:7000000000000000000/?utm_source=x";
+  assert.equal(canonicalEngagementUrl("linkedin", li), canonicalLinkedInPostUrl(li));
+  for (const p of ["threads", "x"] as const) assert.ok(!canonicalEngagementUrl(p, threads).includes("linkedin"));
+  assert.equal(canonicalEngagementUrl("x", ""), "");
+  assert.equal(platformOf({ platform: "threads" }), "threads");
+  assert.equal(platformOf({ platform: "x" }), "x");
 });

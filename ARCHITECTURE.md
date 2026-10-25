@@ -1,6 +1,6 @@
 # Front Porch — Architecture (v2)
 
-> **Status:** posting (`linkedapi.ts` + `postGuard.ts`), Apify scraping (`apify.ts`), the
+> **Status:** posting to Bluesky, Threads and X (`publish.ts` + `postGuard.ts`; X behind `X_POSTING`), undo, Apify scraping (`apify.ts`), the
 > onboarding call (slice 1) and the story follow-up call (slice 2: story agent + `startCall` story
 > branch) are built; memory + feedback (slice 3) too. See [Build order](#build-order).
 > [Decisions](#decisions-locked) are locked; change them only by agreeing as a team.
@@ -9,33 +9,35 @@
 ## What we're building
 
 An AI that interviews an older professional by phone and turns their stories
-into LinkedIn posts, then uses how readers react to steer the next interview.
+into posts on their own social accounts (Bluesky, Threads, X; see
+[README → Where posts go](README.md#where-posts-go)), then uses how readers react to steer the
+next interview.
 
 ```
   ① onboarding call ──► profile + story seeds
             │
             ▼
-  ② weekly story call ──► transcript ──► memories + LinkedIn post (auto, fact-checked)
+  ② weekly story call ──► transcript ──► memories + social post (auto, fact-checked)
             ▲                                         │
             │                                         ▼
-  ④ plan next call ◄── ③ Apify: reactions + comments on his posts,
+  ④ plan next call ◄── ③ reactions + replies on his posts,
      (profile + past calls + feedback          + real questions people in his field ask
       + audience questions → questions)
 ```
 
 1. **Onboarding call:** get to know him: industry, specialty, career arc, story seeds.
 2. **Weekly story call:** short open questions, then let him talk (`voice/conversation-guide.md`).
-3. **Content:** his stories become LinkedIn posts, using only what he said.
+3. **Content:** his stories become posts (a short thread per platform), using only what he said.
 4. **Feedback loop:** reader reactions and comments, plus real audience questions, steer the next call.
 
-No family, no SMS. One small web app (`frontend/onboarding-ui/`): sign up, then his page (host, call time, posts); everything else is phone calls in and LinkedIn posts out.
+No family, no SMS. One small web app (`frontend/onboarding-ui/`): sign up, then his page (host, call time, posts); everything else is phone calls in and posts out.
 
 ## Decisions (locked)
 
 | Decision | Choice |
 |---|---|
 | Backend | Everything in Convex: tables, crons, actions, HTTP actions. No separate server |
-| UI | One web app (`frontend/onboarding-ui/`, "Large & Calm" design, English): landing → sign in (phone + code, or email link; both mocked until real auth) → setup (who sets up, name, language + host, weekly day + time, LinkedIn, review, Finish rings him) → his page: **Home** (switch host, change call day/time) and **Posts** (published posts with reaction/comment counts). Talks to `signup.*` and `account.*` with the elderId kept on the device (no real sign-in yet; keep the link private). After Finish the page shows the call's live status (`signup:callStatus`). For testing, `CALL_INTERVAL_MINUTES` repeats calls. Temporary: a key-protected `/posts` review page (`convex/postsPage.ts`) to iterate on post content |
+| UI | One web app (`frontend/onboarding-ui/`, "Large & Calm" design, English): landing → sign in (phone + code, or email link; both mocked until real auth) → setup (who sets up, name, language + host, weekly day + time, review + save, connect accounts: Bluesky (handle + app password), "Connect Threads" / "Connect X" (OAuth), Finish rings him) → his page: **Home** (switch host, change call day/time) and **Posts** (posts that went out, a link per platform, reaction/comment counts). Talks to `signup.*` and `account.*` with the elderId and sign-up token kept on the device (no real sign-in yet; keep the link private). Finish rings only when `PUBLIC_CALLS` allows his number, then the page shows the call's live status (`signup:callStatus`). Sign-up sets a weekly slot (tomorrow's weekday, 10:00 his time) and setup then saves the one he picked; the hourly cron rings a website sign-up still in onboarding only when `PUBLIC_CALLS` allows his number. For testing, `CALL_INTERVAL_MINUTES` repeats calls. Temporary: a key-protected `/posts` review page (`convex/postsPage.ts`) to iterate on post content |
 | Phone calls | **Cartesia Managed Agents** run the whole call: phone number, speech-to-text, in-call LLM, voice. No Vapi; no Twilio in our code |
 | Agent config | Lives in code (`convex/lib/prompts/`), pushed to Cartesia with `npx convex run cartesiaAgents:syncAgent` |
 | Characters | One Cartesia agent per character (`convex/lib/characters.ts`: voice, language, personality): **Pip** in English, **Juanito** (Latin American Spanish, "usted"). He picks one (`elders.characterId`), else the default for `elders.language`. All call from one number; the call's goal + context are per-call variables |
@@ -44,8 +46,8 @@ No family, no SMS. One small web app (`frontend/onboarding-ui/`): sign up, then 
 | Transcripts | Fetched after the call by polling `GET /agents/calls/{id}` (Cartesia call webhooks aren't available yet) |
 | Questions | Generated by the AI each call, from profile + past calls + reader feedback + audience questions |
 | Audience questions | Planner input. Reader comments on his posts take priority |
-| Posting | Auto-post via LinkedAPI. The post guard fact-checks first; a failing post is held as `needs_review` (`POST_GUARD_MODE=enforce`) until someone runs `linkedapi:approvePost` |
-| Feedback | Apify scrapes his posts' reactions + comments |
+| Posting | Auto-post to his own accounts (`publish.ts`), in this order: **Bluesky** (3-5 post thread), **Threads** (when he connected it), **X** (only `X_POSTING=on`), **Reddit** (only `REDDIT_POSTING=on`), **LinkedIn** (off: `LINKEDIN_POSTING`; LinkedAPI needs a connected account per person; the code stays). Table: [README → Where posts go](README.md#where-posts-go). The post guard fact-checks first; a failing post is held as `needs_review` (`POST_GUARD_MODE=enforce`) until someone runs `publish:approvePost` |
+| Feedback | Daily: Bluesky and Threads with his logins, X only with `X_READ_FEEDBACK=on`; Apify for LinkedIn (only `LINKEDIN_POSTING=on`) |
 | Memory | OpenAI `text-embedding-3-small` + Convex vector index (built in slice 3) |
 | LLM | OpenAI `gpt-6-luna` (Responses API, `OPENAI_MODEL` to change: `gpt-6.1-sol` / `gpt-6-astra` write better) for planning, profile extraction, writing, fact-checking. One key with the embeddings. The in-call model runs inside Cartesia |
 | Build order | Progressive: onboarding first; each slice gives later calls more of the past |
@@ -59,11 +61,11 @@ No family, no SMS. One small web app (`frontend/onboarding-ui/`): sign up, then 
              └──┬──────────────▲────────────────┬───────────────┘
    start call   │              │ poll transcript │ actions call out to:
    + per-call   │              │ after the call  │ OpenAI LLM + embeddings
-   variables    │              │                 │ LinkedAPI (post)
+   variables    │              │                 │ Bluesky / Threads / X (post, read)
              ┌──▼──────────────┴──┐              │ Apify (engagement, profile,
              │ Cartesia Managed   │              │        audience questions)
              │ Agent per character│              ▼
-             │ number · STT · LLM │          his LinkedIn
+             │ number · STT · LLM │          his own accounts
              │ · Sonic voice      │
              └─────────┬──────────┘
                     Grandpa
@@ -128,20 +130,74 @@ schedules `pipeline.processCall({ callId })`. `processCall` (PR #7) claims the c
 - story (each step isolated): `llm.extractKnowledge` → `memories.addMany` (facts, story seeds,
   open threads, people, places, topics covered / to avoid; finished open threads resolved) ·
   `llm.writePost` (may decline: no post) → one `posts` row per call (`by_call`) →
-  `linkedapi.createPost` (scheduled, new row only) · `conversation.refreshQuestionBank` (scheduled)
+  `publish.publishPost` (scheduled, new row only) · `conversation.refreshQuestionBank` (scheduled)
 
 Ends with `status: "done"` + `processedAt`, or `process_failed` + error (claim released, retry
 by hand with `pipeline:processCall`; safe: `memories.addMany` skips a callId it already has and
-the post row is reused, so no second LinkedIn post).
-Inside `linkedapi.createPost`: claim the row (no double posting) → format for LinkedIn
-(`lib/linkedinPost.ts`) → `postGuard.checkPost` fact-checks the post against the whole call
-and his profile/memories → fail: `needs_review`, nothing posted → pass: LinkedAPI
-`st.createPost` → poll → canonical post URL (`lib/linkedinUrl.ts`) saved.
+the post row is reused, so no second post).
+
+**Publishing** (`publish.publishPost`; rules in `lib/postFlow.ts`, HTTP in `lib/storyPublishing.ts`):
+scheduled by `pipeline.insertPost` in the mutation that saves the post (which also sets
+`posts.language` and holds it when needed) → never a post with `removedAt` → claim the post
+(`posts.status: "posting"`, one run at a time)
+→ `postGuard.checkPost` once, against the whole call and his profile → fail: `needs_review`,
+posted nowhere → pass: each platform in order, each with its own `postPublications` row
+(claim → post → finish; a claim older than 15 min: Bluesky retakes it, every other platform
+becomes `maybe_posted`; `maybe_posted` only with `approve: true`), re-reading the post after
+each one (taken down meanwhile → `undo:removePost`):
+- **Bluesky** (his login, `lib/logins.ts`; a refused login marks his account invalid):
+  `lib/blueskyThread.ts` splits the post into 3-5 posts
+  of ≤300 graphemes (hook = post 1, AI disclosure whole at the end of the last post), posted as a
+  thread (`com.atproto.repo.createRecord`, root + parent refs). `records` = every post, root first;
+  `url` = post 1. A half-posted thread keeps its records and a retry continues it (looking in
+  his repo first for posts made after the row existed).
+- **Threads** (when he connected it, `lib/threadsLogin.ts`): `splitThreadsThread` → 2-5 posts
+  → `postThreadsStory` (`lib/threadsPublishing.ts`), continuing after the row's `records`; after
+  `maybe_posted`, a crashed claim or a partial thread it first looks in his recent posts and
+  replies for the earlier attempt. See [Threads](#threads-oauth-connect).
+- **X** (only `X_POSTING=on` + his X login, `lib/xLogin.ts`): `xStoryTexts` (self-thread, or one
+  post with `X_THREAD=off`) → `postXStory`, continuing after the row's `records`. See [X](#x-twitter).
+- **Reddit** (only when `REDDIT_POSTING=on` + his login): a self post on `u/<name>`, title = the hook.
+- **LinkedIn** (only when `LINKEDIN_POSTING=on`): `linkedapi.startPublication` → poll; else `skipped`.
+
+`posts.status`: `published` once any platform posted (`linkedinUrl` only from LinkedIn),
+`partly_posted` when only part of a thread is out (any platform), `failed` when nothing went out,
+`needs_review` when held (`heldFor`: `quality`, `thread_fit`, `guard`). Human commands:
+`publish:approvePost` (held post; fact-checked first unless the fact-check held it),
+`publish:retryPublication` (one platform row of a post the fact-check cleared, `guardPassedAt`).
+The writer keeps posts short enough for a 5-post thread (`lib/postQuality.ts`); one that still
+doesn't fit is held as `thread_fit`.
+
+**Posts that answer a question.** When the call started from a question a real person asked (a
+bank row with source `audience` → its `audienceQuestions` title, or `reader` → the row's question),
+`pipeline.getAskedQuestion` passes `llm.writePost` an `askedQuestion` (text only, cleaned of
+links, handles and u/ r/ names, ≤200 characters; `lib/postQuality.askedQuestionForCall`). The
+hook then frames that question in his voice and the post's language ("People often ask how…",
+"Me preguntan mucho cómo…") and the story answers it; the judge's hook score checks that. It never
+quotes, tags or links the person or thread, so on X, Threads and Bluesky it reads as his own post,
+not an automated reply: an `@handle` or a link in any post, or the question quoted word for word
+(8+ words in a row), is a blocker in `hardChecks`. Other calls keep the usual hooks.
 
 ### ④ Feedback loop (slice 3)
-Daily cron → `apify.scrapeEngagement` → `engagement.upsert`. The next `planNextCall` reads
-`engagement.recentFeedback`; `llm.summarizeFeedback` turns it into "what resonated" + reader
-questions worth asking him.
+Daily cron → `schedule.dailyEngagement` → `blueskyEngagement.scrapeForElder` per active elder
+(staggered 30 s). For each Bluesky thread he posted in the last 30 days (`postPublications`
+rows that are `posted` and not removed), one `app.bsky.feed.getPostThread` (depth 6) on the
+public AppView, no login; only if that fails (not "deleted") it retries through his PDS with his
+session. From the thread (`lib/blueskyEngagement.ts`): likes + reposts summed over HIS posts →
+`reactions`; replies by OTHER accounts (author did ≠ the root uri's repo; blocked, deleted and
+not-found posts skipped; max 20, 500 chars each) → `comments` as `{ author: "Name (@handle)", text }`.
+Each thread → `engagement.upsert` with `platform: "bluesky"` and its `postId`; one failing
+thread doesn't stop the others. The same cron also schedules, per active elder,
+`threadsEngagement.scrapeForElder` (always, 10 s after his Bluesky run; nothing to do without
+Threads posts) and `xEngagement.scrapeForElder` (only `X_READ_FEEDBACK=on`, 20 s after); both
+upsert with `platform: "threads"` / `"x"`. LinkedIn (`apify.scrapeEngagement`, Apify) runs only
+when `LINKEDIN_POSTING=on`, after the whole batch. Only LinkedIn links get the LinkedIn URL
+cleanup (`lib/engagementRules.canonicalEngagementUrl`).
+
+When a row's numbers or replies changed, `upsert` schedules `conversation.refreshQuestionBank`
+(debounced). It reads `engagement.recentFeedback` (every platform; posts taken down are left
+out); `llm.summarizeFeedback` turns replies into "what resonated" + reader questions for the
+bank + the one line Pip reads him ("A reader asked how you priced bread back then...").
 
 **Audience questions:** weekly `apify.findAudienceQuestions` searches Reddit, Stack Exchange,
 Bluesky (with his login) and (once enabled) Quora and Discourse for real questions people in his field ask, filters,
@@ -166,6 +222,62 @@ calls the `lookup_caller` webhook tool (filled from `system__caller_id` +
 `cartesia.pollCall` → `pipeline.processCall`. Unknown number → polite goodbye, nothing revealed,
 no row. Backstop: `inbound.syncInboundCalls` every 10 min lists the agent's recent calls
 (`GET /agents/calls`) and records finished ones from elders that have no row.
+
+### ⑥ Undo: taking a post back
+Posting is automatic, so undo is the safety valve. `convex/undo.ts` (rules: `lib/undo.ts`,
+deletes: `lib/blueskyDelete.ts`, `lib/threadsPublishing.deleteThreadsPosts`,
+`lib/xPublishing.deleteXPosts`), internal functions only:
+- `undo.removePost({ postId, reason?, attempt? })` → `{ removed, failed, manual, waiting }`. Sets
+  `posts.removedAt` / `removedReason` / `status: "removed"` first (publishing never sends a post
+  with `removedAt`), then each `postPublications` row: anything with ids of a live copy (Bluesky /
+  Threads / X `records`, a Reddit fullname) is claimed as `removing` → deleted → `removed`, whatever its
+  status (a thread that stopped halfway is `failed` but partly live); on failure it goes back to
+  its status with a short error, listed in `failed`. `pending` / `failed` / `skipped` with no copy
+  → `removed`. `posting` → left alone (the publisher re-checks `removedAt` after posting and calls
+  `removePost` again); stale (> 15 min) → deleted as `maybe_posted` if it has records, else
+  `manual`. Bluesky: `com.atproto.repo.deleteRecord` for every post of the thread, replies first,
+  root last (only `app.bsky.feed.post` records in his own repo; already gone = success). Reddit:
+  `POST /api/del`. Threads: `DELETE /<media id>` per post, last first. X: `DELETE /2/tweets/:id`,
+  last first. A Threads / X row that went out with no ids saved, and LinkedIn (no delete through
+  LinkedAPI) → `manual`; after removing it by hand, `undo.markRemovedByHand`. Then the thread replies from the
+  post's call (`removeReply`). Anything `failed` or `waiting` → `removePost` runs again (1 min,
+  then 16 min; 3 tries in all). Finishes only apply to the run's own claim. Safe to run twice.
+- `undo.removeReply({ replyId })`: the same for a thread reply (Bluesky `postedUri`, or his reply
+  found under the question post on older rows; Reddit by the comment's fullname from its link).
+  A reply that was taken down, or whose call's post was, is never posted (`claimReply`); one taken
+  down mid-post is removed right after (`finishReply`).
+- `undo.removeLatest({ elderId, reason?, askedOnCallId? })`: his newest post that went out in
+  the last 14 days. An already-removed post still counts (at its creation time), so asking twice
+  never reaches back to an older post. With `askedOnCallId` the pick is saved on the call
+  (`calls.takeDown.postId`) and reused, so a retried run takes down the same post.
+
+**By phone.** Every character's prompt (and the inbound agent's) says: if he clearly asks to
+take a post down, never argue and don't ask which one: only his most recent post can come down
+by phone, so Pip says one exact line, once ("Of course. I'll have your most recent post taken
+down right after our call." / "Claro que sí. Quitamos su publicación más reciente en cuanto
+colguemos."). An older post: Pip says his family can take it down. Today's story: a second
+line ("I won't post today's story"). Changed his mind: a keep-up line. After the call,
+`pipeline.processCall` runs one isolated step before anything else (so a 20-second call counts):
+`lib/undo.detectTakeDown` reads the transcript.
+- **Pip's take-down line, right after he asked** (in one of his last two turns) is the only
+  automatic trigger: `calls.takeDown` is set and `undo.removeLatest` runs with `askedOnCallId`
+  (never that call's own post, never anything newer than the call).
+- **Today's line**, or **a clear request in his own words without Pip's line**: nothing is
+  deleted; the call is flagged (`calls.takeDown.note`, `how: "unconfirmed"` = check with him).
+- Any of the three also holds that call's own post (`undo.holdPostForCall`: `removedAt` with a
+  `held: ...` reason, so it never posts; run again right after the post step).
+- A retraction later in the call ("leave it up", "never mind", "déjela", Pip's keep-up line)
+  cancels. Stories ("take down the post on the wall"), past tense ("borré las historias"),
+  questions ("can you delete posts?"), quotes ("…, he said") and refusals don't count.
+
+A mid-call webhook tool was not built: the outbound agents have no tools, and Cartesia doesn't
+document that `system__conversation_id` matches our `cartesiaCallId`, so we couldn't tie a tool
+request to the elder reliably. Changing a line in `lib/prompts/principles.ts` needs an agent
+re-sync (`cartesiaAgents:syncAgent`).
+
+**By command (family / admin):** any post, `npx convex run undo:removePost '{"postId":"..."}'` (or
+`undo:removeLatest '{"elderId":"..."}'`). `lib/undo.postUndoInfo` renders the command and a
+status line for the /posts page.
 
 ## Build order
 
@@ -205,7 +317,7 @@ type Turn = { role: "pip" | "elder"; text: string };   // calls.transcript, afte
 `cartesiaAgents.syncAgent` · `cartesia.startCall` · `cartesia.pollCall` · `conversation.planNextCall` ·
 `pipeline.processCall` · `llm.extractProfile` · `llm.writePost` · `llm.extractMemories` ·
 `llm.summarizeFeedback` · `llm.planQuestions` · `memories.addMany` · `memories.search` ·
-`engagement.upsert` · `engagement.recentFeedback` · `apify.scrapeEngagement` ·
+`engagement.upsert` · `engagement.recentFeedback` · `blueskyEngagement.scrapeForElder` · `apify.scrapeEngagement` ·
 `apify.scrapeProfile` · `apify.findAudienceQuestions` · `apify.topAudienceQuestions` ·
 `linkedapi.createPost`
 
@@ -252,7 +364,9 @@ memories: elderId, callId?, kind, text, name?, status (active | resolved),
            "this elder AND these kinds"); indexes by_elder_kind, by_elder_status,
            by_elder_last, by_call
 
-engagement: elderId, postId?, linkedinUrl (canonical, lib/linkedinUrl.ts), reactions,
+engagement: elderId, postId?, platform? (linkedin | bluesky; missing = linkedin),
+            linkedinUrl (the post's link on its platform: LinkedIn canonical via
+            lib/linkedinUrl.ts; Bluesky the thread's bsky.app link), reactions,
             comments [{ author, text }], scrapedAt, changedAt?
             indexes by_elder, by_url, by_elder_scraped, by_elder_changed
 
@@ -279,25 +393,81 @@ resolved. A repeat run for a `callId` that already has memories is skipped
 `listForElder({ elderId, kinds?, status?, limit? })` (newest first, no embeddings).
 `resolveThreads({ elderId, ids })`. Prompt text: `formatMemoriesForPrompt` in `lib/memoryText.ts`.
 
-**Engagement** (`engagement.ts`): `upsert` (from `apify.scrapeEngagement`) keeps the
-latest snapshot, links `postId` by canonical URL, and when reactions/comments changed
+**Engagement** (`engagement.ts`): `upsert` (from `blueskyEngagement.scrapeForElder` and
+`apify.scrapeEngagement`) keeps the latest snapshot per post per platform, links `postId`
+(Bluesky: passed in from `postPublications`; LinkedIn: by canonical URL), and when reactions/comments changed
 sets `changedAt` and schedules `conversation.refreshQuestionBank` (2 min later, at most
 once per elder per 10 min). `commentsKnown: false` (counts-only backup Actor) keeps the
 stored comments. `recentFeedback({ elderId, sinceDays? })` →
-`{ linkedinUrl, postText?, reactions, comments, scrapedAt, changedAt }[]`, posts whose
+`{ linkedinUrl, platform, postText?, reactions, comments, scrapedAt, changedAt }[]`, posts whose
 reactions/comments changed in the window, most recently changed first.
 
 **Scheduling** (`schedule.ts` + `crons.ts`): hourly `schedule.tick` →
 `conversation.prepareCall` about 1 hour before his local call time and
 `cartesia.startCall` at the call hour (each local slot once, DST-safe, `lib/schedule.ts`);
-daily `apify.scrapeEngagement` and weekly `apify.findAudienceQuestions` for active elders.
+daily `blueskyEngagement.scrapeForElder` (+ `apify.scrapeEngagement` when `LINKEDIN_POSTING=on`)
+and weekly `apify.findAudienceQuestions` for active elders.
 
 **v1 leftovers in `convex/`** (done): `questions.ts`, `answers.ts`, `replies.ts`, `calls.ts` and
 `lib/auth.ts` are deleted; `elders.ts` keeps only the internal `seed`. The **only public Convex
 functions are `signup.*` and `account.*`** (the web app): anyone with the deployment URL can call public
 ones, and the v1 dashboard queries exposed call transcripts. `signup.*` return only ids and
-ok/reason results; `account.*` return only his name, host, call slot and published posts. Keep every other function `internal*`. The v1 `questions`, `answers`
+ok/reason results; `account.*` return only his name, host, call slot and posts that went out.
+Both need his sign-up token after `register` (see "Sign-up token"). Keep every other function `internal*`. The v1 `questions`, `answers`
 and `replies` tables stay in `schema.ts` until they're empty, so a deploy can't fail on old rows.
+
+## Accounts (his own Bluesky, from sign-up)
+
+Each elder posts from **his own** account, connected on the website during setup (step 6, after Review saves the sign-up: "Connect Bluesky").
+
+- **Connect:** `signup:connectBluesky({ elderId, token, handle, appPassword })` (action). The handle is tidied (`@` stripped, lowercase, `.bsky.social` added when there's no dot). Only an **app password** (`xxxx-xxxx-xxxx-xxxx`) is accepted, never his real one: an app password can't change his password or delete his account, and he can revoke it in Bluesky. It logs in once (`lib/blueskyClient.createSession`) to prove it works; a session whose token scope says "main password", or an app password with DM access (`com.atproto.appPassPrivileged`), is logged out (`deleteSession`) and refused, kindly (make one without DM access). Then it saves the handle, DID and the **encrypted** app password. Results are codes only (`{ ok, handle }` or `{ ok: false, error }`); the password is never echoed or logged. Rate limits (`accounts:reserveConnect`): 5 tries an hour per sign-up, 5 s apart (`lib/signupRules.connectRateLimit`), plus 5 an hour per handle and 60 an hour in all (`connectCaps`, table `connectAttempts`), because `register` makes sign-ups freely. Once he's `active`, a **connected** account is locked (`locked`); one that's missing, `invalid` (revoked) or `disconnected` can be reconnected with his sign-up token, from his page (Home → "Where your stories go" → "Reconnect Bluesky") (`lib/signupRules.connectLocked`, checked at reserve and again at save; the same rule for Threads and X).
+- **Storage:** `elderAccounts` (one row per elder + platform; `status` connected / invalid / disconnected). The secret is AES-256-GCM (`lib/accountCrypto.ts`, Web Crypto) with a random IV, and the elderId + platform as additional data, so a ciphertext copied to another elder's row won't decrypt. Key: env `ACCOUNTS_ENC_KEY`; missing or malformed never falls back to plaintext. Connect returns `failed`; a login lookup warns and returns null.
+- **Use:** every caller gets his login from `lib/logins.ts` (`blueskyLoginForElder(ctx, elderId)`), which reads the row with `accounts:getForLogin` and **decrypts inside the caller's action**. No query or mutation decrypts, and no function returns a plaintext secret. `accounts:status` shows what's connected (Bluesky, Reddit, Threads, X rows), with no secret or token. `blueskyLoginForElder` never throws: a missing or bad key, or a failed lookup, is a fixed warning and null. When Bluesky refuses his saved login (revoked app password), the account is marked `invalid` (`accounts:markInvalid`, via `logins.reportBlueskyLoginError` / `markBlueskyLoginInvalid`): wired in `threadReplies.postReply` (`PostOutcome.loginRefused`), the Bluesky question search (`apify.findAudienceQuestions`) and publishing (`publish.ts`). `accounts:disconnect` drops the secret.
+- **Demo account:** `BLUESKY_HANDLE` / `BLUESKY_APP_PASSWORD` are used only when `DEMO_ACCOUNT_FALLBACK=on` and he never connected an account (no row, or only failed connect attempts), or in pure tests with no ctx and no elder. An account of his that is `invalid`, `disconnected` or won't decrypt gives null, never the demo account.
+- **Reddit:** coming soon (shown disabled on the sign-up page). There is no per-elder Reddit connect yet; `redditLoginForElder` returns the env account only with `REDDIT_POSTING=on` **and** `DEMO_ACCOUNT_FALLBACK=on`.
+- **Limits:** accounts on a PDS other than bsky.social need `BLUESKY_SERVICE` (we don't resolve his PDS from his DID yet).
+
+**Sign-up token.** `signup:register` (an action) creates his row and returns a random token (32 bytes, base64url); only its SHA-256 hash is stored (`elders.signupTokenHash`). `setCharacter`, `connectBluesky`, `setLinkedin` and `requestCall` all need it (constant-time hash compare). All are actions: the token is hashed there and an internal mutation or query checks the hash (no Web Crypto in queries or mutations). His page (`account:getProfile`, `account:setSchedule`, `account:listPosts`) works the same way: actions that hash the token, then internal queries / mutations that check it (`lib/accountPage.checkedElder`); a wrong token reads as "not found". So knowing his phone number or elderId isn't enough to read or change his sign-up. A number that's already signed up gets no id and no token: re-issuing one would hand it to whoever types his number. The website keeps the token with the elderId in its device session (`src/lib/session.js`, `localStorage`, so his page still opens next week; there's no real sign-in yet), and drops a saved elderId that has no token. Accepted leak: `register` answering `already_signed_up` tells anyone a number is signed up. `register` also sets his weekly slot so `schedule.tick` can call him: `timezone` from the browser (checked with Intl; else from the phone's country: MX → America/Mexico_City, ES → Europe/Madrid, otherwise America/Los_Angeles), `callDay` = the day after sign-up in that zone (never a surprise same-day call), `callHour` = 10. The cron calls such a sign-up while he's in onboarding only when `publicCallAllowed(PUBLIC_CALLS, CALL_ALLOWLIST, phone)` (`lib/signupRules.cronMayCall`); seeded or hand-made elders aren't gated.
+
+**His posts (`account:listPosts`).** Built from `postPublications` (`lib/accountPage.publishedPosts`): a post shows once any platform has it `posted` with a link, with one link per platform (Bluesky, Threads, X, LinkedIn). Removed posts (`removedAt`) and held drafts never show; older LinkedIn-only posts (status `published` + `linkedinUrl`, no publication rows) show with their LinkedIn link. Reactions and comments come from `engagement` by `postId`, summed across platforms, skipping rows marked `goneAt`. The text is the plain story text. Newest first, at most 50.
+
+## X (Twitter)
+
+Each elder connects **his own** X account with OAuth 2.0 (Authorization Code + PKCE S256,
+confidential client), from the sign-up page's "Connect X" button. Everything that costs money
+is off until switched on. X keeps its own flow and its one callback (`xAuth.ts`,
+`/oauth/x/callback`); it isn't in `lib/oauthPlatforms.OAUTH_ADAPTERS`.
+
+- **Connect:** the shared public `signup:startOAuthConnect` (same token, rate limit and active lock as Threads: `lib/oauthFlow.startXConnectFlow`) calls `xAuth:startConnect({ elderId, returnTo? }) → { url }`, which saves an `oauthStates` row (random state, PKCE verifier, platform `x`) and returns the `https://x.com/i/oauth2/authorize` URL with scopes `tweet.read tweet.write users.read offline.access`. X sends him back to `GET /oauth/x/callback` (`http.ts` → `xAuth.xOAuthCallback`): the state is used once (marked used even on failure), must be under 15 minutes old and for `x`; the code (valid ~30 s) is exchanged at `https://api.x.com/2/oauth2/token` (Basic auth, the stored verifier); `GET /2/users/me` gives his id and @username. Tokens are saved like Bluesky's app password (`elderAccounts.secret`, AES-GCM bound to elderId + `x`) with `externalUserId`, `handle`, `tokenExpiresAt`, `scopes`; the save is refused (`locked`) once he's `active` and his X account is connected, like Threads. He lands on `SIGNUP_SITE_URL?connected=x` or `?connect_error=<code>&platform=x`, with the same codes as Threads (`denied`, `invalid_state`, `state_used`, `state_expired`, `exchange_failed`, `failed`) plus `missing_scope` (`lib/xOAuth.SHARED_ERROR`). No tokens, codes or ids in redirects or logs. Pure logic: `lib/xOAuth.ts`.
+- **Use:** `lib/xLogin.xLoginForElder(ctx, elderId)` decrypts in the caller's action. Access tokens last ~2 h; within 5 minutes of expiry it refreshes and saves the **rotated** refresh token (`xAuth:saveRefreshedTokens`, compare-and-swap on the old IV). If two runs refresh at once, the loser uses the winner's saved tokens. A refused refresh marks the account `invalid`. Missing `ACCOUNTS_ENC_KEY` → null, never a throw.
+- **Posting** (`lib/xPublishing.ts`, only with `X_POSTING=on`): `POST /2/tweets`. Thread mode (default) = the Bluesky splitter resized to 280 **weighted** characters (`lib/xText.ts`: twitter-text v3 rules; CJK and emoji count 2, URLs 23), 1–5 posts; post 1 = the hook + the AI note (the full disclosure when it fits, else the short "Written up with AI from my phone call." / "Escrito con IA a partir de mi llamada."), so a thread cut short still carries it; each later post a reply to the previous (`reply.in_reply_to_tweet_id`). `X_THREAD=off` = one post (hook + the next sentences that fit + the AI note). Same outcomes as Bluesky: `records` = post ids root first (`{ uri: <id>, cid: "" }`), url = `https://x.com/<username>/status/<root id>`; timeouts and 5xx → `maybe_posted`; a half-posted thread keeps its records and a retry continues it.
+- **Reply restriction:** since 2026-02-23 self-serve API replies are refused unless the author mentioned or quoted the replier. X's changelog doesn't mention self-replies; third-party guides say they're untouched. If X refuses a self-reply (403 that talks about replies), we stop, keep the posted part, and the error says so (post 1 has the AI note); switch to `X_THREAD=off`, or take the partial down (undo). We never reply to, mention or quote anyone else (X's automation rules).
+- **Undo:** `undo.removePost` → `deleteXPosts(fetchFn, login, ids)` → `DELETE /2/tweets/:id`, last post first; 404 counts as gone.
+- **Feedback** (`xEngagement:scrapeForElder`, scheduled daily by `schedule.dailyEngagement` only with `X_READ_FEEDBACK=on`): his posted X rows from the last 30 days, one batched `GET /2/tweets?ids=…&tweet.fields=public_metrics` → reactions = likes + retweets + quotes on the root. Reply texts only with `X_READ_REPLIES=on`: recent search `conversation_id:<root> -from:<him>` (last 7 days only, max 10). → `engagement:upsert` with `platform: "x"`. Each run logs `estimatedReads`.
+- **Cost:** pay-per-use, no free tier: ~$0.015 per post ($0.20 with a URL), ~$0.005 per post read (owned reads may be cheaper). Every person's account should carry X's "Automated" label.
+
+## Threads (OAuth connect)
+
+Threads (Meta) is connected with OAuth, not a password. Once connected, every story posts there too (no env switch).
+
+- **Connect:** setup step 6 on the website ("Connect Threads", `frontend/onboarding-ui/src/pages/setup/OAuthConnect.jsx`) calls `signup:startOAuthConnect({ elderId, token, platform: "threads" })`. That checks his sign-up token, the connect rate limit (5 an hour) and the active lock, stores a random `state` (32 bytes, base64url) in `oauthStates`, and returns Meta's consent URL. Meta sends him to `GET /oauth/threads/callback` (`convex/http.ts`). The callback consumes the state (single use, at most 15 minutes old, same platform), exchanges the code for a short-lived token, then a **60-day long-lived token**, and saves it on `elderAccounts`. Then it redirects to `SIGNUP_SITE_URL` with only `?connected=threads`, or `?connect_error=<code>&platform=threads` (Cancel is `denied`). No token, code, state or id ever goes in the redirect.
+- **Storage:** `elderAccounts.secret` holds the encrypted token JSON (same AES-GCM key and elderId + platform binding as Bluesky). `externalUserId` (his Threads user id), `handle` (username), `tokenExpiresAt` and `scopes` are stored in the clear.
+- **Use:** `lib/threadsLogin.threadsLoginForElder(ctx, elderId)` decrypts inside the caller's action. When the token expires in under 7 days and is over 24 hours old, it refreshes the token (`th_refresh_token`) and saves the new one. A missing key or a bad row returns null with a warning. An expired token marks the account `invalid`, and he reconnects.
+- **Code:** `lib/oauthPlatforms.ts` (adapter interface + registry; Threads only), `lib/oauthFlow.ts` (state rules, start, callback), `convex/oauth.ts` (DB), `lib/threadsClient.ts` (Graph calls), `lib/threadsPublishing.ts` (thread split + posting + delete), `lib/threadsEngagement.ts` + `convex/threadsEngagement.ts` (feedback), `lib/threadsQuestions.ts` + `convex/threadsQuestions.ts` (keyword search, gated).
+- **Posting:** the story becomes 2–5 posts of at most 500 characters (emoji count as their UTF-8 bytes): the hook first, and the AI disclosure at the end of the last post. Post 1 goes up first, then each next post as a reply to the previous one (`reply_to_id`). Each post is a container → wait for `FINISHED` (up to ~30 s) → `threads_publish`. A post that stops halfway keeps its posts, and a retry continues it. A publish timeout or 5xx is `maybe_posted`. A token Meta refuses while posting (code 190 / 401) marks his Threads account `invalid` (`lib/threadsLogin.reportThreadsLoginError`). Limits: 250 posts and 1,000 replies a day, and 100 deletes a day.
+- **Undo:** `undo.removePost` → `deleteThreadsPosts` (last reply first, root last; already gone counts as deleted).
+- **Feedback:** each day (`schedule.dailyEngagement` → `threadsEngagement.scrapeForElder`), for each thread from the last 30 days: likes + reposts on the **root** post (insights), plus replies by others (`/conversation`, skipping his own and hidden ones, at most 20 × 500 characters). These go to `engagement.upsert` with `platform: "threads"`. A thread he deleted → `engagement.markGone`, as on Bluesky.
+
+**Creating the Meta app (once):**
+1. At developers.facebook.com → My Apps → Create app, pick the **"Access the Threads API"** use case.
+2. In the use case's permissions, add `threads_basic`, `threads_content_publish`, `threads_manage_replies`, `threads_read_replies`, `threads_manage_insights` and `threads_delete`.
+3. In the Threads use case's settings, set the **Redirect Callback URL** to `https://<deployment>.convex.site/oauth/threads/callback`. It must match exactly (the dashboard may add a trailing slash). If the dashboard also asks for uninstall / delete callback URLs, any page on the same host works for the demo.
+4. In App roles → Roles, add each elder (and you) as a **Threads Tester**. Each person accepts while signed in, at threads.com/settings/account → Website permissions.
+5. Set the env vars: `THREADS_APP_ID`, `THREADS_APP_SECRET` (the **Threads** app id and secret, not the Facebook ones) and `SIGNUP_SITE_URL`. Set `THREADS_REDIRECT_URI` only if the callback isn't on `CONVEX_SITE_URL`.
+
+The app stays in **development mode**, where only invited testers can connect. That's enough for the demo; letting anyone connect needs Meta's app review.
+
+**Keyword search (off, after Meta app review):** finding strangers' questions (`/keyword_search`) needs `threads_keyword_search`, and that needs **app review**. Before review, a search only returns his own posts. `THREADS_KEYWORD_SEARCH=on` adds the scope at connect time and turns on `threadsQuestions:findForElder` and `threadsQuestions:postQuoteAnswer` (his answer as a quote post of the question, plus the disclosure line). It stays gated and unwired (not in `threadReplies.ts` or the planner) until after Meta app review.
 
 ## Repo layout
 
@@ -317,7 +487,11 @@ convex/
   conversation.ts               plan next call                          Brain
   llm.ts                        LLM jobs (OpenAI, lib/openai.ts)        Brain
   pipeline.ts                   after-call steps                        Brain
-  linkedapi.ts postGuard.ts     post to LinkedIn + fact-check (built)   Integrations
+  publish.ts postGuard.ts       publish (Bluesky, Threads, X, Reddit) + fact-check  Integrations
+  oauth.ts xAuth.ts             Threads / X connect (OAuth), their logins      Integrations
+  undo.ts                       take posts down                                Integrations
+  *Engagement.ts                daily feedback reads (Bluesky, Threads, X)     Integrations
+  linkedapi.ts                  LinkedIn via LinkedAPI (off: LINKEDIN_POSTING)  Integrations
   apify.ts                      scraping (built)                        Integrations
   memories.ts engagement.ts     slice 3                        (stub)   Data
   crons.ts http.ts              schedules / future webhooks    (empty)
@@ -346,11 +520,16 @@ tests/                          node --test + fixtures/
 | Var | Provided by |
 |---|---|
 | `CARTESIA_API_KEY`, `CARTESIA_FROM_NUMBER_ID`, `CARTESIA_VOICE_ID` (optional, Pip), `CARTESIA_VOICE_ID_ES` (Juanito), `CARTESIA_MODEL` (optional). Agent ids live in the `characterAgents` table, not env. Inbound: `CARTESIA_INBOUND_AGENT_ID` + `CARTESIA_LOOKUP_TOOL_ID` (printed by `syncAgent '{"inbound":true}'`), `CARTESIA_TOOL_SECRET` (bearer for the lookup tool), `CARTESIA_INBOUND_LANGUAGE` (optional, default `en`), `INBOUND_SITE_URL` (only if `CONVEX_SITE_URL` isn't available) | Voice |
-| `BLUESKY_HANDLE`, `BLUESKY_APP_PASSWORD`, `BLUESKY_SERVICE` (optional), `REDDIT_POSTING` (optional, default off), `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USERNAME`, `REDDIT_PASSWORD`, `REDDIT_USER_AGENT` (optional): thread replies (his accounts) | Integrations |
-| `LINKEDAPI_TOKEN`, `LINKEDAPI_ID_TOKEN`, `APIFY_TOKEN`, `STACKEXCHANGE_KEY` (optional), `POST_GUARD_MODE` (optional, default `enforce`), `AUTO_POST` (optional, default `on`; `off` = preview-only for tests) | Integrations |
+| `ACCOUNTS_ENC_KEY`: encrypts each elder's connected account secrets: the Bluesky app password and the Threads / X tokens ([Accounts](#accounts-his-own-bluesky-from-sign-up)). Base64 of 32 random bytes: `openssl rand -base64 32`. Required before anyone connects an account; changing it makes saved accounts unreadable (they must reconnect) | Data |
+| `SIGNUP_SITE_URL`: the sign-up site; the Threads and X connect callbacks send him back there (`?connected=<platform>` / `?connect_error=<code>&platform=<platform>`) | UI + Integrations |
+| `THREADS_APP_ID`, `THREADS_APP_SECRET`: the Meta app's **Threads** id and secret ([Threads](#threads-oauth-connect)); with them set, a connected Threads account gets every story (no switch). `THREADS_REDIRECT_URI` (optional; default `CONVEX_SITE_URL` + `/oauth/threads/callback`). `THREADS_KEYWORD_SEARCH` (optional, default off; needs Meta app review) | Integrations |
+| `X_CLIENT_ID`, `X_CLIENT_SECRET`: the X app (OAuth 2.0 confidential client; callback `CONVEX_SITE_URL` + `/oauth/x/callback`). Switches, all default off: `X_POSTING` (post to X; costs per post), `X_THREAD` (`off` = one post instead of a self-thread), `X_READ_FEEDBACK` (daily metrics reads), `X_READ_REPLIES` (also reply texts). See [X](#x-twitter) | Integrations |
+| `DEMO_ACCOUNT_FALLBACK`: optional, default off. `on` = an elder who never connected an account uses the env demo account below (never one whose own account is invalid or disconnected) | Integrations |
+| `BLUESKY_HANDLE`, `BLUESKY_APP_PASSWORD`, `BLUESKY_SERVICE` (optional), `REDDIT_POSTING` (optional, default off), `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USERNAME`, `REDDIT_PASSWORD`, `REDDIT_USER_AGENT` (optional): the **demo** account, used only with `DEMO_ACCOUNT_FALLBACK=on` (`BLUESKY_SERVICE` also applies to connected accounts) | Integrations |
+| `LINKEDIN_POSTING` (optional, default off; `on`/`true`/`1`/`yes` turns LinkedIn posting and its Apify feedback on), `LINKEDAPI_TOKEN`, `LINKEDAPI_ID_TOKEN`, `APIFY_TOKEN`, `STACKEXCHANGE_KEY` (optional), `POST_GUARD_MODE` (optional, default `enforce`), `AUTO_POST` (optional, default `on`; `off` = saved, not posted, for tests) | Integrations |
 | `OPENAI_API_KEY` | Data (embeddings), Brain (LLM), Integrations (post guard) |
 | `OPENAI_MODEL` | optional, default `gpt-6-luna` |
-| `PUBLIC_CALLS` | optional, default off. Lets the sign-up page start his first call (`signup:requestCall`; max 3 a day, 10 min apart). `on` = only `CALL_ALLOWLIST` numbers; `all` = anyone (only once SMS is real) |
+| `PUBLIC_CALLS` | optional, default off. Lets the sign-up page start his first call (`signup:requestCall`; max 3 a day, 10 min apart), and lets the hourly cron call a website sign-up still in onboarding. `on` = only `CALL_ALLOWLIST` numbers; `all` = anyone (only once SMS is real) |
 | `CALL_ALLOWLIST` | comma-separated E.164 test numbers the sign-up page may call when `PUBLIC_CALLS=on` |
 | `CALL_INTERVAL_MINUTES` | optional, default off. Repeat calls this many minutes after the last call ENDS (`callLoop.tick`, every minute); covers only `CALL_ALLOWLIST` numbers unless `CALL_LOOP=all`. Under a day it needs `AUTO_POST=off` |
 | `CALL_LOOP` | optional. `all` = the repeating loop covers every elder (default: only `CALL_ALLOWLIST`) |

@@ -2,7 +2,7 @@
 //
 // When a story call's question came from a thread we found online (an audience question),
 // we answer that thread in his words, from his own account. Only platforms with a posting API:
-//   bluesky   auto: his account (BLUESKY_HANDLE + app password), threaded under the post
+//   bluesky   auto: his connected account (lib/logins.ts), threaded under the post
 //   reddit    auto ONLY when REDDIT_POSTING=on and the script-app credentials are set
 //             (new Reddit API apps need manual approval since Nov 2025)
 //   any other source (forums, Q&A sites, Stack Exchange), and Bluesky/Reddit while
@@ -10,6 +10,7 @@
 
 import { clampGraphemes, graphemeCount, MAX_POST_GRAPHEMES } from "./bluesky.ts";
 import { truncate } from "./linkedinPost.ts";
+import { callCharacter } from "./onboarding.ts";
 
 export type ReplyPlatform = "bluesky" | "reddit";
 export type ReplyMode = "auto" | "none";
@@ -20,8 +21,9 @@ export type ReplyLanguage = "en" | "es";
  *   failed        nothing was posted (refused before or by the platform): safe to retry
  *   maybe_posted  the post request went out but we don't know if it landed (timeout, 5xx):
  *                 a person checks the thread, then retries with approve: true
+ *   removing / removed   taken down by undo.ts (lib/undo.ts)
  */
-export const REPLY_STATUSES = ["draft", "needs_review", "posting", "posted", "failed", "maybe_posted"] as const;
+export const REPLY_STATUSES = ["draft", "needs_review", "posting", "posted", "failed", "maybe_posted", "removing", "removed"] as const;
 export type ReplyStatus = (typeof REPLY_STATUSES)[number];
 
 /** A posting claim older than this is assumed crashed and can be retaken. */
@@ -110,7 +112,7 @@ export function replyMode(platform: ReplyPlatform | null, env: ReplyEnv): { mode
     case "bluesky":
       return env.blueskyHandle && env.blueskyPassword
         ? { mode: "auto", reason: "Posted on Bluesky from his account, threaded under the question." }
-        : { mode: "none", reason: "Bluesky login isn't set (BLUESKY_HANDLE, BLUESKY_APP_PASSWORD)." };
+        : { mode: "none", reason: "His Bluesky account isn't connected (lib/logins.ts)." };
     case "reddit": {
       if (!redditPostingOn(env.redditPosting)) return { mode: "none", reason: "Reddit posting is off or his Reddit login isn't set (REDDIT_POSTING)." };
       const creds = [env.redditClientId, env.redditClientSecret, env.redditUsername, env.redditPassword];
@@ -207,6 +209,15 @@ export function replyLanguage(value: unknown): ReplyLanguage {
   return typeof value === "string" && value.trim().toLowerCase().startsWith("es") ? "es" : "en";
 }
 
+/**
+ * The language the call ran in: his character's (lib/characters.ts, picked the way
+ * cartesia.startCall picks it), else elders.language, else English.
+ */
+export function callLanguageOf(elder: { characterId?: string; language?: string } | null | undefined): string {
+  if (!elder) return "en";
+  return callCharacter(elder).language || elder.language || "en";
+}
+
 const LANGUAGE_NAME: Record<ReplyLanguage, string> = { en: "English", es: "Spanish" };
 
 /**
@@ -222,7 +233,8 @@ export function guardContextForReply(replyLang: ReplyLanguage, callLanguage: str
 
 // ---------- posting claims ----------
 
-export type ReplyState = { status: string; claimedAt?: number };
+/** removed: the reply or its call's post was taken down (undo.ts); it never posts again. */
+export type ReplyState = { status: string; claimedAt?: number; removed?: boolean };
 
 /**
  * May this run post the reply now? One run at a time (claim -> `posting`), never twice.
@@ -232,9 +244,12 @@ export type ReplyState = { status: string; claimedAt?: number };
  *   posting        -> only if the earlier claim is stale (crashed run) AND approve: true,
  *                     since the crashed run may have posted
  *   posted         -> no
+ *   removed (or its post taken down) -> never
  * (On Bluesky, posting also checks for his existing reply under the post first.)
  */
 export function canClaimReply(reply: ReplyState, now: number, approve: boolean): { ok: true } | { ok: false; reason: string } {
+  // Taken down (the reply, or the post from the same call): never posted, approve or not.
+  if (reply.removed) return { ok: false, reason: "Taken down: it won't be posted." };
   switch (reply.status) {
     case "draft":
     case "failed":
@@ -252,6 +267,9 @@ export function canClaimReply(reply: ReplyState, now: number, approve: boolean):
         : { ok: false, reason: "An earlier run stopped mid-post: check the thread, then retry with approve: true." };
     case "posted":
       return { ok: false, reason: "Already posted." };
+    case "removing":
+    case "removed":
+      return { ok: false, reason: "Taken down: it won't be posted." };
     default:
       return { ok: false, reason: `Unknown status ${reply.status}.` };
   }

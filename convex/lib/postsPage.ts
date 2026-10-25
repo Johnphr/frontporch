@@ -1,6 +1,9 @@
 // TEMPORARY: the posts review page (convex/postsPage.ts serves it at /posts). Lets the team read
-// every generated post as it would be published, to iterate fast on the content before LinkedIn
-// is connected. Pure HTML rendering, no Convex imports (unit-tested). Remove with postsPage.ts.
+// every generated post as it would be published (the Bluesky thread, post 1/N ...) and where each
+// platform stands, to iterate fast on the content. Pure HTML rendering, no Convex imports
+// (unit-tested). Remove with postsPage.ts.
+
+import { isHoldReason, postUndoInfo } from "./undo.ts";
 
 export type PagePost = {
   id: string;
@@ -9,15 +12,26 @@ export type PagePost = {
   elderFirstName: string;
   kind?: string;
   question?: string;
-  text: string; // as it would be published (formatted, disclosure line included)
+  text: string; // the post as written (platform-neutral)
+  /** The Bluesky thread as publish.ts would split it (disclosure in the last post)... */
+  thread?: string[];
+  /** ...or why it can't be split. */
+  threadProblem?: string;
+  /** Where it went: one row per platform (postPublications). */
+  publications?: PagePublication[];
   guardSummary?: string;
   guardIssues?: string[];
   error?: string;
   /** Post quality (lib/postQuality.ts), when writePost scored it. */
   quality?: { score: number; passed: boolean; rounds: number; notes: string[] };
   /** Why a needs_review post is held (posts.heldFor; missing = the fact-check). */
-  heldFor?: "quality" | "guard";
+  heldFor?: "quality" | "thread_fit" | "guard";
+  /** Taken down (posts.removedAt / removedReason; "held: ..." = held by him on the call). */
+  removedAt?: number;
+  removedReason?: string;
 };
+
+export type PagePublication = { id: string; platform: string; status: string; url?: string; error?: string; posts?: number };
 
 /** A thread reply (threadReplies.ts) as the review page shows it. */
 export type PageReply = {
@@ -47,9 +61,24 @@ const STATUS_LABEL: Record<string, string> = {
   needs_review: "Held by fact-check",
   posting: "Posting",
   published: "Published",
+  partly_posted: "Partly posted",
   failed: "Failed",
   needs_attention: "Needs attention",
+  removed: "Removed",
 };
+
+const PUBLICATION_LABEL: Record<string, string> = {
+  pending: "Not posted yet",
+  posting: "Posting",
+  posted: "Posted",
+  failed: "Failed",
+  maybe_posted: "Maybe posted: check his profile",
+  skipped: "Off",
+  removing: "Taking down",
+  removed: "Taken down",
+};
+
+const PLATFORM_LABEL: Record<string, string> = { bluesky: "Bluesky", threads: "Threads", x: "X", reddit: "Reddit", linkedin: "LinkedIn" };
 
 function issuesList(issues: string[]): string {
   return issues.length ? `<ul>${issues.map((i) => `<li>${escapeHtml(i)}</li>`).join("")}</ul>` : "";
@@ -61,9 +90,82 @@ function checkBlock(check: PageCheck | undefined): string {
   return `<div class="check ${check.pass ? "good" : "bad"}"><strong>Fact-check now: ${check.pass ? "pass" : "would be held"}</strong> (${escapeHtml(check.mode)}) ${escapeHtml(check.summary)}${issuesList(check.issues)}</div>`;
 }
 
-export function statusLabel(p: Pick<PagePost, "status" | "heldFor">): string {
+/** A row that didn't finish but has posts out (a thread that stopped partway, any platform). */
+function partly(r: PagePublication): boolean {
+  return (r.status === "failed" || r.status === "maybe_posted") && (r.posts ?? 0) > 0;
+}
+
+/** The post's label, from its real state: a platform row that went out (or may have) wins over "pending". */
+export function statusLabel(p: Pick<PagePost, "status" | "heldFor" | "publications" | "removedAt" | "removedReason">): string {
+  if (p.removedAt !== undefined || p.status === "removed") return isHoldReason(p.removedReason) ? "Held by him on the call" : STATUS_LABEL.removed;
   if (p.status === "needs_review" && p.heldFor === "quality") return "Held: below the quality bar";
+  if (p.status === "needs_review" && p.heldFor === "thread_fit") return "Held: too long for a Bluesky thread";
+  const rows = p.publications ?? [];
+  if (p.status === "pending" || p.status === "posting") {
+    if (rows.some((r) => r.status === "posted")) return "Published";
+    if (rows.some((r) => r.status === "maybe_posted")) return "Maybe posted: check";
+    if (rows.some((r) => r.status === "posting" || (r.status === "pending" && r.platform === "linkedin"))) return "Posting";
+  }
+  // Older rows saved a half-posted thread as "failed".
+  if (p.status === "failed" && rows.some(partly)) return STATUS_LABEL.partly_posted;
   return STATUS_LABEL[p.status] ?? p.status;
+}
+
+/** The label of one platform row. */
+export function publicationLabel(r: PagePublication): string {
+  if (partly(r)) {
+    const n = `${r.posts} post${r.posts === 1 ? "" : "s"} out`;
+    return r.status === "maybe_posted" ? `Partly posted (${n}), maybe more: check his profile` : `Partly posted (${n})`;
+  }
+  return PUBLICATION_LABEL[r.status] ?? r.status;
+}
+
+/** The command a person runs next for this post / platform row ("" when none). */
+export function nextCommand(p: Pick<PagePost, "id" | "status">, row?: PagePublication): string {
+  if (row) {
+    if (row.status === "maybe_posted") return `npx convex run publish:retryPublication '{"publicationId":"${row.id}","approve":true}'`;
+    if (row.status === "failed") return `npx convex run publish:retryPublication '{"publicationId":"${row.id}"}'`;
+    return "";
+  }
+  if (p.status === "needs_review") return `npx convex run publish:approvePost '{"postId":"${p.id}"}'`;
+  if (p.status === "pending" || p.status === "failed") return `npx convex run publish:publishPost '{"postId":"${p.id}"}'`;
+  return "";
+}
+
+function threadBlock(p: PagePost): string {
+  if (p.thread?.length) {
+    const n = p.thread.length;
+    return `<div class="thread">${p.thread
+      .map((t, i) => `<div class="tpost"><span class="tnum">${i + 1}/${n}</span><div class="post">${escapeHtml(t)}</div></div>`)
+      .join("")}</div>`;
+  }
+  return `${p.threadProblem ? `<p class="err">Doesn't fit a Bluesky thread: ${escapeHtml(p.threadProblem)}</p>` : ""}<div class="post">${escapeHtml(p.text)}</div>`;
+}
+
+function publicationsBlock(p: PagePost): string {
+  const rows = p.publications ?? [];
+  if (!rows.length) return "";
+  const items = rows.map((r) => {
+    const href = safeHref(r.url);
+    const cmd = nextCommand(p, r);
+    const counted = r.posts && !partly(r) ? ` (${r.posts} post${r.posts === 1 ? "" : "s"})` : "";
+    return `<li><strong>${escapeHtml(PLATFORM_LABEL[r.platform] ?? r.platform)}</strong>: <span class="pstatus s-${escapeHtml(r.status)}">${escapeHtml(publicationLabel(r))}</span>${counted}${href ? ` <a href="${href}" target="_blank" rel="noopener noreferrer">open</a>` : ""}${r.error && r.status !== "posted" ? ` <span class="perr">${escapeHtml(r.error)}</span>` : ""}${cmd ? `<br><code>${escapeHtml(cmd)}</code>` : ""}</li>`;
+  });
+  return `<ul class="pubs">${items.join("")}</ul>`;
+}
+
+const WENT_OUT = new Set(["posted", "maybe_posted", "posting", "removing"]);
+
+/** Take-down status + the undo command (lib/undo.postUndoInfo), for a post that went out or was taken down. */
+export function undoBlock(p: Pick<PagePost, "id" | "removedAt" | "removedReason" | "publications">): string {
+  const rows = p.publications ?? [];
+  const wentOut = rows.some((r) => WENT_OUT.has(r.status) || partly(r));
+  if (p.removedAt === undefined && !wentOut) return "";
+  const info = postUndoInfo(
+    { _id: p.id, ...(p.removedAt !== undefined ? { removedAt: p.removedAt } : {}), ...(p.removedReason ? { removedReason: p.removedReason } : {}) },
+    rows,
+  );
+  return `<p class="cmd">${escapeHtml(info.status)}${info.command ? ` <code>${escapeHtml(info.command)}</code>` : ""}</p>`;
 }
 
 function qualityBlock(q: PagePost["quality"]): string {
@@ -81,13 +183,17 @@ function card(p: PagePost, key: string, check: PageCheck | undefined): string {
     ? `<div class="check bad"><strong>Held:</strong> ${escapeHtml(p.guardSummary ?? "")}${issuesList(heldIssues)}</div>`
     : "";
   const href = `?key=${encodeURIComponent(key)}&check=${encodeURIComponent(p.id)}#${encodeURIComponent(p.id)}`;
+  const cmd = nextCommand(p);
   return `<article id="${escapeHtml(p.id)}">
   <header><span class="who">${escapeHtml(p.elderFirstName)}</span><span class="badge s-${escapeHtml(p.status)}">${escapeHtml(statusLabel(p))}</span><time>${date} UTC</time></header>
   ${p.question ? `<p class="q">Call question: ${escapeHtml(p.question)}</p>` : ""}
-  <div class="post">${escapeHtml(p.text)}</div>
+  ${threadBlock(p)}
+  ${publicationsBlock(p)}
   ${p.error ? `<p class="err">${escapeHtml(p.error)}</p>` : ""}
   ${qualityBlock(p.quality)}${stored}${checkBlock(check?.postId === p.id ? check : undefined)}
-  <footer><a href="${href}">Fact-check now</a> <span class="id">${escapeHtml(p.id)}</span></footer>
+  ${cmd && p.removedAt === undefined ? `<p class="cmd">${p.status === "needs_review" ? "Approve and post" : "Post it"}: <code>${escapeHtml(cmd)}</code></p>` : ""}
+  ${undoBlock(p)}
+  <footer><form method="post" action="${escapeHtml(href)}"><button type="submit">Fact-check now</button></form> <span class="id">${escapeHtml(p.id)}</span></footer>
 </article>`;
 }
 
@@ -159,13 +265,16 @@ article{background:var(--card);border:1px solid var(--line);border-radius:10px;p
 header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:14px}
 .who{font-weight:600}time,.id,.q{color:var(--muted)}.q{margin:0;font-size:14px}
 .badge{border:1px solid var(--line);border-radius:999px;padding:2px 8px;font-size:12px}
-.s-needs_review,.s-failed,.s-needs_attention{color:var(--bad);border-color:var(--bad)}.s-published{color:var(--good);border-color:var(--good)}
+.s-needs_review,.s-failed,.s-partly_posted,.s-needs_attention{color:var(--bad);border-color:var(--bad)}.s-published{color:var(--good);border-color:var(--good)}.s-removed{color:var(--muted)}
 .post{white-space:pre-wrap;font-size:15.5px}
 .check{font-size:14px;border-left:3px solid var(--line);padding:4px 10px}.check.good{border-color:var(--good)}.check.bad{border-color:var(--bad)}
 .check ul{margin:4px 0 0;padding-left:18px}.err{color:var(--bad);margin:0;font-size:14px}
-footer{display:flex;gap:12px;font-size:13px;flex-wrap:wrap}a{color:inherit}.id{font-family:ui-monospace,monospace;font-size:12px}
+footer{display:flex;gap:12px;font-size:13px;flex-wrap:wrap}footer form{margin:0}a{color:inherit}.id{font-family:ui-monospace,monospace;font-size:12px}
+.thread{display:grid;gap:8px}.tpost{border-left:3px solid var(--line);padding:2px 10px}.tnum{color:var(--muted);font-size:12px}
+.pubs{margin:0;padding-left:18px;font-size:14px}.perr{color:var(--bad)}.s-posted{color:var(--good)}.s-maybe_posted{color:var(--bad)}
+code{font-family:ui-monospace,monospace;font-size:12px;word-break:break-all}.cmd{margin:0;font-size:13px}
 </style></head><body><main>
-<h1>Generated posts</h1><p class="sub">Temporary review page. Newest first, as they would be published. Nothing here posts to LinkedIn.</p>
+<h1>Generated posts</h1><p class="sub">Temporary review page. Newest first, as the Bluesky thread they become. Threads (when he connected it) and X (X_POSTING) get their own split of the same story; each platform row below has its status and link (Reddit and LinkedIn only when they're on). Nothing on this page posts anything: run the commands shown.</p>
 ${body}
 ${renderRepliesSection(opts.replies ?? [])}
 </main></body></html>`;

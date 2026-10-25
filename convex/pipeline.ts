@@ -12,10 +12,13 @@
 //          memories  llm.extractKnowledge -> memories.addMany (+ resolve the open threads he
 //                    finished; only thread ids we sent are passed back)
 //          post      llm.writePost, given the time left of the 10-min action limit
-//                    (lib/postQuality.postBudgetMs; may decline: no post; below the quality bar -> saved as
-//                    needs_review, not posted) -> one posts row per call
-//                    (posts.by_call) -> linkedapi.createPost, scheduled only for a new row
-//                    and only when AUTO_POST isn't "off" (off = preview-only, for tests)
+//                    (lib/postQuality.postBudgetMs; may decline: no post; opens with the question
+//                    when an audience / reader question started the call: getAskedQuestion) -> insertPost: one
+//                    posts row per call (posts.by_call) with its language; below the quality
+//                    bar (heldFor "quality") or too long for a 5-post Bluesky thread ("thread_fit")
+//                    -> needs_review, not posted; else publish.publishPost (Bluesky thread,
+//                    Reddit when on, LinkedIn when on) is scheduled in the same mutation, only
+//                    for a new row and only when AUTO_POST is on (else saved, not posted)
 //          reply     threadReplies.draftForCall (scheduled; only when the question came from
 //                    a Bluesky thread, or Reddit once REDDIT_POSTING is on)
 //          plan      conversation.refreshQuestionBank (scheduled)
@@ -23,6 +26,12 @@
 //        + error. Memories are best effort: if that step fails the call is still `done`, with
 //        error "memories step failed (not retried)". A retry is safe: memories.addMany skips a
 //        callId it already has and the post row is reused, so no duplicate memories or post.
+//
+// Undo (isolated; never fails the call), before anything else so even a short call counts:
+// lib/undo.detectTakeDown reads the transcript. Pip said his exact take-down line -> the call is
+// flagged (calls.takeDown) and undo.removeLatest is scheduled for his latest earlier post. He
+// asked in his own words only, or asked not to post today's story -> flagged, nothing deleted.
+// Either way this call's own post is held (undo.holdPostForCall, again after the post step).
 //
 // Retry by hand: npx convex run pipeline:processCall '{"callId":"<id>"}'
 // Without a phone: pipeline:seedEndedCall with a tests/fixtures call (convex/README.md).
@@ -39,8 +48,11 @@ import { postingMayBeLive } from "./lib/callLoop";
 import { inboundPlanToMark } from "./lib/inbound";
 import { canClaimProcessing, finishPatch, isProfileUsable, mergeProfile, type Profile } from "./lib/onboarding";
 import { runSteps, type StepReport } from "./lib/planner";
+import { threadFitProblem } from "./lib/blueskyThread";
 import { parseAutoPost } from "./lib/postFlow";
-import { MIN_POST_BUDGET_MS, holdDecision, postBudgetMs } from "./lib/postQuality";
+import { MIN_POST_BUDGET_MS, askedQuestionForCall, holdDecision, postBudgetMs, type AskedQuestion } from "./lib/postQuality";
+import { postLanguage } from "./publish";
+import { CALL_REASON, detectTakeDown, holdReason, postRemovalPatch, type TakeDownHow } from "./lib/undo";
 import { postQuality } from "./schema";
 
 // Convex exposes env vars on process.env (declared so we don't need @types/node).
@@ -103,7 +115,14 @@ export const saveProfile = internalMutation({
   },
 });
 
-/** One post per call: returns the existing row if this call already has one. */
+/**
+ * One post per call: returns the existing row if this call already has one. Decides here, once:
+ * the language it goes out in (publish.postLanguage, saved on posts.language), and whether it's
+ * held (lib/postQuality.holdDecision: below the quality bar, or too long for a Bluesky thread
+ * in that language). A new post that isn't held is scheduled to publish in this same mutation
+ * (unless AUTO_POST=off), so a saved post is never left unscheduled. A take-down on this call
+ * (calls.takeDown) saves it already taken down (removedAt + a "held:" reason), not scheduled.
+ */
 export const insertPost = internalMutation({
   args: {
     elderId: v.id("elders"),
@@ -112,23 +131,37 @@ export const insertPost = internalMutation({
     // Post quality (lib/postQuality.ts): below the bar it's saved held. The judge's notes stay on
     // `quality` only (shown once on /posts); guardIssues is left for the fact-check.
     quality: v.optional(postQuality),
-    hold: v.optional(v.object({ summary: v.string() })),
   },
-  handler: async (ctx, args): Promise<{ postId: Id<"posts">; created: boolean }> => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ postId: Id<"posts">; created: boolean; held?: "quality" | "thread_fit"; scheduled?: boolean }> => {
     const existing = await ctx.db
       .query("posts")
       .withIndex("by_call", (q) => q.eq("callId", args.callId))
       .first();
     if (existing) return { postId: existing._id, created: false };
+    const language = postLanguage(await ctx.db.get(args.elderId));
+    const hold = holdDecision(args.quality, threadFitProblem(args.text, language));
+    // He asked for a take-down on this call (calls.takeDown): saved already held, never scheduled.
+    // holdOwnPost stays as the backstop.
+    const takeDown = (await ctx.db.get(args.callId))?.takeDown;
     const postId = await ctx.db.insert("posts", {
       elderId: args.elderId,
       callId: args.callId,
       text: args.text,
-      status: args.hold ? "needs_review" : "pending",
+      language,
+      status: hold ? "needs_review" : "pending",
       ...(args.quality ? { quality: args.quality } : {}),
-      ...(args.hold ? { heldFor: "quality" as const, guardSummary: args.hold.summary } : {}),
+      ...(hold ? { heldFor: hold.heldFor, guardSummary: hold.summary } : {}),
+      ...(takeDown ? postRemovalPatch({}, holdReason(takeDown.how), Date.now()) : {}),
     });
-    return { postId, created: true };
+    if (takeDown) return { postId, created: true, scheduled: false };
+    if (hold) return { postId, created: true, held: hold.heldFor };
+    // AUTO_POST=off (tests): keep the row `pending` (see it on /posts), post on purpose.
+    const scheduled = parseAutoPost(process.env.AUTO_POST);
+    if (scheduled) await ctx.scheduler.runAfter(0, internal.publish.publishPost, { postId });
+    return { postId, created: true, scheduled };
   },
 });
 
@@ -140,6 +173,30 @@ export const findPostForCall = internalQuery({
       .withIndex("by_call", (q) => q.eq("callId", callId))
       .first();
     return post ? { postId: post._id, status: post.status } : null;
+  },
+});
+
+/**
+ * The question this call answered, when a real person asked it: the audience question (its
+ * title) or the reader question behind the plan's bank row. Text only, cleaned and clipped
+ * (lib/postQuality.askedQuestionForCall); never a name, url or community. null otherwise.
+ */
+export const getAskedQuestion = internalQuery({
+  args: { callId: v.id("calls") },
+  handler: async (ctx, { callId }): Promise<AskedQuestion | null> => {
+    const call = await ctx.db.get(callId);
+    if (!call) return null;
+    const bankId = (call.plan as { bankId?: unknown } | undefined)?.bankId;
+    const bankDocId = typeof bankId === "string" ? ctx.db.normalizeId("questionBank", bankId) : null;
+    const bankRow = bankDocId ? await ctx.db.get(bankDocId) : null;
+    if (!bankRow || bankRow.elderId !== call.elderId) return null;
+    const audienceId = bankRow.source === "audience" && bankRow.sourceRef ? ctx.db.normalizeId("audienceQuestions", bankRow.sourceRef) : null;
+    const audience = audienceId ? await ctx.db.get(audienceId) : null;
+    return askedQuestionForCall(
+      call.plan,
+      { _id: bankRow._id, source: bankRow.source, sourceRef: bankRow.sourceRef, question: bankRow.question },
+      audience && audience.elderId === call.elderId ? { _id: audience._id, title: audience.title } : null,
+    );
   },
 });
 
@@ -226,31 +283,39 @@ async function runStoryCall(
         // fail the step (process_failed) rather than be cut off mid-write; a retry is safe.
         const budgetMs = postBudgetMs(startedAt, Date.now());
         if (budgetMs < MIN_POST_BUDGET_MS) throw new Error("not enough time left in this run for the post step");
+        // The language it goes out in (the same one insertPost saves), for the writer's fit check.
+        const language = await ctx.runQuery(internal.publish.languageForElder, { elderId: elder._id });
+        // A question a real person asked (audience / reader): the post opens with it. Best effort.
+        let askedQuestion: AskedQuestion | null = null;
+        try {
+          askedQuestion = await ctx.runQuery(internal.pipeline.getAskedQuestion, { callId });
+        } catch {
+          // usual hooks
+        }
         const post = await ctx.runAction(internal.llm.writePost, {
           turns,
           ...(profile ? { profile } : {}),
           ...(feedback ? { feedback } : {}),
           budgetMs,
+          language,
+          ...(askedQuestion ? { askedQuestion } : {}),
         });
         if (post.skip) return `no post: ${post.reason}`;
-        // Below the quality bar: saved as needs_review (shown on /posts), never auto-posted.
-        const hold = holdDecision(post.quality);
-        const { postId, created } = await ctx.runMutation(internal.pipeline.insertPost, {
+        // insertPost holds it (below the quality bar, or too long for a Bluesky thread: shown on
+        // /posts, never auto-posted) or schedules publish.publishPost, in one mutation.
+        const inserted = await ctx.runMutation(internal.pipeline.insertPost, {
           elderId: elder._id,
           callId,
           text: post.text,
           quality: post.quality,
-          ...(hold ? { hold: { summary: hold.summary } } : {}),
         });
-        if (!created) return `post ${postId} already exists`;
-        if (hold) return `post ${postId} held for review (quality ${post.quality.score}/100); post it with linkedapi:approvePost`;
-        // AUTO_POST=off (tests): keep the row `pending`; preview with linkedapi:previewPost,
-        // post on purpose with linkedapi:createPost.
-        if (!parseAutoPost(process.env.AUTO_POST)) {
-          return `post ${postId} saved, preview only (AUTO_POST=off)`;
+        const { postId } = inserted;
+        if (!inserted.created) return `post ${postId} already exists`;
+        if (inserted.held === "thread_fit") return `post ${postId} held: too long for a Bluesky thread; shorten it, then publish:approvePost`;
+        if (inserted.held) return `post ${postId} held for review (quality ${post.quality.score}/100); post it with publish:approvePost`;
+        if (!inserted.scheduled) {
+          return `post ${postId} saved, not posted (AUTO_POST=off); post it with: npx convex run publish:publishPost '{"postId":"${postId}"}'`;
         }
-        // Posting runs on its own (guard + LinkedAPI + polling) so it can't hold up the rest.
-        await ctx.scheduler.runAfter(0, internal.linkedapi.createPost, { postId });
         return `post ${postId} scheduled`;
       },
     },
@@ -272,6 +337,40 @@ async function runStoryCall(
   ]);
 }
 
+/**
+ * Undo step, isolated (lib/undo.detectTakeDown). Never throws. Returns how he asked, or null.
+ *   line         Pip said the exact take-down line: undo.removeLatest for his latest earlier post
+ *   today / unconfirmed   nothing deleted; the call is flagged for family (calls.takeDown)
+ * Every kind holds this call's own post (on a re-run it may already exist).
+ */
+async function takeDownIfAsked(ctx: ActionCtx, callId: Id<"calls">, elderId: Id<"elders">, turns: Turn[]): Promise<TakeDownHow | null> {
+  try {
+    const found = detectTakeDown(turns);
+    if (!found.asked) return null;
+    await ctx.runMutation(internal.undo.recordCallTakeDown, { callId, how: found.how });
+    if (found.how === "line") {
+      await ctx.scheduler.runAfter(0, internal.undo.removeLatest, { elderId, reason: CALL_REASON, askedOnCallId: callId });
+    }
+    await ctx.runMutation(internal.undo.holdPostForCall, { callId });
+    console.log(`pipeline.processCall: call ${callId} take-down (${found.how})${found.how === "line" ? "; undo.removeLatest scheduled" : "; nothing deleted, flagged"}`);
+    return found.how;
+  } catch {
+    console.warn(`pipeline.processCall: call ${callId} take-down step failed`);
+    return null;
+  }
+}
+
+/** After the post step: hold this call's new post too (before publish.ts can send it). Never throws. */
+async function holdOwnPost(ctx: ActionCtx, callId: Id<"calls">, takeDown: TakeDownHow | null): Promise<void> {
+  if (!takeDown) return;
+  try {
+    const held = await ctx.runMutation(internal.undo.holdPostForCall, { callId });
+    if (held.held) console.log(`pipeline.processCall: call ${callId} own post ${held.postId} held (take-down on this call)`);
+  } catch {
+    console.warn(`pipeline.processCall: call ${callId} holding its own post failed`);
+  }
+}
+
 export const processCall = internalAction({
   args: { callId: v.id("calls") },
   handler: async (ctx, { callId }): Promise<{ status: string; reason?: string }> => {
@@ -282,6 +381,7 @@ export const processCall = internalAction({
 
     try {
       const turns = call.transcript as Turn[];
+      const takeDown = await takeDownIfAsked(ctx, callId, elder._id, turns); // undo: before the short-call exit (a call can be just that)
       if (isNoConversation(call.endReason, turns)) {
         await ctx.runMutation(internal.pipeline.finishProcessing, { callId, status: "no_conversation" });
         console.log(`pipeline.processCall: call ${callId} no_conversation (${call.endReason ?? "few words"})`);
@@ -289,6 +389,7 @@ export const processCall = internalAction({
       }
       if (call.kind === "story") {
         const steps = await runStoryCall(ctx, callId, elder, turns, startedAt);
+        await holdOwnPost(ctx, callId, takeDown);
         // Memories are best effort (e.g. no OPENAI_API_KEY yet): only the post and the plan refresh
         // decide on a retry; a lost memories step stays visible as a fixed marker on the `done` row.
         const failed = steps.filter((s) => s.status === "failed" && s.step !== "memories");

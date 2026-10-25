@@ -50,35 +50,24 @@ export const SETUP = {
     otherNone: 'Choose a time',
   },
 
-  linkedin: {
-    lead: 'This is optional. It helps us put the stories in the right place.',
-    hint: 'For example: linkedin.com/in/margaret-olsen',
-    invalid: "That doesn't look like a LinkedIn profile address. It should look like linkedin.com/in/name.",
-    reassureTitle: 'Checked before it goes out.',
-    later: 'Skip for now',
-  },
-
   review: {
     who: 'Set up by',
     name: 'Name',
     phone: 'Phone',
     lang: 'Language and host',
     when: 'Weekly call',
-    linkedin: 'LinkedIn',
     change: 'Change',
     edit: 'Edit',
     // Read after "Change" / "Edit" by screen readers only.
-    what: { who: 'who is setting this up', name: 'name', phone: 'phone number', lang: 'language and host', when: 'call time', linkedin: 'LinkedIn' },
+    what: { who: 'who is setting this up', name: 'name', phone: 'phone number', lang: 'language and host', when: 'call time' },
     phoneLabel: 'Phone number',
     country: 'Country',
     save: 'Save number',
     cancel: 'Cancel',
     phoneShort: (n) => `Enter a phone number with ${n} digits.`,
     phoneMissing: 'Please add the phone number to call.',
-    noLinkedin: "No profile. That's fine.",
-    laterLinkedin: 'Not added yet. You can add it later.',
-    finish: 'Finish',
-    finishing: 'Setting up…',
+    saveAll: 'Looks right. Continue',
+    saving: 'Saving…',
   },
 
   done: {
@@ -113,12 +102,8 @@ export function setupCopy({ them, name, host, hostId }) {
       hostId === 'diana' ? `In English: “Hello, ${n}! This is Diana. It's so nice to talk with you. How did you get started in your trade?”` : '',
     whenTitle: them ? `When should ${host} call ${n}?` : `When should ${host} call?`,
     whenSummary: (day, time) => `${host} will call ${them ? `${n} ` : ''}every ${day} at ${time}.`,
-    liTitle: them ? `Does ${n} have a LinkedIn profile?` : 'Do you have a LinkedIn profile?',
-    liLabel: `${them ? `${n}'s` : 'Your'} LinkedIn profile address (optional)`,
-    liNone: them ? "They don't have one" : "I don't have one",
-    liReassure: `Nothing goes on LinkedIn before the first call. Every post is labeled as written up with AI from a phone call, and checked against what ${them ? n : 'you'} said.`,
     reviewTitle: them ? `Does this look right for ${n}?` : 'Does this look right?',
-    reviewIntro: `You can change anything later from ${them ? `${n}'s` : 'your'} page.`,
+    reviewIntro: `You can change ${your} host and call time later from ${them ? `${n}'s` : 'your'} page.`,
     reviewWho: them ? `Me, helping ${n}` : 'Me, for myself',
     phoneNote: (signedIn) =>
       them ? `The number ${host} will call. Make sure it is ${n}'s phone.` : signedIn ? 'The number you signed in with.' : `The number ${host} will call.`,

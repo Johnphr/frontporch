@@ -5,7 +5,13 @@
 // llm.writePost writes 3 drafts (ANGLES), a judge scores each one against CRITERIA, the best
 // goes through up to MAX_REWRITE_ROUNDS critique -> rewrite rounds, and a post that still
 // doesn't clear the bar is held as `needs_review` (pipeline.ts) instead of auto-posting.
+// The thread split itself is lib/blueskyThread.ts: a post that can't become a 3-5 post thread
+// (hook in post 1, the AI line in the last) is a blocker, so the writer gets a rewrite round
+// with that note, and a post that still doesn't fit is held (holdDecision).
 // No runtime imports: unit-tested directly with Node (tests/postQuality.test.ts).
+
+import { clampGraphemes } from "./bluesky.ts";
+import { threadFitProblem } from "./blueskyThread.ts";
 //
 // Tuning: change the weights, PASS_SCORE or MIN_CRITERION here and re-run `npm test`.
 
@@ -164,13 +170,145 @@ export function hasMarkdown(text: string): boolean {
   return lines.filter((l) => NUMBERED_LINE.test(l)).length >= 2;
 }
 
+// ---------- the question behind the call ----------
+// When the call's question came from a real person (an audienceQuestions row, or a reader's
+// question), the post opens by framing that question in his voice and then answers it. It never
+// quotes, tags, names or links the person or the thread, so it reads as his own post, not an
+// automated reply. Other calls keep the usual hooks.
+
+export type AskedQuestion = { text: string; source: "audience" | "reader" };
+
+/** The question text the writer sees, at most this long. */
+export const MAX_ASKED_CHARS = 200;
+
+/** Words shared in a row with the question that count as quoting it (shorter questions: all of it, from 6 words). */
+export const VERBATIM_RUN_WORDS = 8;
+
+const URL_RE = /https?:\/\/\S+|www\.\S+|\b[\w-]+(?:\.[\w-]+)*\.(?:com|org|net|io|app|social|co|me|ly|xyz)\b\S*/gi;
+const MENTION_RE = /(^|[^\p{L}\p{N}_@.])@[\p{L}\p{N}_][\p{L}\p{N}_.-]*/gu;
+
+/** A question as the writer may see it: no links, handles, u/ or r/ names; hashtags as words; clipped. */
+export function cleanAskedQuestion(text: string): string {
+  const t = text
+    .replace(URL_RE, " ")
+    .replace(MENTION_RE, "$1 ")
+    .replace(/(^|[^\p{L}\p{N}_])\/?[ur]\/[\w-]+/gu, "$1 ")
+    .replace(/#(\p{L}[\p{L}\p{N}_]*)/gu, "$1")
+    .replace(/^\s*(?:\[[^\]]{0,40}\]\s*)+/, "") // leading "[Question]" tags
+    .replace(/\s+/g, " ")
+    .replace(/^[\s,;:.\-–—]+/, "")
+    .replace(/\s+([?.,!:;])/g, "$1")
+    .trim();
+  return t ? clampGraphemes(t, MAX_ASKED_CHARS) : "";
+}
+
+/**
+ * The question to open the post with, or null. The call's plan names the bank row it used
+ * (plan.bankId): source "reader" -> the row's question; source "audience" -> the audienceQuestions
+ * row it points at (sourceRef), its title. Every other source -> null (today's hooks).
+ */
+export function askedQuestionForCall(
+  plan: unknown,
+  bankRow: { _id: string; source?: string; sourceRef?: string; question?: string } | null,
+  audience: { _id: string; title?: string } | null,
+): AskedQuestion | null {
+  const bankId = (plan as { bankId?: unknown } | null | undefined)?.bankId;
+  if (typeof bankId !== "string" || !bankId || !bankRow || bankRow._id !== bankId) return null;
+  let raw: string;
+  if (bankRow.source === "reader") raw = bankRow.question ?? "";
+  else if (bankRow.source === "audience" && audience && audience._id === bankRow.sourceRef) raw = audience.title ?? "";
+  else return null;
+  const text = cleanAskedQuestion(raw);
+  return wordCount(text) >= 3 ? { text, source: bankRow.source } : null;
+}
+
+/** Tag for the asked question in the writer's and judge's context (llm.writePost). */
+export const ASKED_TAG = "asked_question";
+
+/** The writer's / judge's data sections, in order. llm.writePost fences each one. */
+export function writerContextParts(a: {
+  transcript: string;
+  background?: string;
+  feedback?: string;
+  askedQuestion?: AskedQuestion | null;
+}): { tag: string; body: string }[] {
+  const parts = [{ tag: "transcript", body: a.transcript }];
+  if (a.background) parts.push({ tag: "background", body: a.background });
+  if (a.feedback?.trim()) parts.push({ tag: "readers", body: `What readers liked lately: ${a.feedback.trim()}` });
+  if (a.askedQuestion) {
+    const who = a.askedQuestion.source === "audience" ? "People in his field asked this online" : "A reader of his posts asked this";
+    parts.push({ tag: ASKED_TAG, body: `${who}: ${a.askedQuestion.text}` });
+  }
+  return parts;
+}
+
+const ASKED_EXAMPLES = {
+  en: `"People often ask how a small bakery set its prices. Here's how we did it in 1974." or "A question I hear a lot: what do you do when a customer won't pay?" or "Someone asked me how you train a new apprentice."`,
+  es: `"Me preguntan mucho cómo ponía precios una panadería chica. Así lo hacíamos en 1974." o "Una pregunta que me hacen seguido: ¿qué hace uno cuando un cliente no paga?" o "Alguien me preguntó cómo se enseña a un aprendiz nuevo."`,
+} as const;
+
+/** Extra writer rules when the call answered an asked question. "" otherwise. */
+export function askedQuestionRules(q: AskedQuestion | null | undefined, lang: "en" | "es"): string {
+  if (!q) return "";
+  return `This call answered a question someone asked (<${ASKED_TAG}>). Open the post with it:
+- The hook frames that question in his voice and in the post's language, generalized and paraphrased, for example ${ASKED_EXAMPLES[lang]}
+- This decides the first line whatever the angle says; the angle shapes the story after it.
+- Then the story answers that question.
+- Never quote the question word for word. Never name, tag (@) or link the person who asked, the thread, the site or the community ("on Reddit", usernames, links).
+- <${ASKED_TAG}> says what was asked; it is not a source of facts about him. Everything else above still holds: only facts he gave, the hook fits the opening post, and the post ends with a question to readers.`;
+}
+
+/** Extra judge rules for the hook when the call answered an asked question. "" otherwise. */
+export function askedQuestionJudgeRules(q: AskedQuestion | null | undefined): string {
+  if (!q) return "";
+  return `This call answered a question someone asked (<${ASKED_TAG}>). For hook, also check that the first line frames that question in his voice (paraphrased and generalized, like "People often ask me how...") and that the post answers it. Score hook 3 or less if it doesn't open with the question, quotes it word for word, names or tags a person, site or community, or has a link. Framing the question is not an unsupported fact; any detail about who asked is.`;
+}
+
+/** Writer / judge system prompt with the asked-question rules added when there is one. */
+export function withAskedQuestion(system: string, extra: string): string {
+  return extra ? `${system}\n\n${extra}` : system;
+}
+
+function looseWords(s: string): string[] {
+  return s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+}
+
+/** Does the post repeat VERBATIM_RUN_WORDS words of the question in a row (all of a 6-7 word one)? */
+export function quotesVerbatim(post: string, question: string): boolean {
+  const q = looseWords(question);
+  const run = Math.min(VERBATIM_RUN_WORDS, q.length);
+  if (run < 6) return false;
+  const grams = new Set<string>();
+  for (let i = 0; i + run <= q.length; i++) grams.add(q.slice(i, i + run).join(" "));
+  const p = looseWords(post);
+  for (let i = 0; i + run <= p.length; i++) if (grams.has(p.slice(i, i + run).join(" "))) return true;
+  return false;
+}
+
 /**
  * Checks code can do without AI. `expectedLang` is the language he spoke on the call
  * (detectLanguage on his words); a mismatch only counts when both are clearly detected,
- * so a Spanish post is never penalized by English-only rules.
+ * so a Spanish post is never penalized by English-only rules. `disclosureLang`: the language
+ * the post goes out in (posts.language, publish.postLanguage), for the thread-fit check.
+ * `askedQuestion`: the question the call answered (also checks it isn't quoted word for word).
+ * An @mention or a link is always a blocker: a story post never needs one.
  */
-export function hardChecks(text: string, expectedLang: Lang = "unknown"): CheckIssue[] {
+export function hardChecks(
+  text: string,
+  expectedLang: Lang = "unknown",
+  disclosureLang?: "en" | "es",
+  askedQuestion?: AskedQuestion | null,
+): CheckIssue[] {
   const issues: CheckIssue[] = [];
+  if (new RegExp(MENTION_RE.source, "u").test(text)) {
+    issues.push({ id: "mention", severity: "major", message: "Mentions an @handle; never tag or name anyone online." });
+  }
+  if (new RegExp(URL_RE.source, "i").test(text)) {
+    issues.push({ id: "link", severity: "major", message: "Has a link; the post never links anywhere." });
+  }
+  if (askedQuestion && quotesVerbatim(text, askedQuestion.text)) {
+    issues.push({ id: "quoted_question", severity: "major", message: "Quotes the asked question word for word; paraphrase it in his voice." });
+  }
   const words = wordCount(text);
   if (words < HARD_MIN_WORDS || words > HARD_MAX_WORDS) {
     issues.push({ id: "length", severity: "major", message: `${words} words; aim for ${MIN_WORDS}-${MAX_WORDS}.` });
@@ -190,6 +328,11 @@ export function hardChecks(text: string, expectedLang: Lang = "unknown"): CheckI
       message: `The first line is ${hookChars} characters; keep it under ${MAX_HOOK_CHARS} so it works as the opening post.`,
     });
   }
+  // The real split (hook in post 1, story + disclosure in at most 5 posts). Disclosure language:
+  // the one it's posted in when known, else the language he spoke, else the post's own.
+  const fitLang = disclosureLang ?? (expectedLang !== "unknown" ? expectedLang : detectLanguage(text));
+  const fit = threadFitProblem(text, fitLang === "es" ? "es" : "en");
+  if (fit) issues.push({ id: "thread_fit", severity: "major", message: `Doesn't fit a Bluesky thread: ${fit}` });
   const hashtags = text.match(/(^|\s)#\p{L}[\p{L}\p{N}_]*/gu) ?? [];
   if (hashtags.length > MAX_HASHTAGS) {
     issues.push({ id: "hashtags", severity: "minor", message: `${hashtags.length} hashtags; use at most ${MAX_HASHTAGS}.` });
@@ -232,6 +375,8 @@ export type Evaluation = {
   scores: CriterionScores;
   /** Why it didn't pass (or what's left to polish), for the rewrite and for humans. */
   notes: string[];
+  /** False when it can't be split into a Bluesky thread (missing = fits). */
+  fits?: boolean;
 };
 
 function clampScore(n: unknown): number {
@@ -257,9 +402,11 @@ const ZERO_SCORES = Object.fromEntries(CRITERIA.map((c) => [c, 0])) as Criterion
  * judgement (the judge failed) -> not passed.
  */
 export function evaluate(judgement: Judgement | null, issues: CheckIssue[]): Evaluation {
-  const issueNotes = issues.map((i) => i.message);
+  // Blockers first, so trimNotes never drops them.
+  const issueNotes = [...issues.filter((i) => i.severity === "major"), ...issues.filter((i) => i.severity !== "major")].map((i) => i.message);
+  const fit = issues.some((i) => i.id === "thread_fit") ? { fits: false } : {};
   if (!judgement) {
-    return { score: 0, passed: false, scores: ZERO_SCORES, notes: ["The quality check couldn't run, so it can't post on its own.", ...issueNotes] };
+    return { score: 0, passed: false, scores: ZERO_SCORES, notes: ["The quality check couldn't run, so it can't post on its own.", ...issueNotes], ...fit };
   }
   if (judgement.unsupportedFacts.length) {
     return {
@@ -267,6 +414,7 @@ export function evaluate(judgement: Judgement | null, issues: CheckIssue[]): Eva
       passed: false,
       scores: judgement.scores,
       notes: [...judgement.unsupportedFacts.map((f) => `Not something he said: ${f}`), ...judgement.notes, ...issueNotes],
+      ...fit,
     };
   }
   const weighted = CRITERIA.reduce((sum, c) => sum + judgement.scores[c] * WEIGHTS[c], 0) * 10;
@@ -280,7 +428,7 @@ export function evaluate(judgement: Judgement | null, issues: CheckIssue[]): Eva
     ...judgement.notes,
     ...issueNotes,
   ];
-  return { score, passed, scores: judgement.scores, notes };
+  return { score, passed, scores: judgement.scores, notes, ...fit };
 }
 
 export type Candidate = { index: number; text: string; hook: string; evaluation: Evaluation };
@@ -306,9 +454,15 @@ export function nextStep(a: { passed: boolean; round: number; timeLeftMs: number
   return "hold";
 }
 
-/** A rewrite replaces the best only if it's better (passes, or scores higher). */
+/**
+ * A rewrite replaces the best only if it's better: passes, or (neither passing) fits a thread
+ * where the best doesn't, or scores higher. A post that can't be a thread can't go out at all.
+ */
 export function keepRewrite(current: Evaluation, rewritten: Evaluation): boolean {
   if (rewritten.passed !== current.passed) return rewritten.passed;
+  const fitsNow = current.fits !== false;
+  const fitsNew = rewritten.fits !== false;
+  if (fitsNow !== fitsNew) return fitsNew;
   return rewritten.score > current.score;
 }
 
@@ -445,14 +599,28 @@ export async function runQualityLoop(deps: QualityDeps): Promise<WrittenPost> {
 }
 
 /**
- * Pipeline: a post below the bar is saved as `needs_review` with a short summary (the judge's
- * notes are on posts.quality, shown once on /posts) and isn't posted; `linkedapi:approvePost`
- * posts it after a human review. null = post as usual.
+ * Pipeline: a post below the bar, or one that can't be split into a Bluesky thread
+ * (`threadProblem`, lib/blueskyThread.threadFitProblem), is saved as `needs_review` with a short
+ * summary (the judge's notes are on posts.quality, shown once on /posts) and isn't posted;
+ * `publish:approvePost` posts it after a human review (and an edit, for a thread that doesn't
+ * fit). null = post as usual.
  */
-export function holdDecision(quality: QualityReport | undefined): { status: "needs_review"; summary: string } | null {
+export function holdDecision(
+  quality: QualityReport | undefined,
+  threadProblem?: string | null,
+): { status: "needs_review"; heldFor: "thread_fit" | "quality"; summary: string } | null {
+  const rewrites = (q: QualityReport) => `${q.rounds} rewrite${q.rounds === 1 ? "" : "s"}`;
+  if (threadProblem) {
+    return {
+      status: "needs_review",
+      heldFor: "thread_fit",
+      summary: `Held: doesn't fit a Bluesky thread of at most 5 posts (${threadProblem})${quality ? ` after ${rewrites(quality)}` : ""}. Shorten it, then publish:approvePost.`,
+    };
+  }
   if (!quality || quality.passed) return null;
   return {
     status: "needs_review",
-    summary: `Held by the quality check: ${quality.score}/100 (bar ${PASS_SCORE}) after ${quality.rounds} rewrite${quality.rounds === 1 ? "" : "s"}.`,
+    heldFor: "quality",
+    summary: `Held by the quality check: ${quality.score}/100 (bar ${PASS_SCORE}) after ${rewrites(quality)}.`,
   };
 }

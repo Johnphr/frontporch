@@ -18,12 +18,12 @@ import {
   type FetchFn,
   type SessionCache,
 } from "./blueskyClient.ts";
-import type { BlueskyLogin, RedditLogin } from "./logins.ts";
+import { isBlueskyLoginRefused, type BlueskyLogin, type RedditLogin } from "./logins.ts";
 import { parseRedditComment, redditThingId, writeFailureStatus } from "./threadReplies.ts";
 
 export type PostOutcome =
-  | { status: "posted"; url?: string; alreadyThere?: boolean }
-  | { status: "failed" | "maybe_posted"; error: string };
+  | { status: "posted"; url?: string; uri?: string; alreadyThere?: boolean } // uri: Bluesky at:// of his reply
+  | { status: "failed" | "maybe_posted"; error: string; loginRefused?: boolean }; // loginRefused: Bluesky refused his app password
 
 const failed = (error: string): PostOutcome => ({ status: "failed", error });
 
@@ -58,23 +58,43 @@ export async function postBlueskyReply(
   try {
     ready = await withSession(fetchFn, cache, login, prepare);
   } catch (error) {
-    return failed(lookupError(error));
+    // Refused login (revoked app password): the caller marks his account invalid.
+    return isBlueskyLoginRefused(error) ? { status: "failed", error: lookupError(error), loginRefused: true } : failed(lookupError(error));
   }
   const { session } = ready;
-  if (ready.existing) return { status: "posted", url: postWebUrl(ready.existing.uri, session.handle), alreadyThere: true };
+  if (ready.existing) return { status: "posted", url: postWebUrl(ready.existing.uri, session.handle), uri: ready.existing.uri, alreadyThere: true };
   if (!ready.question) return failed("The Bluesky post is gone (deleted or hidden).");
   const reply = replyRefFor(ready.question);
   if (!reply) return failed("Couldn't read the Bluesky post to reply under.");
 
   try {
     const created = await createReply(fetchFn, session, { text: a.text, langs: [a.lang === "es" ? "es" : "en"], reply });
-    return { status: "posted", url: postWebUrl(created.uri, session.handle) };
+    return { status: "posted", url: postWebUrl(created.uri, session.handle), uri: created.uri };
   } catch (error) {
     const httpStatus = error instanceof BlueskyHttpError ? error.status : undefined;
     const status = writeFailureStatus(httpStatus);
     const what = httpStatus !== undefined ? lookupError(error) : "Network error, timeout or unreadable answer while posting to Bluesky";
     return { status, error: status === "maybe_posted" ? `${what}: ${CHECK_THREAD}.` : what };
   }
+}
+
+/** A Reddit access token (script app, password grant). Also used by undo (lib/undo.ts). */
+export async function redditToken(fetchFn: FetchFn, login: RedditLogin): Promise<{ ok: true; token: string } | { ok: false; error: string }> {
+  const basic = btoa(`${login.clientId}:${login.clientSecret}`); // default Convex runtime: no Buffer
+  let token: unknown;
+  try {
+    const tokenRes = await fetchFn("https://www.reddit.com/api/v1/access_token", {
+      method: "POST",
+      headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/x-www-form-urlencoded", "User-Agent": login.userAgent },
+      body: new URLSearchParams({ grant_type: "password", username: login.username, password: login.password }).toString(),
+    });
+    if (!tokenRes.ok) return { ok: false, error: `Reddit token HTTP ${tokenRes.status}` };
+    token = ((await tokenRes.json().catch(() => null)) as { access_token?: unknown } | null)?.access_token;
+  } catch {
+    return { ok: false, error: "Network error or timeout getting a Reddit token." };
+  }
+  if (typeof token !== "string" || !token) return { ok: false, error: "Reddit returned no access token." };
+  return { ok: true, token };
 }
 
 /** His comment on the Reddit post (`threadUrl`), through Reddit's API (script app, password grant). */
@@ -86,21 +106,9 @@ export async function postRedditReply(
   if (!login) return failed("Reddit posting is off or his Reddit login isn't set.");
   const thingId = redditThingId(a.threadUrl);
   if (!thingId) return failed("Couldn't find the Reddit post id in the thread link.");
-  const basic = btoa(`${login.clientId}:${login.clientSecret}`); // default Convex runtime: no Buffer
-
-  let token: unknown;
-  try {
-    const tokenRes = await fetchFn("https://www.reddit.com/api/v1/access_token", {
-      method: "POST",
-      headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/x-www-form-urlencoded", "User-Agent": login.userAgent },
-      body: new URLSearchParams({ grant_type: "password", username: login.username, password: login.password }).toString(),
-    });
-    if (!tokenRes.ok) return failed(`Reddit token HTTP ${tokenRes.status}`);
-    token = ((await tokenRes.json().catch(() => null)) as { access_token?: unknown } | null)?.access_token;
-  } catch {
-    return failed("Network error or timeout getting a Reddit token.");
-  }
-  if (typeof token !== "string" || !token) return failed("Reddit returned no access token.");
+  const got = await redditToken(fetchFn, login);
+  if (!got.ok) return failed(got.error);
+  const { token } = got;
 
   let res: Awaited<ReturnType<FetchFn>>;
   try {

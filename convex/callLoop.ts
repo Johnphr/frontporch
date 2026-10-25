@@ -9,14 +9,15 @@
 // - Never the first call (that's "Call me now" or a call started by hand).
 // - Stops calling him after 3 missed calls in a row until he really talks (a call by hand, or
 //   "Call me now" during onboarding).
-// - Off with an interval under a day unless AUTO_POST=off (no public post every 5 min).
+// - Off with an interval under a day unless AUTO_POST=off (no public post every 5 min). While
+//   blocked it logs a warning once an hour (minute 0) saying to set AUTO_POST=off.
 // - Starts are spaced 30 s apart. No quiet hours: it's a testing tool, keep the list small.
 // Decisions: lib/callLoop.ts (tested). Owner: Brain.
 
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalMutation } from "./_generated/server";
-import { loopCovers, loopDecision, loopInterval, type LoopEnv } from "./lib/callLoop";
+import { blockedWarning, loopCovers, loopDecision, loopInterval, type LoopEnv } from "./lib/callLoop";
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -31,9 +32,13 @@ export const tick = internalMutation({
     const env = process.env as LoopEnv;
     const interval = loopInterval(env);
     const result: TickResult = { checked: 0, started: [], waiting: 0, paused: 0 };
-    if (interval.minutes === null) return { ...result, off: interval.blocked ?? "CALL_INTERVAL_MINUTES not set" };
-
     const now = Date.now();
+    if (interval.minutes === null) {
+      const warning = blockedWarning(interval.blocked, now);
+      if (warning) console.warn(warning);
+      return { ...result, off: interval.blocked ?? "CALL_INTERVAL_MINUTES not set" };
+    }
+
     const elders = await ctx.db.query("elders").collect();
     for (const elder of elders) {
       if (!loopCovers(env, elder.phone)) continue;

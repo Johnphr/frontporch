@@ -126,9 +126,9 @@ export const SOURCES: SourceConfig[] = [
   },
   {
     // His Bluesky session searches (the public AppView refuses unauthenticated search).
-    // Only runs when BLUESKY_HANDLE + BLUESKY_APP_PASSWORD are set (convex/apify.ts).
+    // Only runs when he has a connected account (lib/logins.ts); else reported as skipped.
     name: "bluesky-search",
-    label: "Bluesky · recent posts by keyword (needs his BLUESKY_HANDLE + app password)",
+    label: "Bluesky · recent posts by keyword (needs his connected Bluesky account)",
     kind: "bluesky_search",
     source: "bluesky",
     enabled: true,

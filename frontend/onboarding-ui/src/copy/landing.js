@@ -2,7 +2,7 @@
 
 export const HERO = {
   title: 'Tell your work stories over the phone.',
-  lead: 'Your host calls you. You talk. We share your stories on LinkedIn, in your words.',
+  lead: 'Your host calls you. You talk. We share your stories on your own social accounts, in your words.',
   cta: 'Get your first call',
   family: 'Setting this up for a parent? Start here.',
   art: 'An older woman relaxing on a sofa, talking on the phone, next to a lamp and a plant',
@@ -27,8 +27,8 @@ export const HOW = {
       body: 'On the first call, Daniel, Oscar, Victoria or Diana asks about your field, your specialty and how your career went. Take your time.',
     },
     {
-      title: 'Each week, a few questions. Your stories go on LinkedIn.',
-      body: 'Your host asks a few short, open questions and lets you talk. What you say becomes a LinkedIn post, in your own words.',
+      title: 'Each week, a few questions. Your stories go online.',
+      body: 'Your host asks a few short, open questions and lets you talk. What you say becomes a post on your own accounts, in your own words.',
     },
   ],
 }
@@ -64,7 +64,7 @@ export const QUESTIONS = {
 export const POST = {
   title: 'What a post looks like',
   lead: 'Here is an example of a short post made from one call. It sounds like the person, because it is their words.',
-  label: 'Example LinkedIn post',
+  label: 'Example post',
   tag: 'Example',
   name: 'Margaret O.',
   meta: 'Ran a neighborhood bakery for 38 years',

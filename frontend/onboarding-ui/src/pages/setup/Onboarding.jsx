@@ -1,40 +1,85 @@
 // First-time setup (#/setup, design-mockups/onboarding-c.html): six steps, then Done.
-//   1 who  2 name  3 language + host  4 day + time  5 LinkedIn  6 review -> Finish (finish.js)  7 done
+//   1 who  2 name  3 language + host  4 day + time  5 review -> save (finish.js saveSetup: register,
+//   host, weekly slot)  6 accounts (Bluesky, Threads, X; optional) -> Finish rings him  7 done
 // "Change" on Review opens that step, and its button then goes straight back to Review.
 // The phone comes from sign-in (session); after an email sign-in Review asks for it.
+// Progress is kept by lib/setupProgress.js (this tab, and under the elderId once Review saved
+// it), so a refresh, a new tab or the Threads / X round trip doesn't lose it, and a refresh on
+// Done shows Done again. The app password and the sign-up token are never in it (the token
+// lives in the session, lib/session.js).
+// The call language (Spanish for Diana) picks the words on step 6, Done's call status and errors.
 import { useEffect, useRef, useState } from 'react'
-import { HOSTS } from '../../copy'
+import { HOSTS, hostForLanguage } from '../../copy'
 import { SETUP, TOTAL_STEPS, setupCopy } from '../../copy/setup'
 import { go } from '../../lib/route'
 import { loadSession } from '../../lib/session'
+import { ACCOUNTS_STEP, DONE_STEP, loadProgress, saveProgress } from '../../lib/setupProgress'
+import { loadCallId } from '../../lib/useCallStatus'
 import { BackChevron } from '../../art/setup'
 import { Header } from '../../ui/Header'
 import { Button } from '../../ui/controls'
+import AccountsStep from './Accounts'
 import Done from './Done'
 import Review from './Review'
+import { placeCall } from './finish'
 import { LanguageStep } from './LanguageStep'
-import { LinkedinStep, NameStep, WhenStep, WhoStep } from './steps'
+import { NameStep, WhenStep, WhoStep } from './steps'
 
-const STEPS = { 1: WhoStep, 2: NameStep, 3: LanguageStep, 4: WhenStep, 5: LinkedinStep }
+const STEPS = { 1: WhoStep, 2: NameStep, 3: LanguageStep, 4: WhenStep }
+const REVIEW = 5
+const ACCOUNTS = ACCOUNTS_STEP
+
+/** Saved progress for this sign-in, or null. A step 6 without its sign-up goes back to Review. */
+function savedProgress() {
+  const saved = loadProgress()
+  if (!saved) return null
+  const session = loadSession()
+  if (saved.elderId && (saved.elderId !== session.elderId || !session.token)) return null
+  return saved
+}
+
+/** 'es' when the calls are in Spanish (a Spanish host, or Spanish chosen), else 'en'. */
+export const setupLanguage = (data) => ((HOSTS[data.host]?.language || data.language) === 'es' ? 'es' : 'en')
 
 export default function Onboarding() {
+  const saved = useRef(savedProgress()).current
   const [signedInPhone] = useState(() => loadSession().phone || '')
-  const [data, setData] = useState(() => ({
-    who: null, // 'self' | 'helper'
-    name: '',
-    language: 'en',
-    host: 'daniel', // host id (copy.js HOSTS); the language's default until they pick one
-    callDay: 'tuesday',
-    callHour: 11,
-    linkedin: '', // as typed
-    liStatus: 'later', // 'url' | 'none' | 'later'
-    phone: signedInPhone, // E.164, '' until they add one
-  }))
-  const [step, setStep] = useState(1)
+  const [data, setData] = useState(() => {
+    const start = {
+      who: null, // 'self' | 'helper'
+      name: '',
+      language: 'en',
+      host: 'daniel', // host id (copy.js HOSTS); the language's default until they pick one
+      callDay: 'tuesday',
+      callHour: 11,
+      phone: signedInPhone, // E.164, '' until they add one
+      bluesky: undefined, // { status: 'saved', handle } | { status: 'locked' } once step 6 connects it
+      ...saved?.data,
+    }
+    // A host id saved by an older version (Pip, Juanito): the language's default host instead.
+    if (!HOSTS[start.host]) start.host = hostForLanguage(start.language)
+    return start
+  })
+  const [step, setStep] = useState(saved?.step || 1)
+  const [signup, setSignup] = useState(() => {
+    if (!saved?.elderId) return null
+    const { elderId, token } = loadSession()
+    return { elderId, token }
+  }) // { elderId, token } once Review saved it
   const [toReview, setToReview] = useState(false)
-  const [result, setResult] = useState(null) // finishSetup() + phone, for Done
+  // placeCall() + phone, for Done. After a refresh on Done: the saved result, and the callId this
+  // tab is still watching (lib/useCallStatus.js).
+  const [result, setResult] = useState(() =>
+    saved?.step === DONE_STEP ? { reason: loadCallId() ? null : saved.result.reason || null, phone: saved.result.phone || '', callId: loadCallId() || undefined } : null,
+  )
   const heading = useRef(null)
   const shown = useRef(step)
+
+  // Keep progress, Done included (a refresh there shows Done again, not step 1).
+  useEffect(() => {
+    if (step === DONE_STEP && !result) return
+    saveProgress({ data, step, elderId: signup?.elderId, ...(step === DONE_STEP ? { result: { reason: result.reason || null, phone: result.phone } } : {}) })
+  }, [data, step, signup, result])
 
   // A new step: back to the top, focus its h1 (not on first load).
   useEffect(() => {
@@ -47,10 +92,11 @@ export default function Onboarding() {
   const set = (patch) => setData((d) => ({ ...d, ...patch }))
   const host = HOSTS[data.host].name
   const words = setupCopy({ them: data.who === 'helper', name: data.name, host, hostId: data.host })
+  const lang = setupLanguage(data)
 
   function next() {
     setToReview(false)
-    setStep((s) => (toReview ? 6 : s + 1))
+    setStep((s) => (toReview ? REVIEW : s + 1))
   }
   function back() {
     if (toReview) return next()
@@ -61,13 +107,23 @@ export default function Onboarding() {
     setToReview(true)
     setStep(n)
   }
-  function finished(res) {
-    setResult(res)
-    setStep(7)
+  function onSaved(res) {
+    setSignup({ elderId: res.elderId, token: res.token })
+    set({ phone: res.phone })
+    setStep(ACCOUNTS)
   }
+  async function finish() {
+    const res = await placeCall(signup.elderId, signup.token)
+    setResult({ ...res, phone: data.phone })
+    setStep(DONE_STEP)
+  }
+  // The browser is about to leave for Threads / X: write progress now, not after the next render.
+  const beforeLeave = () => saveProgress({ data, step, elderId: signup?.elderId })
 
   const Step = STEPS[step]
   const backLabel = toReview ? SETUP.backReview : step === 1 ? SETUP.backHome : SETUP.back
+  // Once saved, name and phone can't change from here (his page has host and call time).
+  const canGoBack = step !== ACCOUNTS
 
   return (
     <>
@@ -75,11 +131,15 @@ export default function Onboarding() {
       <main id="main" className="mx-auto w-full max-w-[40rem] px-4 pb-16 pt-6 sm:px-6">
         {step <= TOTAL_STEPS && (
           <>
-            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-              <Button variant="link" small onClick={back}>
-                <BackChevron />
-                {backLabel}
-              </Button>
+            <div className="flex min-h-touch-sm flex-wrap items-center justify-between gap-x-4 gap-y-1">
+              {canGoBack ? (
+                <Button variant="link" small onClick={back}>
+                  <BackChevron />
+                  {backLabel}
+                </Button>
+              ) : (
+                <span />
+              )}
               <p className="text-sm font-bold">{SETUP.stepOf(step)}</p>
             </div>
             <div aria-hidden="true" className="mb-6 mt-2 h-3 overflow-hidden rounded-full border border-line bg-white">
@@ -98,15 +158,31 @@ export default function Onboarding() {
               nextLabel={toReview ? SETUP.nextReview : SETUP.next}
             />
           )}
-          {step === 6 && (
-            <Review data={data} set={set} words={words} headingRef={heading} signedInPhone={signedInPhone} onGoto={change} onDone={finished} />
+          {step === REVIEW && (
+            <Review data={data} set={set} words={words} lang={lang} headingRef={heading} signedInPhone={signedInPhone} onGoto={change} onDone={onSaved} />
           )}
-          {step === 7 && result && (
-            <Done
+          {step === ACCOUNTS && signup && (
+            <AccountsStep
+              data={data}
+              set={set}
               words={words}
+              lang={lang}
               host={host}
               headingRef={heading}
-              elderId={result.elderId}
+              elderId={signup.elderId}
+              token={signup.token}
+              onFinish={finish}
+              beforeLeave={beforeLeave}
+            />
+          )}
+          {step === DONE_STEP && result && (
+            <Done
+              words={words}
+              lang={lang}
+              host={host}
+              headingRef={heading}
+              elderId={signup?.elderId}
+              token={signup?.token}
               phone={result.phone}
               callId={result.callId}
               reason={result.reason}
