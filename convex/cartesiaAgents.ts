@@ -3,14 +3,14 @@
 // same template for all (lib/prompts/agent.ts); each call fills in its goal and context.
 //
 //   npx convex run cartesiaAgents:syncAgent                            every character (create if missing)
-//   npx convex run cartesiaAgents:syncAgent '{"characterId":"pip"}'    one character
+//   npx convex run cartesiaAgents:syncAgent '{"characterId":"oscar"}'  one character
 //   npx convex run cartesiaAgents:syncAgent '{"inbound":true,"assignNumber":true}'
 //                                    inbound agent + lookup_caller tool (create if missing), and
 //                                    route the number's inbound calls to it (lib/prompts/inbound.ts)
 //
 // Agent ids live in the characterAgents table (written here, read by cartesia.startCall), so
 // a new agent needs no env change. Non-English characters need their voice env var set (a
-// voice in their language; never Pip's English one).
+// voice in their language; never an English one).
 // Env: CARTESIA_API_KEY, CARTESIA_MODEL (optional), each character's voiceEnv; inbound:
 //      CARTESIA_TOOL_SECRET, CARTESIA_INBOUND_AGENT_ID + CARTESIA_LOOKUP_TOOL_ID (printed on create),
 //      CARTESIA_INBOUND_LANGUAGE (optional, en|es), CARTESIA_FROM_NUMBER_ID (assignNumber),
@@ -51,10 +51,13 @@ export const saveAgentId = internalMutation({
 });
 
 /** Prompt + settings for one character's agent. Same in-call model for all. */
-function agentSettings(c: CharacterConfig) {
+function agentSettings(c: CharacterConfig, existing: string | undefined) {
   const voiceId = process.env[c.voiceEnv];
-  // Without a voice Cartesia uses its default, which is English.
-  if (c.language !== "en" && !voiceId) throw new Error(`${c.voiceEnv} is not set (needed for ${c.id}'s ${c.language} voice)`);
+  // Without a voice a new agent gets Cartesia's default, which is English. An existing agent
+  // keeps the voice it has (no voice is sent), so linked agents need no env var.
+  if (!existing && c.language !== "en" && !voiceId) {
+    throw new Error(`${c.voiceEnv} is not set (needed for ${c.id}'s ${c.language} voice)`);
+  }
   const prompt = characterAgent(c);
   return {
     name: prompt.name,
@@ -73,7 +76,7 @@ type SyncResult = { characterId: string; agentId: string; created: boolean };
 async function syncOne(c: CharacterConfig, existing: string | undefined): Promise<{ agentId: string; created: boolean }> {
   const res = await cartesiaFetch(existing ? `/v1/agents/${existing}` : "/v1/agents", {
     method: existing ? "PATCH" : "POST",
-    body: buildAgentConfig(agentSettings(c)),
+    body: buildAgentConfig(agentSettings(c, existing)),
   });
   const label = `${c.id} agent`;
   if (classifyHttp(res.status) !== "ok") throw new Error(`${label}: ${httpError(res, true)}`);

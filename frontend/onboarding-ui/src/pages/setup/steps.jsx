@@ -1,19 +1,16 @@
-// Setup steps 1-5 (design-mockups/onboarding-c.html). Each is a form card: art, h1 (focused by
+// Setup steps 1, 2, 4 and 5 (design-mockups/onboarding-c.html; step 3 is LanguageStep.jsx). Each is a form card: art, h1 (focused by
 // Onboarding when the step opens), fields, then Continue. Props: data + set (the shared answers),
 // words (setupCopy), headingRef, onNext, nextLabel.
 import { useRef, useState } from 'react'
 import { looksLikeLinkedInProfile } from '../../api'
-import { DAYS, HOSTS, TIME_PRESETS, dayName, formatHour, hostForLanguage } from '../../copy'
+import { DAYS, TIME_PRESETS, dayName, formatHour } from '../../copy'
 import { SETUP } from '../../copy/setup'
 import {
   CalendarArt,
   CheckMark,
   ClockIcon,
   HelperAvatar,
-  JuanitoHost,
-  LanguageArt,
   NameArt,
-  PipHost,
   PorchArt,
   ProfileArt,
   SelfAvatar,
@@ -121,36 +118,6 @@ export function NameStep({ data, set, words, onNext, ...frame }) {
           setError('')
         }}
       />
-    </StepCard>
-  )
-}
-
-/** Step 3: language, which also picks the host. */
-export function LanguageStep({ data, set, words, onNext, ...frame }) {
-  const hostId = hostForLanguage(data.language)
-  const choose = (language) => set({ language })
-  return (
-    <StepCard {...frame} step={3} art={<LanguageArt className={ART} />} title={words.langTitle} onSubmit={onNext}>
-      <fieldset aria-describedby="lang-hint" className="flex w-full min-w-0 flex-col gap-4">
-        <legend className="mb-1 font-bold">{SETUP.language.legend}</legend>
-        <p id="lang-hint" className="text-sm text-muted">
-          {SETUP.language.hint}
-        </p>
-        <ChoiceCard name="language" value="en" checked={data.language === 'en'} onChange={choose} title={SETUP.language.en} sub={SETUP.language.enSub} />
-        <ChoiceCard name="language" value="es" checked={data.language === 'es'} onChange={choose} title={SETUP.language.es} sub={SETUP.language.esSub} />
-      </fieldset>
-      <div aria-live="polite" className="grid w-full gap-x-6 gap-y-4 rounded-inset border border-line bg-blush p-6 min-[544px]:grid-cols-[7rem_minmax(0,1fr)] min-[544px]:items-start">
-        {hostId === 'juanito' ? <JuanitoHost className="w-28" /> : <PipHost className="w-28" />}
-        <div className="flex min-w-0 flex-col items-start gap-4">
-          <span className="tag">
-            {words.hostTag}
-          </span>
-          <h2 className="text-[2rem]">{HOSTS[hostId].name}</h2>
-          <p>{words.hostDesc}</p>
-          <p className="border-l-4 border-pink pl-5 font-display italic leading-snug">{words.hostLine}</p>
-          {hostId === 'juanito' && <p className="text-sm text-muted">{words.hostTranslation}</p>}
-        </div>
-      </div>
     </StepCard>
   )
 }

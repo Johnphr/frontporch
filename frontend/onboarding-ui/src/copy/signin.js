@@ -27,7 +27,7 @@ export const SIGNIN = {
 
   phone: {
     title: "What's your phone number?",
-    lead: "This number is for signing in. You'll choose the number Pip calls in the next steps.",
+    lead: "This number is for signing in. You'll choose the number your host calls in the next steps.",
     country: 'Country',
     label: 'Phone number',
     hint: "We'll text a 6-digit code. Standard text rates may apply.",
@@ -70,7 +70,7 @@ export const SIGNIN = {
 
   done: {
     title: "You're in.",
-    lead: 'Next, a few short questions so Pip knows who to call and when.',
+    lead: 'Next, a few short questions so your host knows who to call and when.',
     next: 'Continue',
   },
 }

@@ -20,7 +20,7 @@ A / A+ / A++ text size. English only. Talks to `convex/signup.ts` and `convex/ac
 remembers `{ phone, elderId }` in `localStorage` (`src/lib/session.js`). Anyone with the link
 and an elderId can see that page, so keep the link private until real auth exists.
 `requestCall` only rings when the backend allows it (`PUBLIC_CALLS`); otherwise the last screen
-says when Pip will call.
+says when the host will call.
 
 ## Setup
 
@@ -32,7 +32,8 @@ npm run build
 ```
 
 `VITE_CONVEX_URL` is the Convex deployment URL (`https://<name>.convex.cloud`, in the Convex
-dashboard under Settings). It's read at build time. Without it, the landing page still shows,
+dashboard under Settings). It's read at build time. Optional `VITE_PORCH_NUMBER` (E.164) shows "Call your host any time at …" on Home and
+the last setup screen, for inbound calls; hidden when unset. Without it, the landing page still shows,
 and the other screens say "not set up yet".
 
 ## Deploy to Vercel

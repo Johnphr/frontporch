@@ -1,6 +1,6 @@
 // Phone calls through Cartesia Managed Agents: onboarding (slice 1) and weekly story calls
-// (slice 2), by his character (elders.characterId, else the default for elders.language: Pip
-// in English, Juanito in Spanish). One agent per character, defined in code and pushed by
+// (slice 2), by his character (elders.characterId, else the default for elders.language: Daniel
+// in English, Diana in Spanish). One agent per character, defined in code and pushed by
 // cartesiaAgents:syncAgent; the call's goal and context go in as dynamic variables.
 //
 //   npx convex run cartesia:startCall '{"elderId":"<id>"}' call him (add "force":true to skip

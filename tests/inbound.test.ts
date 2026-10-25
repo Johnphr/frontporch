@@ -152,13 +152,13 @@ test("unknown and error answers reveal nothing and share the known-caller field 
 });
 
 test("knownCallerResponse: persona + language + the outbound call's variables, all strings", () => {
-  const pip = getCharacter("pip")!;
+  const daniel = getCharacter("daniel")!;
   const vars = buildOnboardingVariables({ name: "Walter Smith" }, "", "en");
-  const res = knownCallerResponse({ kind: "onboarding", lang: "en", character: pip, variables: vars });
+  const res = knownCallerResponse({ kind: "onboarding", lang: "en", character: daniel, variables: vars });
   assert.equal(res.caller_known, "yes");
   assert.equal(res.call_kind, "onboarding");
-  assert.equal(res.speak_as, "Pip");
-  assert.equal(res.persona, pip.personality);
+  assert.equal(res.speak_as, "Daniel");
+  assert.equal(res.persona, daniel.personality);
   // the same variables the character agents get: first_name, goal, context
   assert.equal(res.first_name, "Walter");
   assert.ok(res.goal.length > 20);
@@ -168,10 +168,10 @@ test("knownCallerResponse: persona + language + the outbound call's variables, a
   const es = knownCallerResponse({
     kind: "story",
     lang: "es",
-    character: getCharacter("juanito")!,
+    character: getCharacter("diana")!,
     variables: { first_name: "Juan", goal: "Una buena historia.", context: "<question>\n¿Cómo empezó?\n</question>" },
   });
-  assert.equal(es.speak_as, "Juanito");
+  assert.equal(es.speak_as, "Diana");
   assert.equal(es.language, "es");
   assert.match(es.context, /¿Cómo empezó\?/);
   assert.equal(knownCallerResponse({ kind: "story", lang: "en", character: { name: "Pip" }, variables: {} }).persona, "none");
