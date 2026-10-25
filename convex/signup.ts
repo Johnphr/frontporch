@@ -21,6 +21,7 @@ import { action, internalMutation, internalQuery, mutation, query } from "./_gen
 import { callState, retryOffer, type CallState } from "./lib/callStatus";
 import { getCharacter, publicCharacters, type Character } from "./lib/characters";
 import { connectBlueskyAccount, type ConnectResult } from "./lib/accountConnect";
+import { startOAuthConnectFlow, type StartResult } from "./lib/oauthFlow";
 import type { FetchFn } from "./lib/blueskyClient";
 import { planNextCall } from "./lib/onboarding";
 import {
@@ -155,6 +156,30 @@ export const connectBluesky = action({
       },
       elderId,
       { handle, appPassword },
+    );
+  },
+});
+
+/**
+ * "Connect Threads" (later X): needs his sign-up token. Rate limited like connectBluesky and
+ * locked once he's active. Returns { ok, url } (the platform's consent page; the browser goes
+ * there and comes back through http.ts /oauth/<platform>/callback) or { ok: false, error: code }.
+ */
+export const startOAuthConnect = action({
+  args: { elderId: v.id("elders"), token: v.string(), platform: v.union(v.literal("threads"), v.literal("x")) },
+  handler: async (ctx, { elderId, token, platform }): Promise<StartResult> => {
+    const now = Date.now();
+    const tokenHash = (await signupTokenHash(token)) ?? "";
+    return startOAuthConnectFlow(
+      {
+        env: process.env,
+        reserve: () => ctx.runMutation(internal.oauth.reserveConnect, { elderId, tokenHash, platform, now }),
+        createState: async ({ state, codeVerifier }) => {
+          await ctx.runMutation(internal.oauth.createState, { elderId, platform, state, now, ...(codeVerifier ? { codeVerifier } : {}) });
+        },
+        warn: (message) => console.warn(message),
+      },
+      platform,
     );
   },
 });
