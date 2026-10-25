@@ -1,0 +1,37 @@
+# Every push to main: build the website and deploy it to Vercel production with a token, so it
+# doesn't matter who authored the commit (Vercel's Git integration blocks commits from authors
+# outside the Vercel account on the Hobby plan). Needs the GitHub Actions secret VERCEL_TOKEN
+# (vercel.com → Account Settings → Tokens). Org/project ids are not secrets.
+name: Deploy website to Vercel
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/onboarding-ui/**"
+      - ".github/workflows/vercel-deploy.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: vercel-deploy
+  cancel-in-progress: false
+
+env:
+  VERCEL_ORG_ID: team_pUV1v5rb8cpBoANFecOdSOC1
+  VERCEL_PROJECT_ID: prj_bphSDirU0Ln0c3flsgzac4TwwyD4
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend/onboarding-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm i -g vercel@latest
+      - run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+      - run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+      - run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
