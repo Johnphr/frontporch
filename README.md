@@ -46,6 +46,10 @@ with `openssl rand -base64 32`) and only decrypted inside the action that posts.
 coming soon. A shared demo account is used only with `DEMO_ACCOUNT_FALLBACK=on`. Details:
 [ARCHITECTURE.md → Accounts](ARCHITECTURE.md#accounts-his-own-bluesky-from-sign-up).
 
+**Threads** connects with a "Connect Threads" button (Meta's own consent page, no password
+typed here). The Meta app is in **development mode**, so only people added as Threads testers
+can connect. Setup: [ARCHITECTURE.md → Threads](ARCHITECTURE.md#threads-oauth-connect).
+
 ## Safety
 
 - Posts use **only what the person said**; the prompt forbids adding facts or advice.

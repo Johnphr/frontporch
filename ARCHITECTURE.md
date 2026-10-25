@@ -377,6 +377,28 @@ Each elder posts from **his own** account, connected on the sign-up page (step 4
 
 **Sign-up token.** `signup:register` (an action) creates his row and returns a random token (32 bytes, base64url); only its SHA-256 hash is stored (`elders.signupTokenHash`). `setCharacter`, `connectBluesky`, `setLinkedin` and `requestCall` all need it (constant-time hash compare), so knowing his phone number or elderId isn't enough to change his sign-up. A number that's already signed up gets no id and no token: re-issuing one would hand it to whoever types his number. The page keeps the token in `sessionStorage`. `register` also sets his weekly slot so `schedule.tick` can call him: `timezone` from the browser (checked with Intl; else from the phone's country: MX → America/Mexico_City, ES → Europe/Madrid, otherwise America/Los_Angeles), `callDay` = the sign-up weekday in that zone, `callHour` = 10.
 
+## Threads (OAuth connect)
+
+Threads (Meta) is connected with OAuth, not a password. The flow is generic so X can reuse it.
+
+- **Connect:** the sign-up page (step 4, "Connect Threads", `frontend/onboarding-ui/src/OAuthConnect.jsx`) calls `signup:startOAuthConnect({ elderId, token, platform: "threads" })`. That checks his sign-up token, the connect rate limit (5 an hour) and the active lock, stores a random `state` (32 bytes, base64url) in `oauthStates`, and returns Meta's consent URL. Meta sends him to `GET /oauth/threads/callback` (`convex/http.ts`). The callback consumes the state (single use, at most 15 minutes old, same platform), exchanges the code for a short-lived token, then a **60-day long-lived token**, and saves it on `elderAccounts`. Then it redirects to `SIGNUP_SITE_URL` with only `?connected=threads`, or `?connect_error=<code>&platform=threads` (Cancel is `denied`). No token, code, state or id ever goes in the redirect.
+- **Storage:** `elderAccounts.secret` holds the encrypted token JSON (same AES-GCM key and elderId + platform binding as Bluesky). `externalUserId` (his Threads user id), `handle` (username), `tokenExpiresAt` and `scopes` are stored in the clear.
+- **Use:** `lib/threadsLogin.threadsLoginForElder(ctx, elderId)` decrypts inside the caller's action. When the token expires in under 7 days and is over 24 hours old, it refreshes the token (`th_refresh_token`) and saves the new one. A missing key or a bad row returns null with a warning. An expired token marks the account `invalid`, and he reconnects.
+- **Code:** `lib/oauthPlatforms.ts` (adapter interface + registry; Threads only), `lib/oauthFlow.ts` (state rules, start, callback), `convex/oauth.ts` (DB), `lib/threadsClient.ts` (Graph calls), `lib/threadsPublishing.ts` (thread split + posting + delete), `lib/threadsEngagement.ts` + `convex/threadsEngagement.ts` (feedback), `lib/threadsQuestions.ts` + `convex/threadsQuestions.ts` (keyword search, gated).
+- **Posting:** the story becomes 2–5 posts of at most 500 characters (emoji count as their UTF-8 bytes): the hook first, and the AI disclosure at the end of the last post. Post 1 goes up first, then each next post as a reply to the previous one (`reply_to_id`). Each post is a container → wait for `FINISHED` (up to ~30 s) → `threads_publish`. A post that stops halfway keeps its posts, and a retry continues it. A publish timeout or 5xx is `maybe_posted`. Limits: 250 posts and 1,000 replies a day, and 100 deletes a day.
+- **Feedback:** each day, for each thread from the last 30 days: likes + reposts on the **root** post (insights), plus replies by others (`/conversation`, skipping his own and hidden ones, at most 20 × 500 characters). These go to `engagement.upsert` with `platform: "threads"`.
+
+**Creating the Meta app (once):**
+1. At developers.facebook.com → My Apps → Create app, pick the **"Access the Threads API"** use case.
+2. In the use case's permissions, add `threads_basic`, `threads_content_publish`, `threads_manage_replies`, `threads_read_replies`, `threads_manage_insights` and `threads_delete`.
+3. In Settings, set the **Redirect Callback URL** to `https://<deployment>.convex.site/oauth/threads/callback`. It must match exactly (the dashboard may add a trailing slash). Set the deauthorize and delete callbacks to the same host.
+4. In App roles → Roles, add each elder (and you) as a **Threads Tester**. Each person accepts on threads.com → Settings → Account → Website permissions → Invites.
+5. Set the env vars: `THREADS_APP_ID`, `THREADS_APP_SECRET` (the **Threads** app id and secret, not the Facebook ones) and `SIGNUP_SITE_URL`. Set `THREADS_REDIRECT_URI` only if the callback isn't on `CONVEX_SITE_URL`.
+
+The app stays in **development mode**, where only invited testers can connect. That's enough for the demo; letting anyone connect needs Meta's app review.
+
+**Keyword search (off):** finding strangers' questions (`/keyword_search`) needs `threads_keyword_search`, and that needs **app review**. Before review, a search only returns his own posts. `THREADS_KEYWORD_SEARCH=on` adds the scope at connect time and turns on `threadsQuestions:findForElder` and `threadsQuestions:postQuoteAnswer` (his answer as a quote post of the question, plus the disclosure line). It isn't wired into `threadReplies.ts` yet.
+
 ## Repo layout
 
 ```
@@ -426,6 +448,7 @@ tests/                          node --test + fixtures/
 |---|---|
 | `CARTESIA_API_KEY`, `CARTESIA_FROM_NUMBER_ID`, `CARTESIA_VOICE_ID` (optional, Pip), `CARTESIA_VOICE_ID_ES` (Juanito), `CARTESIA_MODEL` (optional). Agent ids live in the `characterAgents` table, not env. Inbound: `CARTESIA_INBOUND_AGENT_ID` + `CARTESIA_LOOKUP_TOOL_ID` (printed by `syncAgent '{"inbound":true}'`), `CARTESIA_TOOL_SECRET` (bearer for the lookup tool), `CARTESIA_INBOUND_LANGUAGE` (optional, default `en`), `INBOUND_SITE_URL` (only if `CONVEX_SITE_URL` isn't available) | Voice |
 | `ACCOUNTS_ENC_KEY`: encrypts each elder's connected account secret ([Accounts](#accounts-his-own-bluesky-from-sign-up)). Base64 of 32 random bytes: `openssl rand -base64 32`. Required before anyone connects Bluesky; changing it makes saved accounts unreadable (they must reconnect) | Data |
+| `THREADS_APP_ID`, `THREADS_APP_SECRET`: the Meta app's **Threads** id and secret ([Threads](#threads-oauth-connect)). `SIGNUP_SITE_URL`: the sign-up site, where the OAuth callback sends him back. `THREADS_REDIRECT_URI` (optional; default `CONVEX_SITE_URL` + `/oauth/threads/callback`). `THREADS_KEYWORD_SEARCH` (optional, default off; needs Meta app review) | Integrations |
 | `DEMO_ACCOUNT_FALLBACK`: optional, default off. `on` = an elder with no connected account uses the env demo account below | Integrations |
 | `BLUESKY_HANDLE`, `BLUESKY_APP_PASSWORD`, `BLUESKY_SERVICE` (optional), `REDDIT_POSTING` (optional, default off), `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USERNAME`, `REDDIT_PASSWORD`, `REDDIT_USER_AGENT` (optional): the **demo** account, used only with `DEMO_ACCOUNT_FALLBACK=on` (`BLUESKY_SERVICE` also applies to connected accounts) | Integrations |
 | `LINKEDIN_POSTING` (optional, default off; `on`/`true`/`1`/`yes` turns LinkedIn posting on), `LINKEDAPI_TOKEN`, `LINKEDAPI_ID_TOKEN`, `APIFY_TOKEN`, `STACKEXCHANGE_KEY` (optional), `POST_GUARD_MODE` (optional, default `enforce`), `AUTO_POST` (optional, default `on`; `off` = saved, not posted, for tests) | Integrations |
