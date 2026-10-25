@@ -21,7 +21,21 @@ const REASON = {
 }
 
 function Note({ children }) {
-  return <p className="rounded-inset bg-sage-tint px-5 py-4 text-sm">{children}</p>
+  return <p className="rounded-inset bg-wash px-5 py-4 text-sm motion-safe:animate-enter">{children}</p>
+}
+
+/** The call's current state at reading size. While the call is live a rose dot ripples, so "it is
+ *  happening" shows at a glance; each new state eases in (keyed by state). */
+function LiveStatus({ live, children }) {
+  return (
+    <p className="flex items-center gap-4 rounded-inset border border-line bg-white px-5 py-4 font-bold leading-snug motion-safe:animate-enter">
+      <span aria-hidden="true" className="relative grid h-4 w-4 flex-none place-items-center">
+        {live && <span className="absolute inset-0 rounded-full bg-rose motion-safe:animate-beacon" />}
+        <span className={`relative h-3.5 w-3.5 rounded-full ${live ? 'bg-rose' : 'bg-ink'}`} />
+      </span>
+      {children}
+    </p>
+  )
 }
 
 const timeOf = (ms) => new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
@@ -33,10 +47,16 @@ function useCallPanel(callId, reason) {
   const live = LIVE.has(state)
 
   let message = null
-  if (callId && !status) message = <Note>{CALL_STATUS.checking}</Note>
+  if (callId && !status) message = <LiveStatus live>{CALL_STATUS.checking}</LiveStatus>
   else if (state) {
     const text = CALL_STATUS[state] || CALL_STATUS.trouble
-    message = GOOD.has(state) ? <Note>{text}</Note> : <ErrorText>{text}</ErrorText>
+    message = GOOD.has(state) ? (
+      <LiveStatus key={state} live={live}>
+        {text}
+      </LiveStatus>
+    ) : (
+      <ErrorText key={state}>{text}</ErrorText>
+    )
   }
   let followUp = null
   if (status && !live && state !== 'done' && state !== 'none') {

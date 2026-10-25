@@ -164,7 +164,7 @@ export function WhenStep({ data, set, words, onNext, ...frame }) {
           </option>
         ))}
       </SelectField>
-      <p aria-live="polite" className="flex w-full items-center gap-4 rounded-inset bg-sage-tint px-6 py-5 font-display text-lg leading-snug">
+      <p aria-live="polite" className="flex w-full items-center gap-4 rounded-inset bg-wash px-6 py-5 font-display text-lg leading-snug">
         <ClockIcon />
         <span>{words.whenSummary(dayName(data.callDay), formatHour(data.callHour))}</span>
       </p>
@@ -224,7 +224,7 @@ export function LinkedinStep({ data, set, words, onNext, ...frame }) {
           setError('')
         }}
       />
-      <div className="flex w-full items-start gap-4 rounded-inset bg-sage-tint px-6 py-5 text-sm">
+      <div className="flex w-full items-start gap-4 rounded-inset bg-wash px-6 py-5 text-sm">
         <CheckMark />
         <p>
           <strong className="block text-[1.25rem]">{SETUP.linkedin.reassureTitle}</strong> {words.liReassure}

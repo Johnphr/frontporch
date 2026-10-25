@@ -1,6 +1,6 @@
-// Who is signed in on this device. Sign-in is not real yet (the text code is a mock in api.js),
-// so this only remembers the phone they typed and the elderId sign-up returned. Real auth will
-// replace it with a session token.
+// Who is signed in on this device. Sign-in is not real yet (no SMS or email check), so this only
+// remembers the phone they typed and the elderId sign-up returned. Real auth will replace it
+// with a session token.
 
 const KEY = 'fp-session'
 

@@ -49,7 +49,7 @@ function ScheduleCard({ elderId, profile, host, onSaved }) {
       <form noValidate onSubmit={submit} className="flex w-full flex-col items-start gap-7">
         <PillChoices name="day" legend={HOME.day} options={DAY_OPTIONS} value={day} onChange={setDay} />
         <PillChoices name="time" legend={HOME.time} options={timeOptions} value={hour} onChange={setHour} />
-        <p aria-live="polite" className="w-full rounded-inset bg-sage-tint px-5 py-4 font-display text-lg leading-snug">
+        <p aria-live="polite" className="w-full rounded-inset bg-wash px-5 py-4 font-display text-lg leading-snug">
           {HOME.summary(host, dayName(day), formatHour(hour))}
         </p>
         <Button type="submit" busy={busy} busyLabel={HOME.saving}>

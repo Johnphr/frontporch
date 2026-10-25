@@ -14,9 +14,9 @@ export function Loading({ label, cards = 2 }) {
       </p>
       {Array.from({ length: cards }, (_, i) => (
         <div key={i} aria-hidden="true" className="flex animate-pulse flex-col gap-4 rounded-card border border-line bg-white p-6 sm:p-10">
-          <span className="h-5 w-1/3 rounded-full bg-blush" />
-          <span className="h-5 w-full rounded-full bg-blush" />
-          <span className="h-5 w-2/3 rounded-full bg-blush" />
+          <span className="h-5 w-1/3 rounded-full bg-line" />
+          <span className="h-5 w-full rounded-full bg-line" />
+          <span className="h-5 w-2/3 rounded-full bg-line" />
         </div>
       ))}
     </div>

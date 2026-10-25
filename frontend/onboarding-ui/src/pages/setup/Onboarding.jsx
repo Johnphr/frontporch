@@ -32,6 +32,7 @@ export default function Onboarding() {
   }))
   const [step, setStep] = useState(1)
   const [toReview, setToReview] = useState(false)
+  const [forward, setForward] = useState(true) // which way the next step slides in
   const [result, setResult] = useState(null) // finishSetup() + phone, for Done
   const heading = useRef(null)
   const shown = useRef(step)
@@ -49,19 +50,23 @@ export default function Onboarding() {
   const words = setupCopy({ them: data.who === 'helper', name: data.name, host, hostId: data.host })
 
   function next() {
+    setForward(true)
     setToReview(false)
     setStep((s) => (toReview ? 6 : s + 1))
   }
   function back() {
     if (toReview) return next()
     if (step === 1) return go('/')
+    setForward(false)
     setStep((s) => s - 1)
   }
   function change(n) {
+    setForward(false)
     setToReview(true)
     setStep(n)
   }
   function finished(res) {
+    setForward(true)
     setResult(res)
     setStep(7)
   }
@@ -72,7 +77,7 @@ export default function Onboarding() {
   return (
     <>
       <Header />
-      <main id="main" className="mx-auto w-full max-w-[40rem] px-4 pb-16 pt-6 sm:px-6">
+      <main id="main" className="mx-auto w-full max-w-[40rem] overflow-x-clip px-4 pb-16 pt-6 sm:px-6">
         {step <= TOTAL_STEPS && (
           <>
             <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
@@ -87,7 +92,7 @@ export default function Onboarding() {
             </div>
           </>
         )}
-        <section key={step} className="motion-safe:animate-rise">
+        <section key={step} className={forward ? 'motion-safe:animate-rise' : 'motion-safe:animate-rise-back'}>
           {Step && (
             <Step
               data={data}

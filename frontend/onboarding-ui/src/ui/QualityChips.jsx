@@ -5,7 +5,7 @@ export function QualityChips({ qualities, className }) {
   return (
     <span className={cx('flex flex-wrap gap-2', className)}>
       {qualities.map((q) => (
-        <span key={q} className="rounded-full border border-line bg-sage-tint px-3 py-0.5 text-sm font-bold text-ink">
+        <span key={q} className="rounded-full border border-line bg-white px-3 py-0.5 text-sm font-bold text-ink">
           {q}
         </span>
       ))}

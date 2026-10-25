@@ -1,6 +1,7 @@
 // Step 6: everything at a glance, "Change" links back to each step, the phone edited in place, and
-// one Finish button (finish.js). With no phone yet (email sign-in) the phone editor starts open and
-// Finish needs a valid number.
+// one "Finish and call now" button (finish.js) with a heads-up that the phone rings right away.
+// The phone editor starts open, empty, when there is no phone yet (email sign-in) or when a helper
+// would otherwise have their own sign-in number called; Finish then needs a valid number.
 import { useEffect, useRef, useState } from 'react'
 import { HOSTS, dayName, errorText, formatHour } from '../../copy'
 import { SETUP, zoneName } from '../../copy/setup'
@@ -38,7 +39,9 @@ function ChangeLink({ label = R.change, what, ...rest }) {
 }
 
 export default function Review({ data, set, words, headingRef, signedInPhone, onGoto, onDone }) {
-  const [editing, setEditing] = useState(!data.phone)
+  // A helper signed in with their own number: ask for the other person's instead of calling it.
+  const helperOwnPhone = data.who === 'helper' && data.phone === signedInPhone && !data.phoneChecked
+  const [editing, setEditing] = useState(!data.phone || helperOwnPhone)
   const [country, setCountry] = useState(() => splitE164(data.phone).country)
   const [national, setNational] = useState('')
   const [phoneError, setPhoneError] = useState('')
@@ -81,7 +84,7 @@ export default function Review({ data, set, words, headingRef, signedInPhone, on
   function savePhone() {
     const phone = readPhone()
     if (!phone) return
-    set({ phone })
+    set({ phone, phoneChecked: true })
     closeEditor()
   }
 
@@ -90,7 +93,7 @@ export default function Review({ data, set, words, headingRef, signedInPhone, on
     if (editing) {
       phone = readPhone()
       if (!phone) return
-      set({ phone })
+      set({ phone, phoneChecked: true })
       setPhoneError('')
       setEditing(false)
     }
@@ -121,7 +124,7 @@ export default function Review({ data, set, words, headingRef, signedInPhone, on
       title={words.reviewTitle}
       headingRef={headingRef}
       onSubmit={finish}
-      nextLabel={R.finish}
+      nextLabel={words.finishLabel}
       busy={busy}
       busyLabel={R.finishing}
     >
@@ -135,14 +138,14 @@ export default function Review({ data, set, words, headingRef, signedInPhone, on
         </Row>
         <Row
           label={R.phone}
-          value={data.phone ? showPhone(data.phone) : null}
+          value={data.phone && !helperOwnPhone ? showPhone(data.phone) : null}
           sub={data.phone && !editing ? words.phoneNote(data.phone === signedInPhone) : null}
         >
           {!editing && (
             <ChangeLink id="phone-edit-btn" label={R.edit} what="phone" aria-expanded={false} aria-controls="phone-edit" onClick={openEditor} />
           )}
           {editing && (
-            <div id="phone-edit" className="flex basis-full flex-col gap-4 pt-3">
+            <div id="phone-edit" className="flex basis-full flex-col gap-4 pt-3 motion-safe:animate-enter">
               <SelectField
                 id="review-country"
                 label={R.country}
@@ -185,7 +188,7 @@ export default function Review({ data, set, words, headingRef, signedInPhone, on
                 <Button small onClick={savePhone}>
                   {R.save}
                 </Button>
-                {data.phone && (
+                {data.phone && !helperOwnPhone && (
                   <Button variant="link" small onClick={closeEditor}>
                     {R.cancel}
                   </Button>
@@ -204,6 +207,7 @@ export default function Review({ data, set, words, headingRef, signedInPhone, on
           <ChangeLink what="linkedin" onClick={() => onGoto(5)} />
         </Row>
       </dl>
+      <p className="w-full rounded-inset bg-wash px-5 py-4">{words.callHeadsUp}</p>
       <ErrorText id="finish-error">{errorText(error)}</ErrorText>
     </StepCard>
   )

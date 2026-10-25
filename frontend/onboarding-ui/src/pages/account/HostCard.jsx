@@ -48,7 +48,7 @@ export default function HostCard({ elderId, current, onSaved }) {
               key={id}
               className={cx(
                 'flex cursor-pointer flex-col items-center gap-2 rounded-card border-[3px] px-5 py-7 text-center transition-colors has-[:focus-visible]:outline has-[:focus-visible]:outline-4 has-[:focus-visible]:outline-offset-4 has-[:focus-visible]:outline-ink',
-                picked === id ? 'border-rose bg-blush' : 'border-line bg-white hover:border-pink',
+                picked === id ? 'border-rose bg-rose-wash' : 'border-line bg-white hover:border-rose',
               )}
             >
               <input type="radio" name="host" value={id} checked={picked === id} onChange={() => pick(id)} className="sr-only" />
@@ -69,7 +69,7 @@ export default function HostCard({ elderId, current, onSaved }) {
       {/* Live region stays mounted (sr-only when empty, so no extra gap) so the question is read out. */}
       <div aria-live="polite" className={changing ? 'w-full' : 'sr-only'}>
         {changing && (
-          <div className="flex w-full flex-col gap-4 rounded-inset border-2 border-pink bg-blush p-6">
+          <div className="flex w-full flex-col gap-4 rounded-inset bg-wash p-6 motion-safe:animate-enter">
             <p className="font-display text-lg font-semibold leading-snug">{HOME.switchTo(HOSTS[picked].name, newLanguage)}</p>
             <ErrorText>{error}</ErrorText>
             <div className="flex flex-wrap items-center gap-x-5 gap-y-4">

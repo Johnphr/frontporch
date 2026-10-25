@@ -1,68 +1,115 @@
-// Host avatars (flat, no outlines, palette colors only). Decorative: the host's name is always next to it.
-//   Daniel: rose face, soft smile.  Oscar: sage face, wide grin, little rose cap.
-//   Victoria: plum face, neat ink bob.  Diana: pink face, bright cheeks, a rose flower.
+// Host portraits (design: "Front Porch callers" mockup). Flat, no outlines, head and shoulders in a
+// soft circle. Each look follows the host's voice prompt and the qualities shown in the UI.
+// Decorative: the host's name is always next to it.
+//   Daniel (kind, easygoing, a little innocent): soft light-brown curls, rosy cheeks, sage sweater.
+//   Oscar (funny, down-to-earth, nostalgic): berry beanie, stubble, pink headphones, a wink.
+//   Victoria (attentive, courteous, precise; mid-30s): neat auburn bun, glasses, plum blazer, pearls.
+//   Diana (enthusiastic, grateful, humble; 25): long dark hair, big open smile, berry top, gold hoops.
+import { useId } from 'react'
 
-const Svg = ({ className = 'h-24 w-24', children }) => (
-  <svg viewBox="0 0 72 72" className={className} aria-hidden="true" focusable="false">
-    {children}
-  </svg>
-)
+export function Portrait({ bg, className = 'h-24 w-24', children }) {
+  const clip = useId()
+  return (
+    <svg viewBox="0 0 200 200" className={className} aria-hidden="true" focusable="false">
+      <clipPath id={clip}>
+        <circle cx="100" cy="100" r="100" />
+      </clipPath>
+      <g clipPath={`url(#${clip})`}>
+        <rect width="200" height="200" fill={bg} />
+        {children}
+      </g>
+    </svg>
+  )
+}
+
+const ROUND = { fill: 'none', strokeLinecap: 'round' }
 
 const DanielAvatar = ({ className }) => (
-  <Svg className={className}>
-    <circle cx="36" cy="36" r="36" fill="#F7D6DE" />
-    <circle cx="36" cy="39" r="24" fill="#A8475E" />
-    <path d="M22 30 Q28 17 44 18 Q52 19 52 26 Q42 22 22 30 Z" fill="#8E3A4F" />
-    <circle cx="28" cy="36" r="3.2" fill="#FFFFFF" />
-    <circle cx="44" cy="36" r="3.2" fill="#FFFFFF" />
-    <path d="M28 46 Q36 52 44 46" fill="none" stroke="#FFFFFF" strokeWidth="2.6" strokeLinecap="round" />
-  </Svg>
+  <Portrait bg="#E5EEE9" className={className}>
+    <path d="M30 200 Q34 150 100 146 Q166 150 170 200 Z" fill="#7E9E8B" />
+    <path d="M80 148 Q100 162 120 148" {...ROUND} stroke="#6E8C7A" strokeWidth="7" />
+    <rect x="89" y="122" width="22" height="30" rx="8" fill="#E2B08F" />
+    <ellipse cx="100" cy="94" rx="37" ry="43" fill="#EDC2A2" />
+    <g fill="#9C6A3F">
+      <circle cx="68" cy="68" r="14" />
+      <circle cx="83" cy="56" r="16" />
+      <circle cx="101" cy="52" r="16" />
+      <circle cx="119" cy="56" r="15" />
+      <circle cx="133" cy="68" r="13" />
+      <circle cx="64" cy="82" r="9" />
+      <circle cx="137" cy="82" r="9" />
+      <circle cx="93" cy="65" r="11" />
+      <circle cx="111" cy="65" r="11" />
+    </g>
+    <circle cx="86" cy="96" r="4" fill="#3A2A2E" />
+    <circle cx="114" cy="96" r="4" fill="#3A2A2E" />
+    <circle cx="76" cy="110" r="5.5" fill="#F2A6B6" />
+    <circle cx="124" cy="110" r="5.5" fill="#F2A6B6" />
+    <path d="M90 115 Q100 125 110 115" {...ROUND} stroke="#3A2A2E" strokeWidth="3.2" />
+  </Portrait>
 )
 
 const OscarAvatar = ({ className }) => (
-  <Svg className={className}>
-    <circle cx="36" cy="36" r="36" fill="#E6EEE9" />
-    <circle cx="36" cy="41" r="22" fill="#8FAE9B" />
-    <path d="M15 35 A21 19 0 0 1 57 35 Z" fill="#A8475E" />
-    <path d="M50 31 H63 A2.5 2.5 0 0 1 63 36 H50 Z" fill="#8E3A4F" />
-    <circle cx="29" cy="41" r="2.8" fill="#3A2A2E" />
-    <circle cx="43" cy="41" r="2.8" fill="#3A2A2E" />
-    <path d="M25 48 Q36 62 47 48 Z" fill="#3A2A2E" />
-    <path d="M28 49 H44 Q42 52 36 52 Q30 52 28 49 Z" fill="#FFFFFF" />
-  </Svg>
+  <Portrait bg="#E5EEE9" className={className}>
+    <path d="M30 200 Q34 150 100 146 Q166 150 170 200 Z" fill="#6E9580" />
+    <path d="M84 148 L100 164 L116 148" fill="#5E8470" />
+    <rect x="89" y="120" width="22" height="32" rx="8" fill="#7A5036" />
+    <path d="M68 140 Q68 168 100 170 Q132 168 132 140" {...ROUND} stroke="#3A2A2E" strokeWidth="6" />
+    <rect x="58" y="128" width="19" height="25" rx="8" fill="#F2B8C6" />
+    <rect x="123" y="128" width="19" height="25" rx="8" fill="#F2B8C6" />
+    <ellipse cx="100" cy="94" rx="37" ry="43" fill="#8A5A3B" />
+    <path d="M65 108 Q67 136 100 138 Q133 136 135 108 Q131 127 100 129 Q69 127 65 108 Z" fill="#3A2A2E" opacity="0.35" />
+    <path d="M61 80 Q59 36 100 34 Q141 36 139 80 Z" fill="#A8455E" />
+    <rect x="57" y="72" width="86" height="15" rx="7.5" fill="#86344A" />
+    <circle cx="100" cy="32" r="8" fill="#A8455E" />
+    <path d="M81 100 q5 3 10 0" {...ROUND} stroke="#3A2A2E" strokeWidth="3.4" />
+    <circle cx="114" cy="99" r="4" fill="#3A2A2E" />
+    <circle cx="76" cy="112" r="5" fill="#C9707F" opacity="0.7" />
+    <circle cx="124" cy="112" r="5" fill="#C9707F" opacity="0.7" />
+    <path d="M88 118 Q102 127 114 116" {...ROUND} stroke="#3A2A2E" strokeWidth="3.4" />
+  </Portrait>
 )
 
 const VictoriaAvatar = ({ className }) => (
-  <Svg className={className}>
-    <circle cx="36" cy="36" r="36" fill="#FCEEF1" />
-    <circle cx="36" cy="36" r="24" fill="#3A2A2E" />
-    <rect x="12" y="36" width="48" height="20" rx="9" fill="#3A2A2E" />
-    <circle cx="36" cy="41" r="18" fill="#5B474C" />
-    <path d="M18 38 C18 25 27 17 40 18 C35 24 27 32 18 38 Z" fill="#3A2A2E" />
-    <circle cx="30" cy="40" r="2.6" fill="#FFFFFF" />
-    <circle cx="42" cy="40" r="2.6" fill="#FFFFFF" />
-    <path d="M31 48 Q36 51 41 48" fill="none" stroke="#FFFFFF" strokeWidth="2.4" strokeLinecap="round" />
-    <circle cx="15" cy="50" r="2.4" fill="#F2B8C6" />
-  </Svg>
+  <Portrait bg="#FCE4E8" className={className}>
+    <path d="M30 200 Q34 150 100 146 Q166 150 170 200 Z" fill="#5A4549" />
+    <path d="M85 146 L100 174 L115 146 Z" fill="#FFFFFF" />
+    <path d="M78 146 L96 184 L86 200 L64 200 Z M122 146 L104 184 L114 200 L136 200 Z" fill="#4A373B" />
+    <rect x="89" y="122" width="22" height="28" rx="8" fill="#DDAE8E" />
+    <circle cx="100" cy="42" r="16" fill="#8E4A33" />
+    <circle cx="63" cy="110" r="3.6" fill="#FFFFFF" />
+    <circle cx="137" cy="110" r="3.6" fill="#FFFFFF" />
+    <ellipse cx="100" cy="94" rx="36" ry="42" fill="#EBC2A2" />
+    <path d="M63 96 Q58 52 100 50 Q142 52 137 96 Q132 72 116 64 Q96 72 72 68 Q65 78 63 96 Z" fill="#8E4A33" />
+    <circle cx="86" cy="96" r="3.6" fill="#3A2A2E" />
+    <circle cx="114" cy="96" r="3.6" fill="#3A2A2E" />
+    <circle cx="86" cy="96" r="10" fill="none" stroke="#5A4549" strokeWidth="2.6" />
+    <circle cx="114" cy="96" r="10" fill="none" stroke="#5A4549" strokeWidth="2.6" />
+    <path d="M96 95 Q100 92 104 95" fill="none" stroke="#5A4549" strokeWidth="2.6" />
+    <circle cx="76" cy="112" r="5" fill="#F2A6B6" />
+    <circle cx="124" cy="112" r="5" fill="#F2A6B6" />
+    <path d="M92 118 Q100 123 108 118" {...ROUND} stroke="#3A2A2E" strokeWidth="3" />
+  </Portrait>
 )
 
 const DianaAvatar = ({ className }) => (
-  <Svg className={className}>
-    <circle cx="36" cy="36" r="36" fill="#FCEEF1" />
-    <circle cx="35" cy="40" r="23" fill="#F2B8C6" />
-    <circle cx="27" cy="38" r="2.8" fill="#3A2A2E" />
-    <circle cx="43" cy="38" r="2.8" fill="#3A2A2E" />
-    <circle cx="22" cy="46" r="4" fill="#A8475E" opacity="0.45" />
-    <circle cx="48" cy="46" r="4" fill="#A8475E" opacity="0.45" />
-    <path d="M27 47 Q35 55 43 47" fill="none" stroke="#3A2A2E" strokeWidth="2.4" strokeLinecap="round" />
-    <path d="M44 24 Q47 15 56 16 Q53 24 44 24 Z" fill="#8FAE9B" />
-    <circle cx="54" cy="16" r="4" fill="#A8475E" />
-    <circle cx="61" cy="20" r="4" fill="#A8475E" />
-    <circle cx="59" cy="27" r="4" fill="#A8475E" />
-    <circle cx="51" cy="26" r="4" fill="#A8475E" />
-    <circle cx="49" cy="19" r="4" fill="#A8475E" />
-    <circle cx="55" cy="22" r="3" fill="#FCEEF1" />
-  </Svg>
+  <Portrait bg="#E5EEE9" className={className}>
+    <path d="M56 96 Q48 42 100 40 Q152 42 144 96 Q150 130 156 166 Q100 180 44 166 Q50 130 56 96 Z" fill="#3A2A2E" />
+    <path d="M30 200 Q34 152 100 148 Q166 152 170 200 Z" fill="#A8455E" />
+    <path d="M78 150 Q100 166 122 150" fill="#B87A54" />
+    <rect x="89" y="122" width="22" height="30" rx="8" fill="#AD7049" />
+    <circle cx="63" cy="112" r="5" fill="none" stroke="#D9A441" strokeWidth="2.6" />
+    <circle cx="137" cy="112" r="5" fill="none" stroke="#D9A441" strokeWidth="2.6" />
+    <ellipse cx="100" cy="94" rx="36" ry="42" fill="#B87A54" />
+    <path d="M63 94 Q60 52 104 48 Q86 62 78 96 Z" fill="#3A2A2E" />
+    <path d="M100 48 Q140 50 138 94 Q128 64 100 57 Z" fill="#3A2A2E" />
+    <path d="M81 97 q5 -6 10 0" {...ROUND} stroke="#3A2A2E" strokeWidth="3.6" />
+    <path d="M109 97 q5 -6 10 0" {...ROUND} stroke="#3A2A2E" strokeWidth="3.6" />
+    <circle cx="75" cy="109" r="6" fill="#E58FA3" />
+    <circle cx="125" cy="109" r="6" fill="#E58FA3" />
+    <path d="M87 113 Q100 130 113 113 Z" fill="#7A2E40" />
+    <path d="M89 114 Q100 118 111 114 L110 117 Q100 121 90 117 Z" fill="#FFFFFF" />
+  </Portrait>
 )
 
 const AVATARS = { daniel: DanielAvatar, oscar: OscarAvatar, victoria: VictoriaAvatar, diana: DianaAvatar }

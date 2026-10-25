@@ -87,7 +87,7 @@ export default function SignIn() {
               {view === 'welcome' ? S.backHome : S.back}
             </Button>
 
-            <section key={view} className="flex w-full flex-col gap-6 motion-safe:animate-rise">
+            <section key={view} className={cx('flex w-full flex-col gap-6', view === 'welcome' ? 'motion-safe:animate-rise-back' : 'motion-safe:animate-rise')}>
               {view === 'welcome' && (
                 <>
                   {title(S.welcome.title)}

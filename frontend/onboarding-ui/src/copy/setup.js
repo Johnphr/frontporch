@@ -77,7 +77,6 @@ export const SETUP = {
     phoneMissing: 'Please add the phone number to call.',
     noLinkedin: "No profile. That's fine.",
     laterLinkedin: 'Not added yet. You can add it later.',
-    finish: 'Finish',
     finishing: 'Setting up…',
   },
 
@@ -124,6 +123,10 @@ export function setupCopy({ them, name, host, hostId }) {
       them ? `The number ${host} will call. Make sure it is ${n}'s phone.` : signedIn ? 'The number you signed in with.' : `The number ${host} will call.`,
     phoneHint: them ? `Enter ${n}'s number. ${host} will call it.` : `${host} will call this number.`,
     reviewLang: (languageName) => `${languageName}, with ${host}`,
+    finishLabel: them ? `Finish and call ${n} now` : 'Finish and call me now',
+    callHeadsUp: them
+      ? `${host} calls ${n} as soon as you finish. Make sure ${n} has the phone nearby.`
+      : `${host} calls you as soon as you finish. Keep your phone nearby.`,
     reviewWhen: (day, time, zone) => `Every ${day} at ${time}${zone ? `, ${zone}` : ''}`,
     doneCalling: (phone) => `${host} is calling ${them ? `${n} at ` : ''}${phone} now.`,
     doneWeekly: (day, time) => `${host} will call ${them ? n : 'you'} every ${day} at ${time}.`,
