@@ -1,6 +1,6 @@
 // First-time setup copy (design-mockups/onboarding-c.html). Most lines change between "you" and
 // the person's name / "their", depending on who is setting it up (step 1), so they are built by
-// setupCopy({ them, name, host }).
+// setupCopy({ them, name, host, hostId }).
 
 export const TOTAL_STEPS = 6
 
@@ -34,11 +34,12 @@ export const SETUP = {
 
   language: {
     legend: 'Language',
-    hint: 'Each host speaks one language, so choosing a language also picks the host.',
+    hint: 'Each host speaks one language. Choose the language first, then the host.',
     en: 'English',
-    enSub: 'Calls with Pip',
+    enSub: 'Daniel, Oscar or Victoria',
     es: 'Spanish',
-    esSub: 'Español. Calls with Juanito',
+    esSub: 'Español. Calls with Diana',
+    hostLegend: 'Host',
   },
 
   when: {
@@ -58,7 +59,7 @@ export const SETUP = {
     change: 'Change',
     edit: 'Edit',
     // Read after "Change" / "Edit" by screen readers only.
-    what: { who: 'who is setting this up', name: 'name', phone: 'phone number', lang: 'language', when: 'call time' },
+    what: { who: 'who is setting this up', name: 'name', phone: 'phone number', lang: 'language and host', when: 'call time' },
     phoneLabel: 'Phone number',
     country: 'Country',
     save: 'Save number',
@@ -75,8 +76,16 @@ export const SETUP = {
   },
 }
 
+/** One sample opening line per host, in the host's language. */
+const SAMPLE_LINE = {
+  daniel: (n) => `“Hi ${n}, it's Daniel. No rush at all. What was your very first job?”`,
+  oscar: (n) => `“Hey ${n}, Oscar here. I bet you've got some stories. How did it all start?”`,
+  victoria: (n) => `“Good afternoon, ${n}. This is Victoria. May I ask how you first came to your profession?”`,
+  diana: (n) => `“¡Hola, ${n}! Soy Diana. Qué gusto hablar con usted. ¿Cómo empezó en su oficio?”`,
+}
+
 /** Lines that depend on step 1 (them = helping someone), the name and the host. */
-export function setupCopy({ them, name, host }) {
+export function setupCopy({ them, name, host, hostId }) {
   const n = (name || '').trim() || (them ? 'them' : 'there')
   const your = them ? 'their' : 'your'
   return {
@@ -86,17 +95,11 @@ export function setupCopy({ them, name, host }) {
     nameLabel: them ? 'Their name' : 'Your name',
     nameHint: `The name ${them ? 'they like' : 'you like'} to be called. ${host} will use it on every call.`,
     nameMissing: them ? 'Please enter their name.' : `Please tell us what ${host} should call you.`,
-    langTitle: them ? `Which language should ${n}'s calls be in?` : 'Which language would you like your calls in?',
+    langTitle: them ? `Choose ${n}'s language and host` : 'Choose your language and host',
     hostTag: them ? `${n}'s host` : 'Your host',
-    hostDesc:
-      host === 'Juanito'
-        ? 'Courteous and formal. Speaks Latin American Spanish and always says “usted.”'
-        : 'Warm and curious. Asks one question at a time and loves the details.',
-    hostLine:
-      host === 'Juanito'
-        ? `“Buenas tardes, ${n}. Soy Juanito. ¿Me cuenta usted cómo empezó en su oficio?”`
-        : `“Hi ${n}, it's Pip. I'd love to hear how you got started. What was your very first job?”`,
-    hostTranslation: `In English: “Good afternoon, ${n}. This is Juanito. Would you tell me how you got started in your trade?”`,
+    hostLine: (SAMPLE_LINE[hostId] || SAMPLE_LINE.daniel)(n),
+    hostTranslation:
+      hostId === 'diana' ? `In English: “Hello, ${n}! This is Diana. It's so nice to talk with you. How did you get started in your trade?”` : '',
     whenTitle: them ? `When should ${host} call ${n}?` : `When should ${host} call?`,
     whenSummary: (day, time) => `${host} will call ${them ? `${n} ` : ''}every ${day} at ${time}.`,
     reviewTitle: them ? `Does this look right for ${n}?` : 'Does this look right?',

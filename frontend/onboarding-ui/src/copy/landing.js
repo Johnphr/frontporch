@@ -2,7 +2,7 @@
 
 export const HERO = {
   title: 'Tell your work stories over the phone.',
-  lead: 'Pip calls you. You talk. We share your stories on your own social accounts, in your words.',
+  lead: 'Your host calls you. You talk. We share your stories on your own social accounts, in your words.',
   cta: 'Get your first call',
   family: 'Setting this up for a parent? Start here.',
   art: 'An older woman relaxing on a sofa, talking on the phone, next to a lamp and a plant',
@@ -23,12 +23,12 @@ export const HOW = {
       body: 'Enter a name, a phone number and a good time to call. A family member or friend can do this part.',
     },
     {
-      title: 'Pip calls to get to know you.',
-      body: 'On the first call, Pip asks about your field, your specialty and how your career went. Take your time.',
+      title: 'Your host calls to get to know you.',
+      body: 'On the first call, Daniel, Oscar, Victoria or Diana asks about your field, your specialty and how your career went. Take your time.',
     },
     {
       title: 'Each week, a few questions. Your stories go online.',
-      body: 'Pip asks a few short, open questions and lets you talk. What you say becomes a post on your own accounts, in your own words.',
+      body: 'Your host asks a few short, open questions and lets you talk. What you say becomes a post on your own accounts, in your own words.',
     },
   ],
 }
@@ -44,13 +44,13 @@ export const PROMISES = {
   lead: 'Your name goes on these posts, so we take that seriously.',
   items: [
     { title: 'Your own words.', body: 'Posts are built from what you said on the call, the way you said it.' },
-    { title: 'Checked before it goes out.', body: 'Every post is checked against the call. Pip never adds facts and never gives advice.' },
+    { title: 'Checked before it goes out.', body: 'Every post is checked against the call. Your host never adds facts and never gives advice.' },
     { title: 'Clearly labeled.', body: 'Every post says it was written up with AI from a phone call.' },
   ],
 }
 
 export const QUESTIONS = {
-  title: 'Questions Pip might ask',
+  title: 'Questions your host might ask',
   lead: 'Short, open questions. There are no wrong answers, and you can always say “next question.”',
   items: [
     'What was the first job that made you feel like a professional?',
@@ -78,9 +78,9 @@ export const POST = {
 
 export const READERS = {
   title: 'Your readers write back',
-  lead: 'Pip reads the reactions and comments on your posts and brings them into your next call.',
-  pipLine: '“A reader asked how you priced bread back then. Would you tell me about that?”',
-  pipSaid: 'Pip, at the start of a weekly call',
+  lead: 'Your host reads the reactions and comments on your posts and brings them into your next call.',
+  hostLine: '“A reader asked how you priced bread back then. Would you tell me about that?”',
+  hostSaid: 'Oscar, at the start of a weekly call',
 }
 
 export const QUOTES = {
@@ -102,7 +102,7 @@ export const QUOTES = {
 export const FAMILY = {
   title: 'Setting this up for a parent?',
   lead: 'You can sign up someone you love in a few minutes. They never need to touch a screen.',
-  steps: ['Enter their name and phone number.', 'Pick a weekly time that suits them.', 'Let them know Pip will call.'],
+  steps: ['Enter their name and phone number.', 'Pick a weekly time that suits them.', 'Let them know their host will call.'],
   cta: 'Set up calls for someone else',
 }
 
@@ -113,7 +113,7 @@ export const WHY = {
 
 export const FINAL = {
   title: 'Ready for your first call?',
-  lead: 'Sign up for yourself or for someone you love. Pip will call at the time you choose.',
+  lead: 'Sign up for yourself or for someone you love. Your host will call at the time you choose.',
   cta: 'Get your first call',
   small: 'No app, no screen, no passwords.',
 }

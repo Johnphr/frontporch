@@ -7,7 +7,7 @@
 // doesn't lose it. The app password and the sign-up token are never in it (the token lives in
 // the session, lib/session.js).
 import { useEffect, useRef, useState } from 'react'
-import { HOSTS, hostForLanguage } from '../../copy'
+import { HOSTS } from '../../copy'
 import { SETUP, TOTAL_STEPS, setupCopy } from '../../copy/setup'
 import { go } from '../../lib/route'
 import { SETUP_KEY, loadSession } from '../../lib/session'
@@ -18,7 +18,8 @@ import AccountsStep from './Accounts'
 import Done from './Done'
 import Review from './Review'
 import { placeCall } from './finish'
-import { LanguageStep, NameStep, WhenStep, WhoStep } from './steps'
+import { LanguageStep } from './LanguageStep'
+import { NameStep, WhenStep, WhoStep } from './steps'
 
 const STEPS = { 1: WhoStep, 2: NameStep, 3: LanguageStep, 4: WhenStep }
 const REVIEW = 5
@@ -55,6 +56,7 @@ export default function Onboarding() {
     who: null, // 'self' | 'helper'
     name: '',
     language: 'en',
+    host: 'daniel', // host id (copy.js HOSTS); the language's default until they pick one
     callDay: 'tuesday',
     callHour: 11,
     phone: signedInPhone, // E.164, '' until they add one
@@ -86,8 +88,8 @@ export default function Onboarding() {
   }, [step])
 
   const set = (patch) => setData((d) => ({ ...d, ...patch }))
-  const host = HOSTS[hostForLanguage(data.language)].name
-  const words = setupCopy({ them: data.who === 'helper', name: data.name, host })
+  const host = HOSTS[data.host].name
+  const words = setupCopy({ them: data.who === 'helper', name: data.name, host, hostId: data.host })
 
   function next() {
     setToReview(false)
@@ -171,6 +173,7 @@ export default function Onboarding() {
           {step === TOTAL_STEPS + 1 && result && (
             <Done
               words={words}
+              host={host}
               headingRef={heading}
               elderId={signup?.elderId}
               token={signup?.token}

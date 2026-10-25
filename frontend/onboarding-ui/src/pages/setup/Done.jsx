@@ -1,4 +1,4 @@
-// Last screen: "Pip is calling … now" (a call was placed) or "Pip will call … every Tuesday",
+// Last screen: "Oscar is calling … now" (a call was placed) or "Oscar will call … every Tuesday",
 // then where that call is (useCallStatus), "Try again" when the status allows it, what to expect,
 // and the way to their page.
 import { useState } from 'react'
@@ -8,6 +8,7 @@ import { showPhone } from '../../copy/signin'
 import { go } from '../../lib/route'
 import { GOOD, LIVE, useCallStatus } from '../../lib/useCallStatus'
 import { CheckMark, RingingArt } from '../../art/setup'
+import { CallUsLine } from '../../ui/CallUsLine'
 import { Button, Card, ErrorText } from '../../ui/controls'
 import { placeCall } from './finish'
 
@@ -59,7 +60,7 @@ function useCallPanel(callId, reason) {
   }
 }
 
-export default function Done({ words, elderId, token, phone, callDay, callHour, headingRef, ...first }) {
+export default function Done({ words, host, elderId, token, phone, callDay, callHour, headingRef, ...first }) {
   const [callId, setCallId] = useState(first.callId || null)
   const [reason, setReason] = useState(first.reason || null)
   const [busy, setBusy] = useState(false)
@@ -86,6 +87,7 @@ export default function Done({ words, elderId, token, phone, callDay, callHour, 
       </h1>
       <p className="text-lg">{calling ? words.doneSubCalling : words.doneSubWeekly}</p>
       {panel}
+      <CallUsLine host={host} />
       {canRetry && (
         <Button variant="secondary" busy={busy} busyLabel={SETUP.done.tryAgainBusy} onClick={tryAgain}>
           {CALL_STATUS.tryAgain}

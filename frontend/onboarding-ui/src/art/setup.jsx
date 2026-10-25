@@ -85,19 +85,6 @@ export function ReadingArt({ className, label }) {
   )
 }
 
-/** Envelope with a check badge ("Check your email"). */
-export const EmailSentArt = ({ className }) => (
-  <Svg viewBox="0 0 240 180" className={className}>
-    <circle cx="120" cy="88" r="82" fill="#F7D6DE" />
-    <ellipse cx="120" cy="164" rx="84" ry="7" fill="#3A2A2E" opacity="0.08" />
-    <rect x="46" y="58" width="148" height="98" rx="12" fill="#FFFFFF" />
-    <path d="M50 154 L106 106 L120 116 L134 106 L190 154 Z" fill="#FCEEF1" />
-    <path d="M46 70 A12 12 0 0 1 58 58 H182 A12 12 0 0 1 194 70 L120 120 Z" fill="#F2B8C6" />
-    <circle cx="186" cy="58" r="20" fill="#A8475E" />
-    <path d="M177 58.5 L183.5 65 L196 52" fill="none" stroke="#FFFFFF" strokeWidth="4.5" strokeLinecap="round" strokeLinejoin="round" />
-  </Svg>
-)
-
 // Setup steps
 /** Step 1: a house with a porch. */
 export const PorchArt = ({ className }) => (
@@ -178,31 +165,6 @@ export const LanguageArt = ({ className }) => (
     <path d="M244 160 L256 184 L224 166 Z" fill="#8FAE9B" />
     <rect x="164" y="126" width="84" height="8" rx="4" fill="#FFFFFF" />
     <rect x="164" y="140" width="60" height="8" rx="4" fill="#FFFFFF" opacity="0.75" />
-  </Svg>
-)
-
-/** Step 3 host card: Pip (rose, sound-wave smile) and Juanito (sage, bow tie). */
-export const PipHost = ({ className }) => (
-  <Svg viewBox="0 0 120 120" className={className}>
-    <ellipse cx="60" cy="112" rx="34" ry="5" fill="#3A2A2E" opacity="0.1" />
-    <circle cx="60" cy="58" r="46" fill="#A8475E" />
-    <circle cx="60" cy="64" r="34" fill="#F7D6DE" />
-    <circle cx="48" cy="58" r="4" fill="#3A2A2E" /><circle cx="72" cy="58" r="4" fill="#3A2A2E" />
-    <path d="M42 76 q4.5 -6 9 0 t9 0 t9 0 t9 0" fill="none" stroke="#A8475E" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
-    <path className={WAVE} d="M110 46 Q117 58 110 70" fill="none" stroke="#A8475E" strokeWidth="4" strokeLinecap="round" />
-  </Svg>
-)
-
-export const JuanitoHost = ({ className }) => (
-  <Svg viewBox="0 0 120 120" className={className}>
-    <ellipse cx="60" cy="114" rx="34" ry="5" fill="#3A2A2E" opacity="0.1" />
-    <circle cx="60" cy="56" r="44" fill="#8FAE9B" />
-    <circle cx="60" cy="60" r="32" fill="#E6EEE9" />
-    <circle cx="49" cy="56" r="4" fill="#3A2A2E" /><circle cx="71" cy="56" r="4" fill="#3A2A2E" />
-    <path d="M50 70 Q60 78 70 70" fill="none" stroke="#3A2A2E" strokeWidth="3.5" strokeLinecap="round" />
-    <path d="M60 102 L43 93 L43 111 Z" fill="#A8475E" />
-    <path d="M60 102 L77 93 L77 111 Z" fill="#A8475E" />
-    <circle cx="60" cy="102" r="5" fill="#5B474C" />
   </Svg>
 )
 

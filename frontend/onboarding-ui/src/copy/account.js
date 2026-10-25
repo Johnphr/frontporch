@@ -23,7 +23,8 @@ export const HOME = {
   chooseHost: 'Choose your host',
   callsIn: (language) => `Calls in ${language}`,
   currentHost: 'Current host',
-  switchTo: (host, language) => `Switch to ${host}? Calls will be in ${language} from next week.`,
+  /** language: the new call language, only when it changes. */
+  switchTo: (host, language) => `Switch to ${host}? ${host} will call from next week.${language ? ` Calls will be in ${language}.` : ''}`,
   hostSaved: (host) => `Saved. ${host} will call from next week.`,
   scheduleTitle: (host) => `When ${host} calls`,
   day: 'Day',

@@ -90,7 +90,7 @@ What we took from Oura: the paper canvas, the serif-for-feeling / sans-for-facts
 - **Paper** (`{colors.paper}`): page background, header, the "paper" bands, resting input fill.
 - **Surface** (`{colors.surface}`): cards, choice cards, pills, focused inputs.
 - **Blush** (`{colors.blush}`): hero and alternate bands, selected choice fill, tag fill, host preview panel.
-- **Sage tint** (`{colors.sage-tint}`): alternate bands, calm notes, live summaries ("Pip will call you on...").
+- **Sage tint** (`{colors.sage-tint}`): alternate bands, calm notes, live summaries ("Oscar will call you on...").
 - **Ink band** (`{colors.ink}`): the footer only.
 - **Line** (`{colors.line}`): 1px hairlines on paper and white.
 
@@ -117,7 +117,7 @@ What we took from Oura: the paper canvas, the serif-for-feeling / sans-for-facts
 | `title` | Literata | 32 to 44px | 400 | Sign-in, setup and done screen h1 |
 | `subhead` | Literata | 26 to 32px | 400 | Step titles, card h2s |
 | `statement` | Literata | 28 to 38px | 400 | Trust line, "what you need" list |
-| `quote` | Literata | 24 to 30px | 400 | Questions, quotes, Pip's line |
+| `quote` | Literata | 24 to 30px | 400 | Questions, quotes, the host's line |
 | `lg` | Atkinson | 24px | 400 | Lead paragraphs, field text |
 | `body` | Atkinson | 22px | 400 | Default text (never smaller for reading) |
 | `sm` | Atkinson | 18px | 400 | Hints, meta, footer |

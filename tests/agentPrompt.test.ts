@@ -38,15 +38,18 @@ for (const c of CHARACTERS) {
   });
 }
 
-test("Pip speaks English, Juanito speaks Latin American Spanish with usted", () => {
-  const pip = characterAgent(getCharacter("pip")!);
-  const juanito = characterAgent(getCharacter("juanito")!);
-  assert.match(pip.instructions, /You are Pip/);
-  assert.match(pip.instructions, /Speak English/);
-  assert.match(juanito.instructions, /You are Juanito/);
-  assert.match(juanito.instructions, /Latin American Spanish/);
-  assert.match(juanito.instructions, /usted/);
-  assert.match(juanito.greeting, /Le habla Juanito/);
+test("Daniel, Oscar and Victoria speak English, Diana speaks Latin American Spanish with usted", () => {
+  for (const id of ["daniel", "oscar", "victoria"]) {
+    const c = getCharacter(id)!;
+    const a = characterAgent(c);
+    assert.match(a.instructions, new RegExp(`You are ${c.name}`));
+    assert.match(a.instructions, /Speak English/);
+  }
+  const diana = characterAgent(getCharacter("diana")!);
+  assert.match(diana.instructions, /You are Diana/);
+  assert.match(diana.instructions, /Latin American Spanish/);
+  assert.match(diana.instructions, /usted/);
+  assert.match(diana.greeting, /Le habla Diana/);
 });
 
 test("agent config: name, voice-language and Spanish placeholders per character", () => {

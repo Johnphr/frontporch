@@ -2,7 +2,7 @@
 // one button that saves the sign-up (finish.js saveSetup) and goes on to the accounts step. With no
 // phone yet (email sign-in) the phone editor starts open and the button needs a valid number.
 import { useEffect, useRef, useState } from 'react'
-import { HOSTS, dayName, errorText, formatHour, hostForLanguage } from '../../copy'
+import { HOSTS, dayName, errorText, formatHour } from '../../copy'
 import { SETUP, zoneName } from '../../copy/setup'
 import { showPhone } from '../../copy/signin'
 import { COUNTRIES, digitsOf, formatNational, splitE164, toE164 } from '../../phone'
@@ -52,7 +52,7 @@ export default function Review({ data, set, words, headingRef, signedInPhone, on
     focusAfter.current = null
   }, [editing])
 
-  const hostId = hostForLanguage(data.language)
+  const hostId = data.host
   const day = dayName(data.callDay)
   const time = formatHour(data.callHour)
 

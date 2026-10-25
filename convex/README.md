@@ -23,6 +23,11 @@ the repo:
 npx convex env set OPENAI_API_KEY <value>
 ```
 
+**Deploys are automatic:** every push to `main` runs the tests, then `npx convex deploy`
+(`.github/workflows/convex-deploy.yml`, key = GitHub secret `CONVEX_DEPLOY_KEY`, today the dev
+deployment hip-dodo-105). Don't `npx convex dev` against that deployment: it overwrites `main`
+until the next push.
+
 ## Onboarding call (`cartesia.ts`, `pipeline.ts`, `llm.ts`; slice 1)
 
 Cartesia runs the call; Convex starts it, polls for the transcript, and has the LLM build
@@ -49,8 +54,8 @@ Local backend + `"use node"` files need Node 20–24: `npx -p node@24 -c 'npx co
 | Env var | Purpose |
 |---|---|
 | `CARTESIA_API_KEY`, `CARTESIA_FROM_NUMBER_ID` | Cartesia account + the phone number's id (`ap_...`); every character calls from it |
-| `CARTESIA_VOICE_ID`, `CARTESIA_MODEL` | optional Pip voice + in-call model (default `claude-haiku-4.5`) |
-| `CARTESIA_VOICE_ID_ES` | Juanito's Spanish voice; required before syncing him |
+| `CARTESIA_VOICE_ID_DANIEL`, `_OSCAR`, `_VICTORIA`, `CARTESIA_MODEL` | optional English voices (unset keeps the linked agent's current voice) + in-call model (default `claude-haiku-4.5`) |
+| `CARTESIA_VOICE_ID_DIANA` | Diana's Spanish voice; required before syncing her |
 | `OPENAI_API_KEY` | LLM jobs (profile, memories, post, planner) + memory embeddings; `OPENAI_MODEL` optional (default `gpt-6-luna`) |
 | `APIFY_TOKEN` | optional: prefill his LinkedIn background (needs `linkedinUrl` on the elder) |
 | `AUTO_POST` | optional, default `on`. `off` = story posts are saved but not posted anywhere (for tests); post one with `publish:publishPost` |

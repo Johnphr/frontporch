@@ -100,24 +100,6 @@ export const accountApi = {
   listPosts: (elderId, token) => call('action', 'listPosts', { elderId, token }, 'account'),
 }
 
-// Sign-in: the backend has no SMS codes or email links yet, so both are mocks (pages/SignIn.jsx).
-// Demo trigger: code "000000" -> BAD_CODE.
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-export const phoneVerification = {
-  async sendCode(/* e164 */) {
-    await wait(600)
-  },
-  async verifyCode(/* e164 */ _phone, code) {
-    await wait(600)
-    if (code === '000000') throw coded('BAD_CODE')
-  },
-}
-export const emailSignIn = {
-  async sendLink(/* email */) {
-    await wait(600)
-  },
-}
-
 /**
  * Same rules as convex/lib/signupRules.ts (normalizeBlueskyHandle, normalizeAppPassword), so the
  * form can say "check this" before sending. The backend still decides.

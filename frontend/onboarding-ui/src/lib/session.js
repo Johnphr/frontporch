@@ -1,4 +1,4 @@
-// Who is signed in on this device. Sign-in is not real yet (the text code is a mock in api.js),
+// Who is signed in on this device. Sign-in is not real yet (no code or link is asked for),
 // so this remembers the phone they typed, the elderId sign-up returned, and the sign-up token
 // (signup:register). Every call about his sign-up or his page sends the token; the elderId
 // alone is not enough. Real auth will replace both with a session.

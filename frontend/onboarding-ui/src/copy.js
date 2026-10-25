@@ -1,17 +1,41 @@
 // Shared interface copy (English only for now). Page-specific copy lives in src/copy/<page>.js.
 
 export const HOSTS = {
-  pip: { name: 'Pip', language: 'en', languageName: 'English', blurb: 'Warm and curious. Loves a good story and asks the follow-up question.' },
-  juanito: {
-    name: 'Juanito',
+  daniel: {
+    name: 'Daniel',
+    language: 'en',
+    languageName: 'English',
+    qualities: ['Kind', 'Easygoing', 'Good listener'],
+    blurb: 'A friendly young voice who lets you set the pace.',
+  },
+  oscar: {
+    name: 'Oscar',
+    language: 'en',
+    languageName: 'English',
+    qualities: ['Funny', 'Down-to-earth', 'Nostalgic'],
+    blurb: 'Relaxed and good-humored; loves hearing about the old days.',
+  },
+  victoria: {
+    name: 'Victoria',
+    language: 'en',
+    languageName: 'English',
+    qualities: ['Attentive', 'Courteous', 'Precise'],
+    blurb: 'Polite and formal; asks careful, thoughtful questions.',
+  },
+  diana: {
+    name: 'Diana',
     language: 'es',
     languageName: 'Spanish',
-    blurb: 'Courteous and calm. Speaks Latin American Spanish and always says "usted".',
+    qualities: ['Enthusiastic', 'Grateful', 'Humble'],
+    blurb: 'Warm and energetic; speaks Latin American Spanish.',
   },
 }
 
-/** Host for a call language (one language per host). */
-export const hostForLanguage = (language) => (language === 'es' ? 'juanito' : 'pip')
+/** Default host for a call language (each host speaks one language). */
+export const hostForLanguage = (language) => (language === 'es' ? 'diana' : 'daniel')
+
+/** Host ids that speak a language. */
+export const hostsForLanguage = (language) => Object.keys(HOSTS).filter((id) => HOSTS[id].language === language)
 
 export const DAYS = [
   { id: 'monday', short: 'Mon', name: 'Monday' },
@@ -52,7 +76,7 @@ export const NAV = {
   getStarted: 'Get your first call',
   skip: 'Skip to main content',
   back: 'Back',
-  alsoSpanish: 'Also in Spanish with Juanito.',
+  alsoSpanish: 'Also in Spanish with Diana.',
   builtAt: 'Built at Cal Hacks 13.0. Every post is labeled as written up with AI from a phone call.',
 }
 
@@ -65,7 +89,6 @@ export const SETUP_NEEDED = {
 // now; errorText(e, 'es') is ready for a Spanish page). Codes match the backend's.
 export const ERRORS = {
   en: {
-    BAD_CODE: "That code doesn't match. Check the text message and try again, or send a new code.",
     NAME_INVALID: 'Please enter a name (up to 100 characters).',
     PHONE_INVALID: 'Please check the phone number and try again.',
     LINKEDIN_INVALID: 'Please check the link. It should look like linkedin.com/in/your-name.',
@@ -80,7 +103,6 @@ export const ERRORS = {
     NETWORK: 'No connection. Check your internet and try again.',
   },
   es: {
-    BAD_CODE: 'Ese código no coincide. Revise el mensaje de texto e intente otra vez, o pida un código nuevo.',
     NAME_INVALID: 'Escriba un nombre (hasta 100 letras).',
     PHONE_INVALID: 'Revise el número de teléfono e intente otra vez.',
     LINKEDIN_INVALID: 'Revise el enlace. Debe verse como linkedin.com/in/su-nombre.',
