@@ -1,6 +1,6 @@
 // Shared parts of every character's agent prompt (English + Spanish), so the rules never
 // drift apart: who the character is, how they talk, and the guardrails. The instructions are
-// in English for the model; the persona says which language to speak. Juanito's register,
+// in English for the model; the persona says which language to speak. Diana's register,
 // fillers and guardrails come from Pablo's draft (Cartesia/system_prompt.md). Rules and sources:
 // voice/conversation-guide.md. Owner: Voice + Brain (tune on real calls, then re-sync).
 

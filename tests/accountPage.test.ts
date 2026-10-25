@@ -49,7 +49,7 @@ test("getProfile: wrong token or unknown elder -> null; never the phone", async 
   const { hash, elder } = await signedUp();
   assert.deepEqual(profileView(elder, hash), {
     name: "Walter",
-    characterId: "juanito",
+    characterId: "diana",
     callDay: "tuesday",
     callHour: 11,
     timezone: "America/Chicago",
@@ -63,7 +63,7 @@ test("getProfile: wrong token or unknown elder -> null; never the phone", async 
   assert.equal(profileView(null, hash), null);
   assert.ok(!("phone" in profileView(elder, hash)!));
   // No slot yet: the fields are left out.
-  assert.equal(profileView({ name: "Ann", signupTokenHash: hash }, hash)?.characterId, "pip");
+  assert.equal(profileView({ name: "Ann", signupTokenHash: hash }, hash)?.characterId, "daniel");
   assert.ok(!("callDay" in profileView({ name: "Ann", signupTokenHash: hash }, hash)!));
 });
 

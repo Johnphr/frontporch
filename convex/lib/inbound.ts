@@ -142,12 +142,12 @@ export type LookupResponse = Record<string, string>;
  * Field names match the known-caller answer so the prompt reads one shape.
  */
 export function unknownCallerResponse(): LookupResponse {
-  return { caller_known: "no", call_kind: "none", language: "en", speak_as: "Pip", first_name: "" };
+  return { caller_known: "no", call_kind: "none", language: "en", speak_as: "Daniel", first_name: "" };
 }
 
 /** Lookup failed on our side: the agent apologizes and ends the call (no details). */
 export function lookupErrorResponse(): LookupResponse {
-  return { caller_known: "error", call_kind: "none", language: "en", speak_as: "Pip", first_name: "" };
+  return { caller_known: "error", call_kind: "none", language: "en", speak_as: "Daniel", first_name: "" };
 }
 
 /**

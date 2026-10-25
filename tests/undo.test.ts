@@ -283,8 +283,8 @@ test("replies are never posted once taken down (the reply or its call's post), e
 });
 
 test("reply language: the call's character language, else elders.language", () => {
-  assert.equal(callLanguageOf({ characterId: "juanito", language: "en-US" }), "es");
-  assert.equal(callLanguageOf({ characterId: "pip", language: "es-MX" }), "en");
+  assert.equal(callLanguageOf({ characterId: "diana", language: "en-US" }), "es");
+  assert.equal(callLanguageOf({ characterId: "daniel", language: "es-MX" }), "en");
   assert.equal(callLanguageOf({ language: "es-MX" }), "es");
   assert.equal(callLanguageOf(null), "en");
 });
