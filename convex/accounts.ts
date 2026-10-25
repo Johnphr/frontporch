@@ -28,7 +28,13 @@ export const getForLogin = internalQuery({
   handler: async (ctx, { elderId, platform: p }) => {
     const row = await accountRow(ctx, elderId, p);
     if (!row) return null;
-    return { status: row.status, handle: row.handle ?? null, did: row.did ?? null, secret: row.secret ?? null };
+    return {
+      status: row.status,
+      handle: row.handle ?? null,
+      did: row.did ?? null,
+      secret: row.secret ?? null,
+      connectedAt: row.connectedAt ?? null, // lib/logins.ts: ever connected -> never the demo account
+    };
   },
 });
 

@@ -109,7 +109,13 @@ test("connect rate limit: 5 s cooldown, at most 5 an hour", () => {
 
 // ---------- logins lookup ----------
 
-type Row = { status: string; handle: string | null; did: string | null; secret: { ciphertext: string; iv: string } | null } | null;
+type Row = {
+  status: string;
+  handle: string | null;
+  did: string | null;
+  secret: { ciphertext: string; iv: string } | null;
+  connectedAt?: number | null;
+} | null;
 
 function fakeCtx(rows: Record<string, Row>) {
   const queries: Array<{ args: { elderId: string; platform: string } }> = [];
@@ -126,7 +132,19 @@ function fakeCtx(rows: Record<string, Row>) {
 
 async function connectedRow(elderId: string, password = APP_PASSWORD, key = KEY): Promise<Row> {
   const secret = await encryptSecret(await loadAccountKey(key), password, elderId, "bluesky");
-  return { status: "connected", handle: "walter.bsky.social", did: "did:plc:walter", secret };
+  return { status: "connected", handle: "walter.bsky.social", did: "did:plc:walter", secret, connectedAt: NOW };
+}
+
+/** Run `fn` with console.warn captured. */
+async function withWarnings<T>(fn: () => Promise<T>): Promise<{ result: T; warnings: string[] }> {
+  const warn = console.warn;
+  const warnings: string[] = [];
+  console.warn = (m: string) => warnings.push(m);
+  try {
+    return { result: await fn(), warnings };
+  } finally {
+    console.warn = warn;
+  }
 }
 
 const DEMO = { BLUESKY_HANDLE: "demo.bsky.social", BLUESKY_APP_PASSWORD: "demo-pass" };
@@ -148,32 +166,51 @@ test("logins: no account -> null; the demo account only with DEMO_ACCOUNT_FALLBA
   assert.equal((await blueskyLoginForElder(null, null, DEMO))?.identifier, "demo.bsky.social", "pure tests: no ctx, no elder");
 });
 
-test("logins: invalid or disconnected accounts aren't used", async () => {
+test("logins: invalid or disconnected accounts aren't used, and never fall back to the demo one", async () => {
   const row = await connectedRow("e1");
+  const flagOn = { ACCOUNTS_ENC_KEY: KEY, ...DEMO, DEMO_ACCOUNT_FALLBACK: "on" };
   for (const status of ["invalid", "disconnected"]) {
     const { ctx } = fakeCtx({ "e1/bluesky": { ...row!, status } });
     assert.equal(await blueskyLoginForElder(ctx, "e1", { ACCOUNTS_ENC_KEY: KEY }), null, status);
+    assert.equal(await blueskyLoginForElder(ctx, "e1", flagOn), null, `${status}, flag on`);
   }
   const { ctx } = fakeCtx({ "e1/bluesky": { ...row!, secret: null } });
-  assert.equal(await blueskyLoginForElder(ctx, "e1", { ACCOUNTS_ENC_KEY: KEY }), null);
+  assert.equal(await blueskyLoginForElder(ctx, "e1", flagOn), null);
+});
+
+test("logins: a row with only failed connect attempts (never connected) may use the demo account", async () => {
+  const { ctx } = fakeCtx({ "e1/bluesky": { status: "disconnected", handle: null, did: null, secret: null, connectedAt: null } });
+  assert.equal((await blueskyLoginForElder(ctx, "e1", { ...DEMO, DEMO_ACCOUNT_FALLBACK: "on" }))?.identifier, "demo.bsky.social");
+  assert.equal(await blueskyLoginForElder(ctx, "e1", DEMO), null, "flag off");
 });
 
 test("logins: a secret that won't decrypt -> null, never the demo account", async () => {
   const { ctx } = fakeCtx({ "e1/bluesky": await connectedRow("e2") }); // moved from e2
-  const warn = console.warn;
-  const warnings: string[] = [];
-  console.warn = (m: string) => warnings.push(m);
-  try {
-    assert.equal(await blueskyLoginForElder(ctx, "e1", { ACCOUNTS_ENC_KEY: KEY, ...DEMO, DEMO_ACCOUNT_FALLBACK: "on" }), null);
-  } finally {
-    console.warn = warn;
-  }
+  const { result, warnings } = await withWarnings(() =>
+    blueskyLoginForElder(ctx, "e1", { ACCOUNTS_ENC_KEY: KEY, ...DEMO, DEMO_ACCOUNT_FALLBACK: "on" }),
+  );
+  assert.equal(result, null);
   assert.ok(warnings.length === 1 && !warnings[0].includes(APP_PASSWORD));
 });
 
-test("logins: his account but no ACCOUNTS_ENC_KEY is a clear error", async () => {
+test("logins: missing or bad ACCOUNTS_ENC_KEY -> a fixed warning and null, not a throw, not the demo account", async () => {
   const { ctx } = fakeCtx({ "e1/bluesky": await connectedRow("e1") });
-  await assert.rejects(blueskyLoginForElder(ctx, "e1", { ...DEMO, DEMO_ACCOUNT_FALLBACK: "on" }), AccountKeyError);
+  for (const key of [undefined, "short", OTHER_KEY]) {
+    const { result, warnings } = await withWarnings(() =>
+      blueskyLoginForElder(ctx, "e1", { ...DEMO, DEMO_ACCOUNT_FALLBACK: "on", ...(key ? { ACCOUNTS_ENC_KEY: key } : {}) }),
+    );
+    assert.equal(result, null, String(key));
+    assert.equal(warnings.length, 1);
+    assert.ok(!warnings[0].includes(APP_PASSWORD) && !warnings[0].includes(OTHER_KEY));
+  }
+});
+
+test("logins: a failed account lookup -> null, not a throw, not the demo account", async () => {
+  const ctx = { runQuery: async () => Promise.reject(new Error("database said no")) };
+  const { result, warnings } = await withWarnings(() => blueskyLoginForElder(ctx, "e1", { ...DEMO, DEMO_ACCOUNT_FALLBACK: "on" }));
+  assert.equal(result, null);
+  assert.equal(warnings.length, 1);
+  assert.ok(!warnings[0].includes("database said no"));
 });
 
 test("logins: Reddit is per-elder coming soon: off unless REDDIT_POSTING, demo only with the flag", async () => {
@@ -195,6 +232,9 @@ test("logins: a refused Bluesky login marks his account invalid; other errors do
   assert.equal(await reportBlueskyLoginError(ctx, null, refused), false);
   assert.equal(await reportBlueskyLoginError(ctx, "e1", refused), true);
   assert.deepEqual(calls, [{ elderId: "e1", platform: "bluesky", error: "Bluesky login HTTP 401 (AuthenticationRequired)" }]);
+  const failing = { runMutation: async () => Promise.reject(new Error("boom")) };
+  const { result } = await withWarnings(() => reportBlueskyLoginError(failing, "e1", refused));
+  assert.equal(result, false, "a failed mark never throws");
 });
 
 // ---------- connectBluesky ----------

@@ -4,8 +4,13 @@
 // Bluesky: his own account, connected at sign-up (signup.connectBluesky -> elderAccounts).
 // Read with ctx.runQuery(accounts:getForLogin) and decrypted HERE, in the caller's action
 // (lib/accountCrypto.ts, key ACCOUNTS_ENC_KEY). Queries and mutations never decrypt.
+// Any problem reading it (no key, bad key, failed lookup) -> a fixed warning and null, never a throw.
 // The env demo account (BLUESKY_HANDLE / BLUESKY_APP_PASSWORD) is used only when
-// DEMO_ACCOUNT_FALLBACK=on and he has no connected account, or in pure tests (no ctx, no elder).
+// DEMO_ACCOUNT_FALLBACK=on and he never connected an account of his own (no row, or only
+// failed connect attempts), or in pure tests (no ctx, no elder). A revoked (invalid) or
+// disconnected account of his never falls back to the demo one.
+// When Bluesky refuses his login, callers pass the error to reportBlueskyLoginError, which
+// marks his account invalid until he reconnects.
 // Reddit: per-elder accounts are coming soon (no connect flow yet), so only the env demo
 // account, under the same rule, and only when REDDIT_POSTING=on.
 // Never log what these return.
@@ -36,7 +41,13 @@ export type RedditLogin = {
 };
 
 /** accounts.getForLogin's result. */
-type AccountForLogin = { status: string; handle: string | null; did: string | null; secret: SealedSecret | null } | null;
+type AccountForLogin = {
+  status: string;
+  handle: string | null;
+  did: string | null;
+  secret: SealedSecret | null;
+  connectedAt?: number | null; // set once a login was ever verified
+} | null;
 
 const GET_FOR_LOGIN = makeFunctionReference<"query", { elderId: string; platform: Platform }, AccountForLogin>("accounts:getForLogin");
 const MARK_INVALID = makeFunctionReference<"mutation", { elderId: string; platform: Platform; error?: string }, null>("accounts:markInvalid");
@@ -55,21 +66,34 @@ function envBlueskyLogin(env: Env): BlueskyLogin | null {
   return { service: blueskyService(env.BLUESKY_SERVICE), identifier, password };
 }
 
+/** Did he ever connect his own account? (A row with only failed connect attempts doesn't count.) */
+function everConnected(row: AccountForLogin): boolean {
+  return !!row && (row.status !== "disconnected" || (row.connectedAt ?? null) !== null);
+}
+
 /**
  * His Bluesky login, or null when it isn't set up. His own connected account wins; if he has
- * one but it can't be decrypted we return null (never someone else's account). Throws
- * AccountKeyError if he has an account and ACCOUNTS_ENC_KEY is missing or malformed.
+ * one but it can't be read (no key, wrong key, failed lookup) we warn and return null, never
+ * someone else's account. Never throws.
  */
 export async function blueskyLoginForElder(ctx: LoginCtx, elderId: string | null, env: Env = process.env): Promise<BlueskyLogin | null> {
   if (ctx && elderId) {
-    const row: AccountForLogin = await ctx.runQuery(GET_FOR_LOGIN, { elderId, platform: "bluesky" });
-    if (row && row.status === "connected" && row.secret && row.handle) {
-      const key = await loadAccountKey(env.ACCOUNTS_ENC_KEY);
+    let row: AccountForLogin;
+    try {
+      row = await ctx.runQuery(GET_FOR_LOGIN, { elderId, platform: "bluesky" });
+    } catch {
+      console.warn(`logins: elder ${elderId} Bluesky account lookup failed`);
+      return null;
+    }
+    if (everConnected(row)) {
+      if (!row || row.status !== "connected" || !row.secret || !row.handle) return null; // revoked or disconnected
       try {
+        const key = await loadAccountKey(env.ACCOUNTS_ENC_KEY);
         const password = await decryptSecret(key, row.secret, elderId, "bluesky");
         return { service: blueskyService(env.BLUESKY_SERVICE), identifier: row.handle, password };
       } catch {
-        console.warn(`logins: elder ${elderId} Bluesky secret could not be decrypted`);
+        // Fixed text: the error can name env vars.
+        console.warn(`logins: elder ${elderId} Bluesky secret could not be read (check ACCOUNTS_ENC_KEY)`);
         return null;
       }
     }
@@ -99,17 +123,27 @@ export function isBlueskyLoginRefused(error: unknown): boolean {
   );
 }
 
+type MutationCtx = { runMutation: (ref: any, args: any) => Promise<any> };
+
 /**
  * For callers: after a Bluesky call fails, pass the error here. If Bluesky refused his login,
  * his account is marked invalid (accounts.markInvalid) so we stop trying until he reconnects.
  * Returns whether it did. A no-op for the env demo account (he has no connected row).
+ * Never throws: a failed mark is only a warning.
  */
-export async function reportBlueskyLoginError(
-  ctx: { runMutation: (ref: any, args: any) => Promise<any> },
-  elderId: string | null,
-  error: unknown,
-): Promise<boolean> {
+export async function reportBlueskyLoginError(ctx: MutationCtx, elderId: string | null, error: unknown): Promise<boolean> {
   if (!elderId || !isBlueskyLoginRefused(error)) return false;
-  await ctx.runMutation(MARK_INVALID, { elderId, platform: "bluesky", error: (error as Error).message });
-  return true;
+  return markBlueskyLoginInvalid(ctx, elderId, (error as Error).message);
+}
+
+/** Same, when the caller already knows the login was refused (e.g. PostOutcome.loginRefused). */
+export async function markBlueskyLoginInvalid(ctx: MutationCtx, elderId: string | null, message: string): Promise<boolean> {
+  if (!elderId) return false;
+  try {
+    await ctx.runMutation(MARK_INVALID, { elderId, platform: "bluesky", error: message });
+    return true;
+  } catch {
+    console.warn(`logins: elder ${elderId} could not mark the Bluesky account invalid`);
+    return false;
+  }
 }
