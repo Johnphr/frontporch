@@ -20,6 +20,8 @@ export const X_AUTHORIZE_URL = "https://x.com/i/oauth2/authorize";
 export const X_TOKEN_URL = "https://api.x.com/2/oauth2/token";
 export const X_API = "https://api.x.com/2";
 export const X_SCOPES = ["tweet.read", "tweet.write", "users.read", "offline.access"];
+/** Without these the connect is no use to us (missing_scope). */
+export const REQUIRED_SCOPES = ["tweet.write", "offline.access"];
 export const X_CALLBACK_PATH = "/oauth/x/callback";
 /** A Connect click is good for this long. */
 export const STATE_MAX_AGE_MS = 15 * 60 * 1000;
@@ -43,17 +45,28 @@ export type OAuthAdapter = {
 export class XAuthError extends Error {
   status: number;
   code?: string;
-  constructor(step: string, status: number, code?: string) {
+  /** X's error_description talked about the token (not the token itself). */
+  aboutToken?: boolean;
+  constructor(step: string, status: number, code?: string, aboutToken?: boolean) {
     super(`X ${step} HTTP ${status}${code ? ` (${code})` : ""}`);
     this.name = "XAuthError";
     this.status = status;
     if (code) this.code = code;
+    if (aboutToken) this.aboutToken = true;
   }
 }
 
-/** The refresh token was revoked or already used: he has to connect again (unless another run just refreshed). */
+/**
+ * The refresh token was revoked or already used: he has to connect again (unless another run
+ * just refreshed). Only invalid_grant, or invalid_request about the token. A bare 401 is not.
+ */
 export function isRefreshRefused(error: unknown): boolean {
-  return error instanceof XAuthError && (error.code === "invalid_grant" || error.code === "invalid_request" || error.status === 401);
+  return error instanceof XAuthError && (error.code === "invalid_grant" || (error.code === "invalid_request" && error.aboutToken === true));
+}
+
+/** X refused our app (client id / secret), not his token: a setup problem, nobody to mark. */
+export function isRefreshSetupError(error: unknown): boolean {
+  return error instanceof XAuthError && error.status === 401 && error.code === "unauthorized_client";
 }
 
 // ---------- PKCE ----------
@@ -104,9 +117,12 @@ function basicAuth(c: XClient): string {
   return `Basic ${btoa(s)}`;
 }
 
-async function errorCode(res: { json(): Promise<unknown> }): Promise<string | undefined> {
-  const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
-  return typeof body?.error === "string" && /^[a-z_]{1,40}$/.test(body.error) ? body.error : undefined;
+/** X's OAuth error code, and whether its description is about the token. Never keeps the text. */
+async function errorInfo(res: { json(): Promise<unknown> }): Promise<{ code?: string; aboutToken: boolean }> {
+  const body = (await res.json().catch(() => null)) as { error?: unknown; error_description?: unknown } | null;
+  const code = typeof body?.error === "string" && /^[a-z_]{1,40}$/.test(body.error) ? body.error : undefined;
+  const aboutToken = typeof body?.error_description === "string" && /token/i.test(body.error_description);
+  return { ...(code ? { code } : {}), aboutToken };
 }
 
 /** The token endpoint's answer -> our shape. Throws if there's no access token. */
@@ -147,7 +163,10 @@ export function makeXAdapter(client: () => XClient | null, now: () => number = D
       headers: { Authorization: basicAuth(c), "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ ...form, client_id: c.clientId }).toString(),
     });
-    if (!res.ok) throw new XAuthError(step, res.status, await errorCode(res));
+    if (!res.ok) {
+      const info = await errorInfo(res);
+      throw new XAuthError(step, res.status, info.code, info.aboutToken);
+    }
     return parseTokenResponse(await res.json().catch(() => null), now());
   };
   return {
@@ -282,7 +301,8 @@ export async function runXCallback(deps: CallbackDeps, query: URLSearchParams): 
     const setup = error instanceof XAuthError && error.code === "missing_client";
     return callbackRedirect(deps.siteUrl, used.returnTo, { connect_error: setup ? "server_config" : "token_exchange" });
   }
-  if (tokens.scopes && !tokens.scopes.includes("tweet.write")) {
+  // tweet.write to post; offline.access for a refresh token (else X stops after 2 hours).
+  if (tokens.scopes && REQUIRED_SCOPES.some((s) => !tokens.scopes!.includes(s))) {
     return callbackRedirect(deps.siteUrl, used.returnTo, { connect_error: "missing_scope" });
   }
   try {

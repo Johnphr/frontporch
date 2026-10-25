@@ -8,7 +8,7 @@
 
 import { makeFunctionReference } from "convex/server";
 import { AccountKeyError, decryptSecret, encryptSecret, loadAccountKey, type Platform, type SealedSecret } from "./accountCrypto.ts";
-import { REFRESH_MARGIN_MS, isRefreshRefused, tokensFromJson, tokensToJson, xAdapter, type FetchFn, type OAuthAdapter, type XTokens } from "./xOAuth.ts";
+import { REFRESH_MARGIN_MS, isRefreshRefused, isRefreshSetupError, tokensFromJson, tokensToJson, xAdapter, type FetchFn, type OAuthAdapter, type XTokens } from "./xOAuth.ts";
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -43,7 +43,11 @@ export type XLoginOptions = {
   fetchFn?: FetchFn;
   now?: () => number;
   adapter?: OAuthAdapter;
+  sleep?: (ms: number) => Promise<void>;
 };
+
+/** After a refused refresh, how long to wait for a racing run to save its new tokens. */
+export const RACE_WAIT_MS = 2_000;
 
 type Opened = { row: NonNullable<XAccountForLogin> & { secret: SealedSecret }; tokens: XTokens };
 
@@ -69,6 +73,7 @@ export async function xLoginForElder(ctx: XLoginCtx, elderId: string, opts: XLog
   const fetchFn = opts.fetchFn ?? (fetch as unknown as FetchFn);
   const now = opts.now ?? Date.now;
   const adapter = opts.adapter ?? xAdapter;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
   let key: CryptoKey;
   try {
@@ -87,10 +92,23 @@ export async function xLoginForElder(ctx: XLoginCtx, elderId: string, opts: XLog
   try {
     refreshed = await adapter.refresh(fetchFn, first.tokens);
   } catch (error) {
+    if (isRefreshSetupError(error)) {
+      // Our app credentials, not his token: nothing to mark.
+      console.warn("xLogin: X refused the app credentials (unauthorized_client); check X_CLIENT_ID / X_CLIENT_SECRET");
+      return null;
+    }
     // Another run may have refreshed with the same (now used) refresh token: use what it saved.
-    const again = await open(ctx, key, elderId);
-    if (again && again.row.secret.iv !== first.row.secret.iv && usable(again, now())) return loginOf(again);
+    const changed = async () => {
+      const again = await open(ctx, key, elderId);
+      return again && again.row.secret.iv !== first.row.secret.iv && usable(again, now()) ? loginOf(again) : null;
+    };
+    const winner = await changed();
+    if (winner) return winner;
     if (isRefreshRefused(error)) {
+      // It may still be saving: wait once, look again, and only then give up on his login.
+      await sleep(RACE_WAIT_MS);
+      const late = await changed();
+      if (late) return late;
       await ctx.runMutation(MARK_INVALID, { elderId, expectedIv: first.row.secret.iv, error: "X refused the token refresh; he needs to connect X again." });
       return null;
     }
@@ -99,9 +117,17 @@ export async function xLoginForElder(ctx: XLoginCtx, elderId: string, opts: XLog
   }
 
   const tokens: XTokens = { accessToken: refreshed.accessToken, refreshToken: refreshed.refreshToken ?? first.tokens.refreshToken };
-  const secret = await encryptSecret(key, tokensToJson(tokens), elderId, X_PLATFORM);
-  const { saved } = await ctx.runMutation(SAVE_REFRESHED, { elderId, expectedIv: first.row.secret.iv, secret, tokenExpiresAt: refreshed.expiresAt });
-  if (saved) return { accessToken: tokens.accessToken, userId: first.row.externalUserId!, username: first.row.handle ?? "" };
+  const ours: XLogin = { accessToken: tokens.accessToken, userId: first.row.externalUserId!, username: first.row.handle ?? "" };
+  let saved: boolean;
+  try {
+    const secret = await encryptSecret(key, tokensToJson(tokens), elderId, X_PLATFORM);
+    ({ saved } = await ctx.runMutation(SAVE_REFRESHED, { elderId, expectedIv: first.row.secret.iv, secret, tokenExpiresAt: refreshed.expiresAt }));
+  } catch {
+    // X already rotated the refresh token: the new one is gone. This run can still post.
+    console.error(`xLogin: elder ${elderId} X REFRESH WORKED BUT SAVING THE NEW TOKENS FAILED; the new refresh token is lost, he may need to connect X again`);
+    return ours;
+  }
+  if (saved) return ours;
   // Lost the race: another run saved its tokens first. Use those (ours may already be revoked).
   const winner = await open(ctx, key, elderId);
   return winner && usable(winner, now()) ? loginOf(winner) : null;

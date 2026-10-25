@@ -23,6 +23,7 @@ import {
   parseLookupRequest,
   pickLiveCallForCaller,
   unknownCallerResponse,
+  sameSecret,
   verifyBearer,
   verifyLiveCall,
 } from "../convex/lib/inbound.ts";
@@ -290,4 +291,13 @@ test("buildAgentConfig attaches tools by id only when given", () => {
   const base = { name: "a", instructions: "b", initialMessage: "c" };
   assert.equal("tools" in buildAgentConfig(base).config, false);
   assert.deepEqual(buildAgentConfig({ ...base, tools: ["agent_tool_1"] }).config.tools, [{ id: "agent_tool_1" }]);
+});
+
+test("sameSecret: exact match only, nothing configured = false", () => {
+  assert.equal(sameSecret("k-123", "k-123"), true);
+  assert.equal(sameSecret("k-124", "k-123"), false);
+  assert.equal(sameSecret("k-12", "k-123"), false);
+  assert.equal(sameSecret("", ""), false);
+  assert.equal(sameSecret(null, "k"), false);
+  assert.equal(sameSecret("k", undefined), false);
 });

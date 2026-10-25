@@ -27,6 +27,9 @@ test("renderPostsPage: post text, question, held reason, escaped; key kept in li
   assert.match(html, /Held by fact-check/);
   assert.match(html, /&quot;won an award&quot; isn&#39;t in the call/);
   assert.match(html, /\?key=k%261&amp;check=p1|\?key=k%261&check=p1/);
+  // The paid fact-check is a POST button, never a plain link (previews and crawlers follow GETs).
+  assert.match(html, /<form method="post" action="\?key=k%261&amp;check=p1#p1"><button type="submit">Fact-check now<\/button><\/form>/);
+  assert.doesNotMatch(html, /<a href="[^"]*check=/);
   assert.match(html, /2026-10-24 18:30 UTC/);
 });
 

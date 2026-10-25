@@ -16,6 +16,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { httpAction, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { encryptSecret, loadAccountKey } from "./lib/accountCrypto";
+import { canSaveRefreshed, X_SAVE_STATUSES } from "./lib/tokenSave";
 import { X_PLATFORM, type XAccountForLogin } from "./lib/xLogin";
 import {
   checkXState,
@@ -127,13 +128,16 @@ export const getForLogin = internalQuery({
   },
 });
 
-/** Save refreshed tokens only if nobody else did since we read them (same IV). */
+/**
+ * Save refreshed tokens only if nobody else did since we read them (same IV). Also over
+ * "invalid" with the same IV: a racing run whose refresh lost marks it invalid, but ours worked.
+ */
 export const saveRefreshedTokens = internalMutation({
   args: { elderId: v.id("elders"), expectedIv: v.string(), secret: sealed, tokenExpiresAt: v.number() },
   handler: async (ctx, { elderId, expectedIv, secret, tokenExpiresAt }): Promise<{ saved: boolean }> => {
     const row = await xRow(ctx, elderId);
-    if (!row || row.status !== "connected" || row.secret?.iv !== expectedIv) return { saved: false };
-    await ctx.db.patch(row._id, { secret, tokenExpiresAt, lastCheckedAt: Date.now(), lastError: undefined });
+    if (!row || !canSaveRefreshed(row, expectedIv, X_SAVE_STATUSES)) return { saved: false };
+    await ctx.db.patch(row._id, { secret, tokenExpiresAt, status: "connected", lastCheckedAt: Date.now(), lastError: undefined });
     return { saved: true };
   },
 });

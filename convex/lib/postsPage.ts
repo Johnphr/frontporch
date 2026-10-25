@@ -171,7 +171,7 @@ function card(p: PagePost, key: string, check: PageCheck | undefined): string {
   ${p.error ? `<p class="err">${escapeHtml(p.error)}</p>` : ""}
   ${qualityBlock(p.quality)}${stored}${checkBlock(check?.postId === p.id ? check : undefined)}
   ${cmd ? `<p class="cmd">${p.status === "needs_review" ? "Approve and post" : "Post it"}: <code>${escapeHtml(cmd)}</code></p>` : ""}
-  <footer><a href="${href}">Fact-check now</a> <span class="id">${escapeHtml(p.id)}</span></footer>
+  <footer><form method="post" action="${escapeHtml(href)}"><button type="submit">Fact-check now</button></form> <span class="id">${escapeHtml(p.id)}</span></footer>
 </article>`;
 }
 
@@ -247,7 +247,7 @@ header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:14px}
 .post{white-space:pre-wrap;font-size:15.5px}
 .check{font-size:14px;border-left:3px solid var(--line);padding:4px 10px}.check.good{border-color:var(--good)}.check.bad{border-color:var(--bad)}
 .check ul{margin:4px 0 0;padding-left:18px}.err{color:var(--bad);margin:0;font-size:14px}
-footer{display:flex;gap:12px;font-size:13px;flex-wrap:wrap}a{color:inherit}.id{font-family:ui-monospace,monospace;font-size:12px}
+footer{display:flex;gap:12px;font-size:13px;flex-wrap:wrap}footer form{margin:0}a{color:inherit}.id{font-family:ui-monospace,monospace;font-size:12px}
 .thread{display:grid;gap:8px}.tpost{border-left:3px solid var(--line);padding:2px 10px}.tnum{color:var(--muted);font-size:12px}
 .pubs{margin:0;padding-left:18px;font-size:14px}.perr{color:var(--bad)}.s-posted{color:var(--good)}.s-maybe_posted{color:var(--bad)}
 code{font-family:ui-monospace,monospace;font-size:12px;word-break:break-all}.cmd{margin:0;font-size:13px}

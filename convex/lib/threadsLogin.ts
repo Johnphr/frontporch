@@ -3,7 +3,7 @@
 //
 // Reads oauth:getForLogin, decrypts HERE (in the caller's action, key ACCOUNTS_ENC_KEY), and
 // refreshes the token when it expires in under 7 days and is over 24 h old (Meta's rule),
-// saving the new one (oauth:updateTokens). A failed refresh keeps the current token while it
+// saving the new one (oauth:updateTokens, only over the token it refreshed from). A failed refresh keeps the current token while it
 // still works. Never throws for a missing key or a bad row: returns null with a warning.
 // Never log what this returns. Env: ACCOUNTS_ENC_KEY, THREADS_APP_ID, THREADS_APP_SECRET.
 
@@ -31,7 +31,7 @@ type Row = {
 } | null;
 
 const GET_FOR_LOGIN = makeFunctionReference<"query", { elderId: string; platform: "threads" }, Row>("oauth:getForLogin");
-const UPDATE_TOKENS = makeFunctionReference<"mutation", { elderId: string; platform: "threads"; secret: SealedSecret; tokenExpiresAt: number; now: number }, boolean>("oauth:updateTokens");
+const UPDATE_TOKENS = makeFunctionReference<"mutation", { elderId: string; platform: "threads"; expectedIv: string; secret: SealedSecret; tokenExpiresAt: number; now: number }, boolean>("oauth:updateTokens");
 const MARK_INVALID = makeFunctionReference<"mutation", { elderId: string; platform: "threads"; error?: string }, null>("oauth:markInvalid");
 
 export type ThreadsLoginOptions = {
@@ -70,7 +70,7 @@ export async function threadsLoginForElder(ctx: ThreadsLoginCtx, elderId: string
     await ctx.runMutation(MARK_INVALID, { elderId, platform: "threads", error: "Token expired" }).catch(() => null);
     return null;
   }
-  if (shouldRefresh(tokens, t)) tokens = await refreshAndSave(ctx, elderId, key, tokens, { env, now, warn, fetchFn: opts.fetchFn ?? (fetch as unknown as FetchFn) });
+  if (shouldRefresh(tokens, t)) tokens = await refreshAndSave(ctx, elderId, key, tokens, row.secret.iv, { env, now, warn, fetchFn: opts.fetchFn ?? (fetch as unknown as FetchFn) });
   return { accessToken: tokens.accessToken, userId: tokens.userId, ...(tokens.username ? { username: tokens.username } : {}) };
 }
 
@@ -80,6 +80,7 @@ async function refreshAndSave(
   elderId: string,
   key: CryptoKey,
   tokens: OAuthTokens,
+  expectedIv: string,
   o: { env: OAuthEnv; now: () => number; warn: (m: string) => void; fetchFn: FetchFn },
 ): Promise<OAuthTokens> {
   const adapter = threadsAdapter(o.env, o.now);
@@ -90,7 +91,8 @@ async function refreshAndSave(
   try {
     const fresh = await adapter.refresh(o.fetchFn, tokens);
     const secret = await sealTokens(key, fresh, elderId, "threads");
-    await ctx.runMutation(UPDATE_TOKENS, { elderId, platform: "threads", secret, tokenExpiresAt: fresh.expiresAt, now: o.now() });
+    // Saved only over the token we refreshed from (oauth.updateTokens checks the IV).
+    await ctx.runMutation(UPDATE_TOKENS, { elderId, platform: "threads", expectedIv, secret, tokenExpiresAt: fresh.expiresAt, now: o.now() });
     return fresh;
   } catch (error) {
     o.warn(`threadsLogin: elder ${elderId} refresh failed (${error instanceof OAuthHttpError ? error.message : "error"})`);

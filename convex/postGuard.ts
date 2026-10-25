@@ -3,7 +3,7 @@
 // Post guard: a fact-check that runs right before a post goes live.
 //
 // Posts are auto-published with no human approval, so this is the safety net.
-// The LLM (lib/openai.ts, OPENAI_MODEL) compares the final LinkedIn text with the call (the whole labelled
+// The LLM (lib/openai.ts, OPENAI_MODEL) compares the final post text with the call (the whole labelled
 // conversation, so facts Pip stated and he confirmed count as his) plus any
 // background we know he said before (profile, memories, call summary), and
 // flags anything he didn't say (facts, numbers, names, dates, places, advice),
@@ -14,7 +14,8 @@
 //   warn               post anyway, keep the issues on the row
 //   off                skip the check
 //
-// Called by linkedapi.createPost / previewPost / previewText:
+// Called by publish.ts (every story post, before any platform) and by linkedapi.previewPost /
+// previewText (the /posts "Fact-check now" button) and linkedapi.createPost (old LinkedIn rows):
 //   await ctx.runAction(internal.postGuard.checkPost, { postText, turns, context? })
 //
 // Env: OPENAI_API_KEY, OPENAI_MODEL (optional), POST_GUARD_MODE. Owner: Integrations.
@@ -28,7 +29,7 @@ import { normalizeJudgeResult, type GuardResult } from "./lib/postFlow";
 // Convex exposes env vars on process.env (declared so we don't need @types/node).
 declare const process: { env: Record<string, string | undefined> };
 
-const JUDGE_SYSTEM = `You are a strict fact-checker for LinkedIn posts written from an older professional's phone interview. The post will be published on his own LinkedIn account in his name.
+const JUDGE_SYSTEM = `You are a strict fact-checker for social posts written from an older professional's phone interview. The post will be published on his own social accounts (Bluesky, Threads, X) in his name.
 
 You get:
 - <transcript>: the whole call. ELDER is him; PIP is the AI interviewer. Speech-to-text, so expect small transcription errors.
