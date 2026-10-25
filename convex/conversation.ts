@@ -43,6 +43,7 @@ import {
 } from "./lib/planner";
 import { templateVariables } from "./lib/cartesia";
 import { buildOnboardingVariables, callCharacter } from "./lib/onboarding";
+import { quotableComments } from "./lib/readerSafety";
 import { asElderV2, isOnboarding, type ElderV2 } from "./lib/v2Fields";
 
 const bankItemValidator = v.object({
@@ -81,6 +82,7 @@ type PlanningContext = {
   recentlyUsedTopics: string[];
   feedbackLine: string;
   resonated: string;
+  readerComments: string;
 };
 
 const RECENTLY_USED_COUNT = 10;
@@ -126,6 +128,7 @@ export const getPlanningContext = internalQuery({
       recentlyUsedTopics,
       feedbackLine: meta?.feedbackLine ?? "",
       resonated: meta?.resonated ?? "",
+      readerComments: meta?.readerComments ?? "",
     };
   },
 });
@@ -153,10 +156,11 @@ export const replaceQueued = internalMutation({
     items: v.array(bankItemValidator),
     feedbackLine: v.optional(v.string()),
     resonated: v.optional(v.string()),
+    readerComments: v.optional(v.string()),
     /** when the refresh read its context: rows used since then must not come back queued */
     startedAt: v.optional(v.number()),
   },
-  handler: async (ctx, { elderId, items: ranked, feedbackLine, resonated, startedAt }) => {
+  handler: async (ctx, { elderId, items: ranked, feedbackLine, resonated, readerComments, startedAt }) => {
     const meta = await ctx.db
       .query("questionBankMeta")
       .withIndex("by_elder", (q) => q.eq("elderId", elderId))
@@ -192,6 +196,7 @@ export const replaceQueued = internalMutation({
       const fields = {
         feedbackLine: feedbackLine ?? "",
         resonated: resonated ?? "",
+        readerComments: readerComments ?? "",
         refreshedAt: Date.now(),
         ...(startedAt !== undefined ? { refreshStartedAt: startedAt } : {}),
       };
@@ -391,6 +396,7 @@ export const refreshQuestionBank = internalAction({
       startedAt,
       feedbackLine: feedback.line,
       resonated: feedback.resonated,
+      readerComments: quotableComments(feedbackPosts.flatMap((p) => p.comments)),
       items: ranked.map((r) => ({
         question: r.question,
         why: r.why,
@@ -488,7 +494,7 @@ export const planNextCall = internalAction({
     // Worked out by the last refresh (after the previous call / new comments).
     const feedbackLine = context.feedbackLine;
 
-    const plan = buildCallPlan({ kind: "story", bank, memories, feedbackLine });
+    const plan = buildCallPlan({ kind: "story", bank, memories, feedbackLine, readerComments: context.readerComments });
     return { plan, dynamicVariables: templateVariables(toPromptVariables(plan, elder, { avoid: avoidMemories, lang })) };
   },
 });

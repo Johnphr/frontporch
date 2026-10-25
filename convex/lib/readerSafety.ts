@@ -49,6 +49,24 @@ export function unsafeReaderText(text: string): boolean {
   return hasPhone(text) || RULES.some((r) => r.test(text));
 }
 
+/** Most comments a call gets word for word, and how long each may be. */
+export const MAX_QUOTED_COMMENTS = 5;
+const MAX_QUOTE_CHARS = 300;
+
+/**
+ * Readers' exact words for his next call (the host reads one only if he asks for the exact
+ * words). Rude ones stay (his choice to hear them); anything to click, dial or pay is dropped,
+ * like the rest of reader text. Newest last; one comment per line.
+ */
+export function quotableComments(comments: { text: string }[], max = MAX_QUOTED_COMMENTS): string {
+  return comments
+    .map((c) => c.text.replace(/\s+/g, " ").trim())
+    .filter((t) => t && t.length <= MAX_QUOTE_CHARS && !unsafeReaderText(t))
+    .slice(-max)
+    .map((t) => `- "${t}"`)
+    .join("\n");
+}
+
 export type Feedback = { resonated: string; readerQuestions: string[]; line: string };
 
 /** Drop unsafe reader questions; blank an unsafe line or resonated. */

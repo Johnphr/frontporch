@@ -297,6 +297,13 @@ test("avoid topics from later calls always reach the profile variable", () => {
   assert.match(vars.context, /<profile>\nTopics to avoid: Health\.\n<\/profile>/);
 });
 
+test("story call context carries readers' exact words in <reader_comments>, after <feedback>", () => {
+  const plan = buildCallPlan({ kind: "story", feedbackLine: "One reader was curious.", readerComments: '- "I dont believe this"' });
+  const ctx = toPromptVariables(plan, { name: "Walter", profile: null }).context;
+  assert.match(ctx, /<feedback>\nOne reader was curious\.\n<\/feedback>\n<reader_comments>\n- "I dont believe this"\n<\/reader_comments>/);
+  assert.equal(toPromptVariables(buildCallPlan({ kind: "story" }), { name: "W", profile: null }).context.includes("reader_comments"), false);
+});
+
 test("normalizePostDraft: skip, and the hook appears once despite spacing/punctuation", () => {
   assert.deepEqual(normalizePostDraft({ skip: true, reason: "only small talk", hook: "", text: "" }), {
     skip: true,

@@ -80,3 +80,13 @@ for (const lang of LANGS) {
     }
   });
 }
+
+test("reader comments: host and inbound agent quote them only when asked for the exact words", async () => {
+  const { inboundAgent } = await import("../convex/lib/prompts/inbound.ts");
+  for (const text of [...CHARACTERS.map((c) => characterAgent(c).instructions), inboundAgent(getCharacter("victoria")!).instructions]) {
+    assert.match(text, /<reader_comments> \(readers' exact words\)/);
+    assert.match(text, /never read them out unless they ask what a reader said exactly, word for word/);
+    assert.match(text, /if it's rude or insulting, say so kindly first/);
+  }
+  assert.ok(CONTEXT_PARTS.includes("reader_comments"));
+});

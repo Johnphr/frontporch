@@ -440,6 +440,8 @@ export default defineSchema({
     elderId: v.id("elders"),
     feedbackLine: v.string(), // one warm sentence Pip reads out ("" when nothing new)
     resonated: v.string(), // what readers liked lately ("" when unknown)
+    // Readers' exact words (lib/readerSafety.quotableComments), read out only if he asks.
+    readerComments: v.optional(v.string()),
     refreshedAt: v.number(), // epoch ms
     refreshStartedAt: v.optional(v.number()), // epoch ms: when the refresh that wrote this began
   }).index("by_elder", ["elderId"]),

@@ -362,6 +362,8 @@ export type CallPlan = {
   question?: string;
   memories: string[];
   feedback?: string;
+  /** Readers' exact words (lib/readerSafety.quotableComments): read out only if he asks. */
+  readerComments?: string;
   knownBackground?: string;
   /** questionBank row behind `question`; pass to conversation.markPlanUsed once the call starts */
   bankId?: string;
@@ -374,6 +376,7 @@ export function buildCallPlan(input: {
   bank?: { _id: string; question: string; topicKey: string }[];
   memories?: MemoryLike[];
   feedbackLine?: string;
+  readerComments?: string;
   knownBackground?: string;
 }): CallPlan {
   if (input.kind === "onboarding") {
@@ -393,6 +396,7 @@ export function buildCallPlan(input: {
     question: main ? main.question.trim() : FALLBACK_MAIN_QUESTION,
     memories: memoryLines,
     ...(input.feedbackLine?.trim() ? { feedback: input.feedbackLine.trim() } : {}),
+    ...(input.readerComments?.trim() ? { readerComments: input.readerComments.trim() } : {}),
     ...(main ? { bankId: main._id } : {}),
   };
 }
@@ -419,6 +423,7 @@ export function toPromptVariables(
       profile: formatProfile(elder.profile, opts.avoid ?? []),
       memories: plan.memories.map((m) => `- ${m}`).join("\n"),
       feedback: plan.feedback,
+      reader_comments: plan.readerComments,
       question: plan.question,
     }),
   };

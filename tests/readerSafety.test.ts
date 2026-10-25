@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { safeFeedback, unsafeReaderText } from "../convex/lib/readerSafety.ts";
+import { MAX_QUOTED_COMMENTS, quotableComments, safeFeedback, unsafeReaderText } from "../convex/lib/readerSafety.ts";
 
 test("normal reader questions and lines pass (EN + ES)", () => {
   for (const ok of [
@@ -71,4 +71,19 @@ test("safeFeedback drops unsafe questions and blanks an unsafe line / resonated"
   });
   assert.deepEqual(out, { resonated: "Readers loved the bakery story.", readerQuestions: ["How did you price bread?"], line: "" });
   assert.equal(safeFeedback({ resonated: "Readers want your email.", readerQuestions: [], line: "" }).resonated, "");
+});
+
+test("quotableComments: exact words (rude ones too), no links or contact asks, newest few", () => {
+  const out = quotableComments([
+    { text: "I dont believe this. Is full of shit" },
+    { text: "  You shoulve stayed\nin prison ashole " },
+    { text: "Great story, see more at www.example.com" },
+    { text: "DM me for a deal" },
+    { text: "x".repeat(301) }, // too long to quote whole: dropped, never cut
+  ]);
+  assert.equal(out, '- "I dont believe this. Is full of shit"\n- "You shoulve stayed in prison ashole"');
+  const many = Array.from({ length: 8 }, (_, i) => ({ text: `comment ${String.fromCharCode(97 + i)}` }));
+  assert.equal(quotableComments(many).split("\n").length, MAX_QUOTED_COMMENTS);
+  assert.match(quotableComments(many), /comment h"$/); // newest kept
+  assert.equal(quotableComments([]), "");
 });
