@@ -17,9 +17,18 @@ export const RINGING_TIMEOUT_SECONDS = 60;
 export const INACTIVITY_CHECK_IN_SECS = 30;
 export const INACTIVITY_END_CALL_SECS = 120;
 
-/** Poll budget: every 20 s for the first 3 min (so a failed dial shows fast), then every minute, ~61 min in total. */
-export const MAX_POLL_ATTEMPTS = 67;
-const FAST_POLLS = 9;
+/**
+ * Polling while a call is live (Cartesia has no call webhooks): every 15 s, or every 3 s with
+ * FAST_POST=on (the end of the call is seen within ~3 s). A Cartesia error (429 / 5xx /
+ * timeout) waits 3 intervals. Stops after MAX_POLL_MS from the first poll, or MAX_POLL_ATTEMPTS
+ * polls, whichever comes first, so a stuck call can't poll forever.
+ */
+export const POLL_INTERVAL_MS = 15_000;
+export const FAST_POLL_INTERVAL_MS = 3_000;
+export const POLL_RETRY_FACTOR = 3;
+export const MAX_POLL_MS = 65 * 60_000;
+/** ~70 min at 3 s; at 15 s MAX_POLL_MS stops it first. */
+export const MAX_POLL_ATTEMPTS = 1_400;
 /** Fewer words than this from him is a voicemail greeting or a dropped call, not an interview. */
 export const MIN_ELDER_WORDS = 30;
 const MAX_STORED_ERROR = 300;
@@ -99,12 +108,26 @@ export function isNoConversation(endReason: string | undefined, turns: Turn[]): 
   return words < MIN_ELDER_WORDS;
 }
 
-export function nextPollDelayMs(attempt: number): number {
-  return attempt < FAST_POLLS ? 20_000 : 60_000;
+export type PollOpts = { fast?: boolean; retry?: boolean };
+
+/** Wait before the next poll: 15 s (3 s fast); after a Cartesia error, 3x that. */
+export function nextPollDelayMs(_attempt: number, opts: PollOpts = {}): number {
+  const base = opts.fast ? FAST_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
+  return opts.retry ? base * POLL_RETRY_FACTOR : base;
 }
 
-export function shouldGiveUp(attempt: number): boolean {
-  return attempt >= MAX_POLL_ATTEMPTS;
+/** Stop polling: too many polls, or MAX_POLL_MS since the first one (`pollStartedAt`). */
+export function shouldGiveUp(attempt: number, pollStartedAt?: number, now?: number): boolean {
+  if (attempt >= MAX_POLL_ATTEMPTS) return true;
+  return attempt > 0 && pollStartedAt !== undefined && now !== undefined && now - pollStartedAt >= MAX_POLL_MS;
+}
+
+/** Cartesia's end time (ISO string) as epoch ms, when it gave a sane one. */
+export function parseEndTime(raw: unknown, now: number): number | undefined {
+  if (typeof raw !== "string" || !raw) return undefined;
+  const ms = Date.parse(raw);
+  // Ignore a clock far off ours: the timings would be nonsense.
+  return Number.isFinite(ms) && ms <= now + 60_000 && ms >= now - 2 * 60 * 60_000 ? ms : undefined;
 }
 
 /** HTTP status -> what to do. 0 = network error / timeout. */
@@ -212,10 +235,10 @@ export function startFailureStatus(httpStatus: number): "failed" | "start_unknow
 }
 
 export type PollOutcome =
-  | { kind: "pending"; liveStatus?: string }
+  | { kind: "pending"; liveStatus?: string; retry?: boolean }
   | { kind: "fatal"; error: string }
   | { kind: "timeout" }
-  | { kind: "finished"; transcript: Turn[]; summary?: string; endReason?: string; error?: string };
+  | { kind: "finished"; transcript: Turn[]; summary?: string; endReason?: string; error?: string; hungUpAt?: number };
 
 export type PollPlan = { patch: Record<string, unknown>; next: "poll" | "process" | null; delayMs: number };
 
@@ -227,18 +250,22 @@ const POLL_TIMEOUT_ERROR = "Stopped checking after about an hour; the call never
  * `ended` / `done` or double-count attempts.
  */
 export function planPollUpdate(
-  call: { status: string; pollAttempts?: number },
+  call: { status: string; pollAttempts?: number; pollStartedAt?: number },
   seenAttempts: number,
   outcome: PollOutcome,
   now: number,
+  opts: { fast?: boolean } = {},
 ): PollPlan | null {
   if (call.status !== "in_progress" || (call.pollAttempts ?? 0) !== seenAttempts) return null;
-  const base = { pollAttempts: seenAttempts + 1, lastPolledAt: now };
+  // The first poll (attempts reset to 0, e.g. inbound.attachCallId) starts the MAX_POLL_MS clock.
+  const started = seenAttempts === 0 || call.pollStartedAt === undefined ? { pollStartedAt: now } : {};
+  const base = { pollAttempts: seenAttempts + 1, lastPolledAt: now, ...started };
   switch (outcome.kind) {
     case "pending": {
       // Cartesia's documented live statuses only (shown on the sign-up page: dialing vs on the call).
       const live = outcome.liveStatus === "created" || outcome.liveStatus === "started" ? { liveStatus: outcome.liveStatus } : {};
-      return { patch: { ...base, ...live }, next: "poll", delayMs: nextPollDelayMs(seenAttempts + 1) };
+      const delayMs = nextPollDelayMs(seenAttempts + 1, { fast: opts.fast, retry: outcome.retry });
+      return { patch: { ...base, ...live }, next: "poll", delayMs };
     }
     case "fatal":
       return { patch: { ...base, status: "poll_error", error: outcome.error, endedAt: now }, next: null, delayMs: 0 };
@@ -247,7 +274,7 @@ export function planPollUpdate(
     case "finished": {
       // endedAt: the repeating-call loop counts its interval from here (lib/callLoop.ts).
       const patch: Record<string, unknown> = { ...base, status: "ended", transcript: outcome.transcript, endedAt: now };
-      for (const key of ["summary", "endReason", "error"] as const) {
+      for (const key of ["summary", "endReason", "error", "hungUpAt"] as const) {
         if (outcome[key] !== undefined) patch[key] = outcome[key];
       }
       return { patch, next: "process", delayMs: 0 };

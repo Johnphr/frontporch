@@ -4,7 +4,11 @@ import assert from "node:assert/strict";
 
 import {
   DEFAULT_MODEL,
+  FAST_POLL_INTERVAL_MS,
   MAX_POLL_ATTEMPTS,
+  MAX_POLL_MS,
+  POLL_INTERVAL_MS,
+  parseEndTime,
   buildAgentConfig,
   buildOutboundCallBody,
   isCallFinished,
@@ -77,9 +81,16 @@ test("isNoConversation: voicemail-like end reasons or no words from him", () => 
   assert.equal(isNoConversation(undefined, []), true);
 });
 
-test("shouldGiveUp at the poll limit", () => {
+test("shouldGiveUp at the poll limit, or MAX_POLL_MS after the first poll", () => {
   assert.equal(shouldGiveUp(MAX_POLL_ATTEMPTS - 1), false);
   assert.equal(shouldGiveUp(MAX_POLL_ATTEMPTS), true);
+  const t0 = 1_000_000;
+  assert.equal(shouldGiveUp(200, t0, t0 + MAX_POLL_MS - 1), false);
+  assert.equal(shouldGiveUp(200, t0, t0 + MAX_POLL_MS), true);
+  // attempts reset to 0 (a re-opened row) never times out on an old clock
+  assert.equal(shouldGiveUp(0, t0, t0 + 3 * MAX_POLL_MS), false);
+  // older rows without pollStartedAt: the attempt cap only
+  assert.equal(shouldGiveUp(500), false);
 });
 
 test("classifyHttp: auth/not-found stop, rate limit / server / network retry", () => {
@@ -94,13 +105,48 @@ test("clip keeps stored error text short", () => {
   assert.equal(clip("short"), "short");
 });
 
-test("nextPollDelayMs: every 20 s for the first 3 min, then every minute, about an hour in total", () => {
-  assert.equal(nextPollDelayMs(0), 20_000);
-  assert.equal(nextPollDelayMs(8), 20_000);
-  assert.equal(nextPollDelayMs(9), 60_000);
-  assert.equal(nextPollDelayMs(30), 60_000);
-  const total = Array.from({ length: MAX_POLL_ATTEMPTS }, (_, i) => nextPollDelayMs(i)).reduce((a, b) => a + b, 0);
-  assert.ok(total >= 55 * 60_000 && total <= 65 * 60_000, `total ${total / 60_000} min`);
+test("nextPollDelayMs: every 15 s, every 3 s with FAST_POST, 3x after a Cartesia error", () => {
+  assert.equal(nextPollDelayMs(0), 15_000);
+  assert.equal(nextPollDelayMs(100), 15_000);
+  assert.equal(nextPollDelayMs(0, { fast: true }), 3_000);
+  assert.equal(nextPollDelayMs(400, { fast: true }), 3_000);
+  assert.equal(nextPollDelayMs(5, { retry: true }), 45_000);
+  assert.equal(nextPollDelayMs(5, { fast: true, retry: true }), 9_000);
+});
+
+test("poll caps: a 25-min call at 3 s is ~500 polls, and no chain runs past ~70 min", () => {
+  const polls25 = (25 * 60_000) / nextPollDelayMs(0, { fast: true });
+  assert.ok(polls25 <= 500 && polls25 < MAX_POLL_ATTEMPTS);
+  // fast: the attempt cap ends it within ~70 min even without pollStartedAt
+  assert.ok((MAX_POLL_ATTEMPTS * FAST_POLL_INTERVAL_MS) / 60_000 <= 71);
+  // normal: the time cap ends it (the attempt cap would take hours)
+  assert.ok(MAX_POLL_MS / POLL_INTERVAL_MS < MAX_POLL_ATTEMPTS);
+  assert.ok(MAX_POLL_MS >= 60 * 60_000 && MAX_POLL_MS <= 70 * 60_000);
+});
+
+test("planPollUpdate: fast mode schedules the next poll in 3 s; the first poll starts the clock", () => {
+  const first = planPollUpdate({ status: "in_progress", pollAttempts: 0, pollStartedAt: 5 }, 0, { kind: "pending" }, 100, { fast: true });
+  assert.equal(first?.delayMs, 3_000);
+  assert.equal(first?.patch.pollStartedAt, 100); // reset on a fresh chain
+  const later = planPollUpdate({ status: "in_progress", pollAttempts: 7, pollStartedAt: 100 }, 7, { kind: "pending" }, 200, { fast: true });
+  assert.equal(later?.patch.pollStartedAt, undefined); // kept
+  const retry = planPollUpdate({ status: "in_progress", pollAttempts: 7, pollStartedAt: 100 }, 7, { kind: "pending", retry: true }, 200);
+  assert.equal(retry?.delayMs, 45_000);
+  const turns = [{ role: "elder" as const, text: "hi" }];
+  const done = planPollUpdate({ status: "in_progress", pollAttempts: 7, pollStartedAt: 100 }, 7, { kind: "finished", transcript: turns, hungUpAt: 150 }, 200, { fast: true });
+  assert.equal(done?.patch.hungUpAt, 150);
+  assert.equal(done?.patch.endedAt, 200);
+  assert.equal(done?.next, "process");
+  assert.equal(done?.delayMs, 0);
+});
+
+test("parseEndTime: Cartesia's ISO end time, or nothing when missing or far off our clock", () => {
+  const now = Date.parse("2026-10-24T16:00:00Z");
+  assert.equal(parseEndTime("2026-10-24T15:59:58Z", now), now - 2_000);
+  assert.equal(parseEndTime(undefined, now), undefined);
+  assert.equal(parseEndTime("nope", now), undefined);
+  assert.equal(parseEndTime("2026-10-24T18:00:00Z", now), undefined);
+  assert.equal(parseEndTime("2026-10-23T10:00:00Z", now), undefined);
 });
 
 test("templateVariables: snake_case-safe names, trimmed strings, empty -> 'none'", () => {
@@ -179,16 +225,16 @@ test("planPollUpdate: only the chain that saw the current attempt count may writ
   assert.equal(planPollUpdate({ status: "done", pollAttempts: 3 }, 3, { kind: "timeout" }, 1), null);
   assert.equal(planPollUpdate(live, 2, { kind: "pending" }, 1), null); // a duplicate, stale chain stops
 
-  assert.deepEqual(planPollUpdate(live, 3, { kind: "pending" }, 1000), {
+  assert.deepEqual(planPollUpdate({ ...live, pollStartedAt: 1 }, 3, { kind: "pending" }, 1000), {
     patch: { pollAttempts: 4, lastPolledAt: 1000 },
     next: "poll",
-    delayMs: 20_000,
+    delayMs: 15_000,
   });
   // Cartesia's live status is kept only when it's a documented one
   assert.equal(planPollUpdate(live, 3, { kind: "pending", liveStatus: "started" }, 1)?.patch.liveStatus, "started");
   assert.equal(planPollUpdate(live, 3, { kind: "pending", liveStatus: "<weird>" }, 1)?.patch.liveStatus, undefined);
   assert.deepEqual(planPollUpdate({ status: "in_progress" }, 0, { kind: "fatal", error: "Cartesia HTTP 404" }, 5), {
-    patch: { pollAttempts: 1, lastPolledAt: 5, status: "poll_error", error: "Cartesia HTTP 404", endedAt: 5 },
+    patch: { pollAttempts: 1, lastPolledAt: 5, pollStartedAt: 5, status: "poll_error", error: "Cartesia HTTP 404", endedAt: 5 },
     next: null,
     delayMs: 0,
   });
@@ -197,7 +243,7 @@ test("planPollUpdate: only the chain that saw the current attempt count may writ
   assert.equal(timeout?.next, null);
 
   const turns = [{ role: "elder" as const, text: "hi" }];
-  assert.deepEqual(planPollUpdate(live, 3, { kind: "finished", transcript: turns, endReason: "agent_hangup" }, 9), {
+  assert.deepEqual(planPollUpdate({ ...live, pollStartedAt: 1 }, 3, { kind: "finished", transcript: turns, endReason: "agent_hangup" }, 9), {
     patch: { pollAttempts: 4, lastPolledAt: 9, status: "ended", transcript: turns, endReason: "agent_hangup", endedAt: 9 },
     next: "process",
     delayMs: 0,

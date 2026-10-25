@@ -15,8 +15,8 @@
 //   also save their plan) -> story: conversation.markPlanUsed. Or
 //   `failed` (clear refusal, or story planning failed) / `start_unknown` (timeout or 5xx: the
 //   phone may be ringing; check Cartesia's call log, it blocks a new call for 90 min).
-// pollCall: GET /agents/calls/{id} every minute until it's over (Cartesia has no call
-//   webhooks yet). applyPoll writes each result with a compare-and-set on status + attempt
+// pollCall: GET /agents/calls/{id} every 15 s (3 s with FAST_POST=on) until it's over (Cartesia
+//   has no call webhooks yet; lib/cartesia.nextPollDelayMs, capped by shouldGiveUp). applyPoll writes each result with a compare-and-set on status + attempt
 //   count and schedules the next step in the same transaction, so a duplicate chain stops
 //   instead of undoing `ended`/`done`. Finished -> `ended` -> pipeline.processCall.
 //
@@ -35,6 +35,7 @@ import {
   isCallFinished,
   nextPollDelayMs,
   normalizeTranscript,
+  parseEndTime,
   parseOutboundResponse,
   planPollUpdate,
   shouldGiveUp,
@@ -43,6 +44,7 @@ import {
   type PollOutcome,
 } from "./lib/cartesia";
 import { cartesiaFetch, httpError, requireEnv } from "./lib/cartesiaHttp";
+import { fastPostOn } from "./lib/fastPost";
 import { callPath } from "./lib/inbound";
 import {
   buildOnboardingVariables,
@@ -135,7 +137,7 @@ export const markStarted = internalMutation({
       pollAttempts: 0,
       ...(plan !== undefined ? { plan } : {}),
     });
-    await ctx.scheduler.runAfter(nextPollDelayMs(0), internal.cartesia.pollCall, { callId });
+    await ctx.scheduler.runAfter(nextPollDelayMs(0, { fast: fastPostOn(process.env) }), internal.cartesia.pollCall, { callId });
     return true;
   },
 });
@@ -150,7 +152,7 @@ export const markStartFailed = internalMutation({
 });
 
 const pollOutcome = v.union(
-  v.object({ kind: v.literal("pending"), liveStatus: v.optional(v.string()) }),
+  v.object({ kind: v.literal("pending"), liveStatus: v.optional(v.string()), retry: v.optional(v.boolean()) }),
   v.object({ kind: v.literal("fatal"), error: v.string() }),
   v.object({ kind: v.literal("timeout") }),
   v.object({
@@ -159,6 +161,7 @@ const pollOutcome = v.union(
     summary: v.optional(v.string()),
     endReason: v.optional(v.string()),
     error: v.optional(v.string()),
+    hungUpAt: v.optional(v.number()),
   }),
 );
 
@@ -167,7 +170,8 @@ export const applyPoll = internalMutation({
   args: { callId: v.id("calls"), seenAttempts: v.number(), outcome: pollOutcome },
   handler: async (ctx, { callId, seenAttempts, outcome }) => {
     const call = await ctx.db.get(callId);
-    const plan = call ? planPollUpdate(call, seenAttempts, outcome as PollOutcome, Date.now()) : null;
+    const fast = fastPostOn(process.env);
+    const plan = call ? planPollUpdate(call, seenAttempts, outcome as PollOutcome, Date.now(), { fast }) : null;
     if (!plan) return { applied: false, status: call?.status ?? "missing" };
     await ctx.db.patch(callId, plan.patch);
     if (plan.next === "poll") await ctx.scheduler.runAfter(plan.delayMs, internal.cartesia.pollCall, { callId });
@@ -300,7 +304,7 @@ export const pollCall = internalAction({
 
     const seenAttempts = call.pollAttempts ?? 0;
     let outcome: PollOutcome;
-    if (shouldGiveUp(seenAttempts)) {
+    if (shouldGiveUp(seenAttempts, call.pollStartedAt, Date.now())) {
       outcome = { kind: "timeout" };
     } else {
       const res = await cartesiaFetch(callPath(call.cartesiaCallId), { method: "GET" });
@@ -309,7 +313,11 @@ export const pollCall = internalAction({
         outcome = { kind: "fatal", error: httpError(res) };
       } else if (http === "retry" || !isCallFinished(res.json)) {
         if (http === "ok") console.log(`cartesia.pollCall: call ${callId} still "${String(res.json?.status ?? "?")}"`);
-        outcome = { kind: "pending", ...(http === "ok" && typeof res.json?.status === "string" ? { liveStatus: res.json.status } : {}) };
+        outcome = {
+          kind: "pending",
+          ...(http === "ok" && typeof res.json?.status === "string" ? { liveStatus: res.json.status } : {}),
+          ...(http === "retry" ? { retry: true } : {}), // back off a little on 429 / 5xx / timeout
+        };
       } else {
         const unknown = unknownRoles(res.json?.transcript);
         if (unknown.length) console.warn(`cartesia.pollCall: dropped transcript roles ${unknown.join(", ")}`);
@@ -321,6 +329,8 @@ export const pollCall = internalAction({
           endReason: str(res.json?.end_reason),
           // Cartesia's own reason for a failed call; short, and only about the call itself
           error: str(res.json?.error_message) && clip(res.json.error_message),
+          // When he hung up, by Cartesia's clock (posts.timings.endedAt)
+          hungUpAt: parseEndTime(res.json?.end_time, Date.now()),
         };
       }
     }

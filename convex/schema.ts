@@ -169,6 +169,8 @@ export default defineSchema({
     processedAt: v.optional(v.number()), // epoch ms; set only on success
     memoriesAppliedAt: v.optional(v.number()), // epoch ms; memories.applyChanges ran for this call (re-runs skip it)
     endedAt: v.optional(v.number()), // epoch ms; when the call ended (callLoop counts its interval from here)
+    hungUpAt: v.optional(v.number()), // epoch ms; Cartesia's end_time, when it gave one (posts.timings)
+    pollStartedAt: v.optional(v.number()), // epoch ms; first poll, for the poll time cap (lib/cartesia.shouldGiveUp)
     liveStatus: v.optional(v.string()), // Cartesia status while live: created | started (sign-up page)
     // ---- v2 (Brain) ----
     plan: v.optional(v.any()), // CallPlan from conversation.planNextCall, for debugging
