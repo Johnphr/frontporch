@@ -8,12 +8,12 @@ Four steps, then a "Call me now" button:
 | Step | Screen | Convex function (`convex/signup.ts`) |
 |---|---|---|
 | 1 | Name + call language (Español / English); the language also sets the page language until the toggle is used | none (validated locally, sent in step 2) |
-| 2 | Phone number | `signup:register({ name, phone, language })` → `elderId` (an existing number returns its id, nothing changes) |
-| 3 | Who calls you (characters in the chosen language) | `signup:listCharacters`, `signup:setCharacter({ elderId, characterId })` |
-| 4 | LinkedIn profile link, optional ("Skip for now") | `signup:setLinkedin({ elderId, url })` |
-| done | "Call me now" | `signup:requestCall({ elderId })`: rings only when the backend allows it (`PUBLIC_CALLS=on` rings numbers in `CALL_ALLOWLIST`, `=all` rings anyone); otherwise the page says calls are turned off |
+| 2 | Phone number | `signup:register({ name, phone, language, timeZone })` → `{ elderId, token }`; an existing number gets `already_signed_up` (no id, no token) and a friendly message |
+| 3 | Who calls you (characters in the chosen language) | `signup:listCharacters`, `signup:setCharacter({ elderId, token, characterId })` |
+| 4 | Connect Bluesky, optional ("Skip for now"): handle + app password, link to bsky.app/settings/app-passwords; Reddit shown as "coming soon" | `signup:connectBluesky({ elderId, token, handle, appPassword })` → `{ ok, handle }` or `{ ok: false, error }` (codes → `sBsky.errors` in `i18n.js`) |
+| done | "Call me now" | `signup:requestCall({ elderId, token })`: rings only when the backend allows it (`PUBLIC_CALLS=on` rings numbers in `CALL_ALLOWLIST`, `=all` rings anyone); otherwise the page says calls are turned off |
 
-There are no accounts (the backend has none) and no SMS verification yet: the 6-digit code
+There are no Front Porch logins (the token proves this browser made the sign-up) and no SMS verification yet: the 6-digit code
 screen still exists but is skipped (`VERIFY_PHONE = false` in `src/App.jsx`, mock in
 `src/api.js` `phoneVerification`). Turn it on once real SMS verification exists.
 
@@ -56,4 +56,5 @@ there are no client-side routes, so no rewrites are needed.
 - `src/App.jsx` the flow and its state
 
 Progress (name, language, phone, chosen character, sign-up id) is saved in `sessionStorage` so a
-refresh doesn't lose it. The SMS code and the LinkedIn link are never stored.
+refresh doesn't lose it, with the sign-up token `register` returned (every later step sends it).
+The SMS code and the app password are never stored.

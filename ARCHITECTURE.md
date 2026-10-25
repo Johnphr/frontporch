@@ -35,7 +35,7 @@ No family, no SMS. One small onboarding UI (`frontend/onboarding-ui/`); everythi
 | Decision | Choice |
 |---|---|
 | Backend | Everything in Convex: tables, crons, actions, HTTP actions. No separate server |
-| UI | One onboarding UI (`frontend/onboarding-ui/`, design by Mafer): name + language, phone, who calls, LinkedIn URL, "Call me now". No phone verification for now (code screen off; anyone can be called once `PUBLIC_CALLS=all`, so keep the link private). Call time is still set by hand in the Convex dashboard; for testing, `CALL_INTERVAL_MINUTES` repeats calls. After "Call me now" the page shows the call's live status (`signup:callStatus`). Temporary: a key-protected `/posts` review page (`convex/postsPage.ts`) to iterate on post content |
+| UI | One onboarding UI (`frontend/onboarding-ui/`, design by Mafer): name + language, phone, who calls, connect Bluesky (handle + app password; Reddit "coming soon"), "Call me now". No phone verification for now (code screen off; anyone can be called once `PUBLIC_CALLS=all`, so keep the link private). Call time is still set by hand in the Convex dashboard; for testing, `CALL_INTERVAL_MINUTES` repeats calls. After "Call me now" the page shows the call's live status (`signup:callStatus`). Temporary: a key-protected `/posts` review page (`convex/postsPage.ts`) to iterate on post content |
 | Phone calls | **Cartesia Managed Agents** run the whole call: phone number, speech-to-text, in-call LLM, voice. No Vapi; no Twilio in our code |
 | Agent config | Lives in code (`convex/lib/prompts/`), pushed to Cartesia with `npx convex run cartesiaAgents:syncAgent` |
 | Characters | One Cartesia agent per character (`convex/lib/characters.ts`: voice, language, personality): **Pip** in English, **Juanito** (Latin American Spanish, "usted"). He picks one (`elders.characterId`), else the default for `elders.language`. All call from one number; the call's goal + context are per-call variables |
@@ -299,6 +299,19 @@ ones, and the v1 dashboard queries exposed call transcripts. `signup.*` return o
 ok/reason results. Keep every other function `internal*`. The v1 `questions`, `answers`
 and `replies` tables stay in `schema.ts` until they're empty, so a deploy can't fail on old rows.
 
+## Accounts (his own Bluesky, from sign-up)
+
+Each elder posts from **his own** account, connected on the sign-up page (step 4, "Connect Bluesky").
+
+- **Connect:** `signup:connectBluesky({ elderId, token, handle, appPassword })` (action). The handle is tidied (`@` stripped, lowercase, `.bsky.social` added when there's no dot). Only an **app password** (`xxxx-xxxx-xxxx-xxxx`) is accepted, never his real one: an app password can't change his password or delete his account, and he can revoke it in Bluesky. It logs in once (`lib/blueskyClient.createSession`) to prove it works; a session whose token scope says "main password" is refused too. Then it saves the handle, DID and the **encrypted** app password. Results are codes only (`{ ok, handle }` or `{ ok: false, error }`); the password is never echoed or logged. Rate limit: 5 tries an hour, 5 s apart (`lib/signupRules.connectRateLimit`). Locked once he's `active`, like `setLinkedin` was.
+- **Storage:** `elderAccounts` (one row per elder + platform; `status` connected / invalid / disconnected). The secret is AES-256-GCM (`lib/accountCrypto.ts`, Web Crypto) with a random IV, and the elderId + platform as additional data, so a ciphertext copied to another elder's row won't decrypt. Key: env `ACCOUNTS_ENC_KEY`; missing or malformed is a clear error, never a plaintext fallback.
+- **Use:** every caller gets his login from `lib/logins.ts` (`blueskyLoginForElder(ctx, elderId)`), which reads the row with `accounts:getForLogin` and **decrypts inside the caller's action**. No query or mutation decrypts, and no function returns a plaintext secret. `accounts:status` shows what's connected, with no secret. When Bluesky refuses his saved login, callers can pass the error to `logins.reportBlueskyLoginError(ctx, elderId, error)`, which marks the account `invalid` (`accounts:markInvalid`). `accounts:disconnect` drops the secret.
+- **Demo account:** `BLUESKY_HANDLE` / `BLUESKY_APP_PASSWORD` are used only when `DEMO_ACCOUNT_FALLBACK=on` and he has no connected account (or in pure tests with no ctx and no elder). If he has an account that won't decrypt, the result is null, never the demo account.
+- **Reddit:** coming soon (shown disabled on the sign-up page). There is no per-elder Reddit connect yet; `redditLoginForElder` returns the env account only with `REDDIT_POSTING=on` **and** `DEMO_ACCOUNT_FALLBACK=on`.
+- **Limits:** accounts on a PDS other than bsky.social need `BLUESKY_SERVICE` (we don't resolve his PDS from his DID yet).
+
+**Sign-up token.** `signup:register` (an action) creates his row and returns a random token (32 bytes, base64url); only its SHA-256 hash is stored (`elders.signupTokenHash`). `setCharacter`, `connectBluesky`, `setLinkedin` and `requestCall` all need it (constant-time hash compare), so knowing his phone number or elderId isn't enough to change his sign-up. A number that's already signed up gets no id and no token: re-issuing one would hand it to whoever types his number. The page keeps the token in `sessionStorage`. `register` also sets his weekly slot so `schedule.tick` can call him: `timezone` from the browser (checked with Intl; else from the phone's country: MX → America/Mexico_City, ES → Europe/Madrid, otherwise America/Los_Angeles), `callDay` = the sign-up weekday in that zone, `callHour` = 10.
+
 ## Repo layout
 
 ```
@@ -346,7 +359,9 @@ tests/                          node --test + fixtures/
 | Var | Provided by |
 |---|---|
 | `CARTESIA_API_KEY`, `CARTESIA_FROM_NUMBER_ID`, `CARTESIA_VOICE_ID` (optional, Pip), `CARTESIA_VOICE_ID_ES` (Juanito), `CARTESIA_MODEL` (optional). Agent ids live in the `characterAgents` table, not env. Inbound: `CARTESIA_INBOUND_AGENT_ID` + `CARTESIA_LOOKUP_TOOL_ID` (printed by `syncAgent '{"inbound":true}'`), `CARTESIA_TOOL_SECRET` (bearer for the lookup tool), `CARTESIA_INBOUND_LANGUAGE` (optional, default `en`), `INBOUND_SITE_URL` (only if `CONVEX_SITE_URL` isn't available) | Voice |
-| `BLUESKY_HANDLE`, `BLUESKY_APP_PASSWORD`, `BLUESKY_SERVICE` (optional), `REDDIT_POSTING` (optional, default off), `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USERNAME`, `REDDIT_PASSWORD`, `REDDIT_USER_AGENT` (optional): thread replies (his accounts) | Integrations |
+| `ACCOUNTS_ENC_KEY`: encrypts each elder's connected account secret ([Accounts](#accounts-his-own-bluesky-from-sign-up)). Base64 of 32 random bytes: `openssl rand -base64 32`. Required before anyone connects Bluesky; changing it makes saved accounts unreadable (they must reconnect) | Data |
+| `DEMO_ACCOUNT_FALLBACK`: optional, default off. `on` = an elder with no connected account uses the env demo account below | Integrations |
+| `BLUESKY_HANDLE`, `BLUESKY_APP_PASSWORD`, `BLUESKY_SERVICE` (optional), `REDDIT_POSTING` (optional, default off), `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USERNAME`, `REDDIT_PASSWORD`, `REDDIT_USER_AGENT` (optional): the **demo** account, used only with `DEMO_ACCOUNT_FALLBACK=on` (`BLUESKY_SERVICE` also applies to connected accounts) | Integrations |
 | `LINKEDAPI_TOKEN`, `LINKEDAPI_ID_TOKEN`, `APIFY_TOKEN`, `STACKEXCHANGE_KEY` (optional), `POST_GUARD_MODE` (optional, default `enforce`), `AUTO_POST` (optional, default `on`; `off` = preview-only for tests) | Integrations |
 | `OPENAI_API_KEY` | Data (embeddings), Brain (LLM), Integrations (post guard) |
 | `OPENAI_MODEL` | optional, default `gpt-6-luna` |

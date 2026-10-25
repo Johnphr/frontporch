@@ -38,6 +38,14 @@ Cartesia setup: [voice/README.md](voice/README.md). How Pip talks:
 [voice/conversation-guide.md](voice/conversation-guide.md).
 Demo data (their phone, LinkedIn URL, call time) is added by hand in the Convex dashboard.
 
+## Accounts
+
+Each person posts from **their own** Bluesky account, connected on the sign-up page with an
+app password (never their real password). It's stored encrypted (`ACCOUNTS_ENC_KEY`, make one
+with `openssl rand -base64 32`) and only decrypted inside the action that posts. Reddit is
+coming soon. A shared demo account is used only with `DEMO_ACCOUNT_FALLBACK=on`. Details:
+[ARCHITECTURE.md → Accounts](ARCHITECTURE.md#accounts-his-own-bluesky-from-sign-up).
+
 ## Safety
 
 - Posts use **only what the person said**; the prompt forbids adding facts or advice.
