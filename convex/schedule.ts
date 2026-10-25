@@ -10,6 +10,10 @@
 //                             Threads posts), xEngagement.scrapeForElder (X_READ_FEEDBACK=on
 //                             only); then apify.scrapeEngagement (LinkedIn) for those with a
 //                             linkedinUrl, only when LINKEDIN_POSTING=on (all staggered)
+//   recentEngagement          every 5 min: Bluesky + Threads scrapes (days: 2) for each elder
+//                             with a post from the last 48h, so a reply reaches his question
+//                             bank before he calls back. Never X (X reads cost money). One
+//                             indexed query when there's nothing to do.
 //   weeklyAudienceQuestions   weekly: apify.findAudienceQuestions for every active elder
 //
 // Time math (timezones, DST) lives in lib/schedule.ts.
@@ -21,7 +25,14 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation } from "./_generated/server";
 import { loopCovers, type LoopEnv } from "./lib/callLoop";
-import { linkedinEngagementOn, planDailyEngagement, type EngagementJob } from "./lib/engagementRules";
+import {
+  RECENT_POST_WINDOW_MS,
+  RECENT_SCRAPE_DAYS,
+  linkedinEngagementOn,
+  planDailyEngagement,
+  planRecentEngagement,
+  type EngagementJob,
+} from "./lib/engagementRules";
 import { xFeedbackOn } from "./lib/xEngagement";
 import { PREPARE_CALL_FN, START_CALL_FN, dueActions } from "./lib/schedule";
 import { cronMayCall } from "./lib/signupRules";
@@ -121,6 +132,29 @@ export const dailyEngagement = internalMutation({
     const counts: EngagementCounts = { scheduled: jobs.length, bluesky: 0, threads: 0, x: 0, linkedin: 0 };
     for (const job of jobs) {
       await ctx.scheduler.runAfter(job.delayMs, SCRAPERS[job.kind], { elderId: job.elderId });
+      counts[job.kind] += 1;
+    }
+    return counts;
+  },
+});
+
+/** Recent posted publications looked at per run (newest first). */
+const MAX_RECENT_PUBLICATIONS = 300;
+/** Space out the 5-min runs (short: they read only a couple of days of threads). */
+const RECENT_STAGGER_MS = 5 * 1000;
+
+export const recentEngagement = internalMutation({
+  args: {},
+  handler: async (ctx): Promise<{ bluesky: number; threads: number }> => {
+    const now = Date.now();
+    const pubs = await ctx.db
+      .query("postPublications")
+      .withIndex("by_status_posted", (q) => q.eq("status", "posted").gte("postedAt", now - RECENT_POST_WINDOW_MS))
+      .order("desc")
+      .take(MAX_RECENT_PUBLICATIONS);
+    const counts = { bluesky: 0, threads: 0 };
+    for (const job of planRecentEngagement(pubs, now, RECENT_STAGGER_MS)) {
+      await ctx.scheduler.runAfter(job.delayMs, SCRAPERS[job.kind], { elderId: job.elderId, days: RECENT_SCRAPE_DAYS });
       counts[job.kind] += 1;
     }
     return counts;

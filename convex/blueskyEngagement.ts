@@ -1,7 +1,8 @@
 // How readers reacted to his Bluesky threads (the feedback loop's main source).
 //
-//   scrapeForElder       daily (schedule.dailyEngagement): for each thread he posted in the
-//                        last ~30 days, getPostThread -> likes + reposts on the root post,
+//   scrapeForElder       daily (schedule.dailyEngagement) and every 5 min for posts from the last
+//                        48h (schedule.recentEngagement, days: 2): for each thread he posted in the
+//                        window (default 30 days), getPostThread -> likes + reposts on the root post,
 //                        replies by others -> engagement:upsert. A thread he deleted -> engagement:markGone.
 //                        One failing thread doesn't stop the rest.
 //   publicationsForElder his Bluesky postPublications rows (read only; publish.ts writes them)
@@ -19,6 +20,7 @@ import {
   isNotFound,
   publicationsToScrape,
   publicationUrl,
+  scrapeDays,
   threadEngagement,
   toUpsertArgs,
   type BlueskyPublication,
@@ -69,10 +71,11 @@ function short(error: unknown): string {
 }
 
 export const scrapeForElder = internalAction({
-  args: { elderId: v.id("elders") },
-  handler: async (ctx, { elderId }): Promise<ScrapeResult> => {
+  // days: only threads posted in the last `days` (the 5-min recent cron passes 2). Default 30.
+  args: { elderId: v.id("elders"), days: v.optional(v.number()) },
+  handler: async (ctx, { elderId, days }): Promise<ScrapeResult> => {
     const rows = await ctx.runQuery(internal.blueskyEngagement.publicationsForElder, { elderId });
-    const pubs = publicationsToScrape(rows, Date.now());
+    const pubs = publicationsToScrape(rows, Date.now(), scrapeDays(days));
     const result: ScrapeResult = { threads: pubs.length, upserted: 0, likes: 0, reposts: 0, replies: 0, gone: 0, errors: [] };
     if (pubs.length === 0) return result;
 

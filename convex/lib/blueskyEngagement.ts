@@ -5,6 +5,7 @@
 //   threadEngagement  root thread, plus any of his records the root read didn't reach (long threads)
 //   toUpsertArgs      result -> engagement.upsert args
 //   publicationsToScrape  which postPublications rows to read (posted, not removed, recent)
+//   scrapeDays        the window a scrape run asked for (daily: 30 days; 5-min cron: 2)
 //
 // Replies he hid (threadgate hiddenReplies) and replies carrying moderation labels are skipped.
 // No Convex imports: unit-tested with Node. Errors carry HTTP statuses only, never tokens.
@@ -249,6 +250,11 @@ export type BlueskyPublication = {
   removedAt?: number;
   _creationTime: number;
 };
+
+/** A scrape's window in days: a positive number up to SCRAPE_WINDOW_DAYS, else SCRAPE_WINDOW_DAYS. */
+export function scrapeDays(days: number | undefined): number {
+  return typeof days === "number" && Number.isFinite(days) && days > 0 ? Math.min(days, SCRAPE_WINDOW_DAYS) : SCRAPE_WINDOW_DAYS;
+}
 
 /** Posted, not taken down, has a root record, and posted in the last `days`. Newest first. */
 export function publicationsToScrape<T extends BlueskyPublication>(rows: T[], nowMs: number, days = SCRAPE_WINDOW_DAYS): T[] {
