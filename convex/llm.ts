@@ -10,8 +10,9 @@
 //                      rubric, one critique -> rewrite; below the bar, or too long for a 5-post
 //                      Bluesky thread (lib/blueskyThread.ts), it's held (lib/postQuality.ts).
 //                      fast (FAST_POST=on): one draft, no judge, else the full loop.
-//                      In parallel, a message draft: when he asked for something specific to be
-//                      posted, that message is the post (shorter, not judged as a story)
+//                      In parallel, a short draft (not every post is a story): a message he asked
+//                      to post wins over the story; an insight (something interesting he shared)
+//                      is used when there's no story. Shorter, not judged as a story
 //   summarizeFeedback  reader reactions + comments -> what resonated, reader questions, one line
 //   planQuestions      everything we know -> 8-12 candidate questions for the bank
 //   findRecentTopics   web search: recent news/issues in his field where he can help
@@ -29,7 +30,7 @@ import {
   MAX_HOOK_CHARS,
   MAX_TOTAL_CHARS,
   MAX_WORDS,
-  MESSAGE_WORDS,
+  SHORT_WORDS,
   MIN_WORDS,
   QUALITY_BUDGET_MS,
   askedQuestionJudgeRules,
@@ -37,7 +38,8 @@ import {
   cleanAskedQuestion,
   detectLanguage,
   hardChecks,
-  messagePost,
+  choosePost,
+  shortPost,
   normalizeJudgement,
   runFastPost,
   runQualityLoop,
@@ -264,23 +266,29 @@ const POST_SKIP = `If the call has no story worth posting (small talk, schedulin
 
 const POST_SYSTEM = `${POST_INTRO}\n\n${POST_RULES}\n\n${POST_SKIP}`;
 
-// A message post: he asked for something specific to be posted (news, an update, a thank-you),
-// not a story. Drafted next to the story flow; when it writes one, it wins (writePost).
-const MESSAGE_SYSTEM = `${POST_INTRO}
+// Short posts (lib/postQuality.ShortKind): not every post is a story. Drafted next to the story
+// flow; a message wins over the story, an insight is used when there's no story (writePost).
+const SHORT_SYSTEM = `${POST_INTRO}
 
-Not every post is a story. Sometimes he asks for something specific to be posted: news, an update, a thank-you, an announcement, a request to his friends. Your job is to spot that and write exactly that message.
+Not every post is a story. Read the call and pick the first of these that fits:
+1. "message": he clearly asked for something specific to be posted or shared (news, an update, a thank-you, an announcement, a request to his friends). Write exactly that message: say what he wanted said, nothing more.
+2. "insight": he didn't ask for a post, but shared something worth reading: knowledge from his work or field, how something works, what he's learning or exploring, a view or an observation, an interesting fact or tip. Pick the one most interesting thing and write a short post sharing it.
+3. "none": nothing worth posting (small talk, scheduling, he shared almost nothing concrete). Leave hook and text empty and give a short reason.
 
-If he clearly asked on the call for something specific to be posted or shared:
-- Write the message he asked for, in the first person, in his voice and in the language he spoke. Say what he wanted said, nothing more.
-- Use ONLY ${ALLOWED_FACTS}. Never add facts, numbers, names, dates, places, achievements or feelings he didn't state. If he asked for something to be made up or exaggerated, or for details he didn't give (for example "brag about my internships" without naming any), leave that part out and keep only what he actually said.
+Rules for "message" and "insight":
+- First person, in his voice and in the language he spoke; fix only grammar and obvious speech-to-text errors.
+- Use ONLY ${ALLOWED_FACTS}. Never add facts, numbers, names, dates, places, achievements, explanations or feelings he didn't state. If he asked for something to be made up or exaggerated, or for details he didn't give (for example "brag about my internships" without naming any), leave that part out and keep only what he actually said.
 - Something he said will happen (a plan, a hope) stays a plan or a hope; never write it as already done.
-- Shape: hook is one short first line, alone in its own paragraph, that works on its own as the opening post (under ${MAX_HOOK_CHARS} characters). Then 1-2 short paragraphs with the rest of his message. You may end with one short line or question to his readers if it fits what he asked.
-- Plain text in short paragraphs (blank line between them), no markdown, no lists, at most 2 hashtags, ${MESSAGE_WORDS.min}-${MESSAGE_WORDS.max} words, each paragraph under about 250 characters.
+- Shape: hook is one short first line, alone in its own paragraph, that works on its own as the opening post (under ${MAX_HOOK_CHARS} characters). Then 1-2 short paragraphs. You may end with one short question to readers.
+- Plain text in short paragraphs (blank line between them), no markdown, no lists, at most 2 hashtags, ${SHORT_WORDS.min}-${SHORT_WORDS.max} words, each paragraph under about 250 characters.
+- Plain language in his register. No filler or stock phrases ("delve", "it's worth noting", "Bottom line:", "This isn't about X. It's about Y.").
 - No medical, legal, tax or investment advice. No private details about other people. No @mentions and no links.
 - Do NOT add a line saying it was written with AI: that is added later.
-- "text" is the full post and starts with the hook line.
+- "text" is the full post and starts with the hook line.`;
 
-If he didn't ask for anything specific to be posted (he told stories, chatted or answered questions), set skip to true with the reason "no message requested", and leave hook and text empty. Never turn a story into a message: stories are written separately.`;
+const SHORT_SCHEMA = obj({ kind: { type: "string", enum: ["message", "insight", "none"] }, reason: str, hook: str, text: str });
+
+type RawShort = { kind: "message" | "insight" | "none"; reason: string; hook: string; text: string };
 
 const POST_SCHEMA = obj({ skip: { type: "boolean" }, reason: str, hook: str, text: str });
 
@@ -381,16 +389,22 @@ export const writePost = internalAction({
       checks,
     });
 
-    // He asked to post something specific: that message wins over a story. Both start now so a
-    // story call doesn't wait for the message draft.
-    const message = writeCall(MESSAGE_SYSTEM, context, FAST_DRAFT_TIMEOUT_MS, "medium").catch(() => null);
+    // Not every post is a story (lib/postQuality.choosePost). Both start now so a story call
+    // doesn't wait for the short draft. A failed short draft just leaves it to the story.
+    const shortChecks = (text: string) => hardChecks(text, lang, args.language, null, SHORT_WORDS);
+    const short = structured<RawShort>({ name: "short_post", system: SHORT_SYSTEM, user: context, schema: SHORT_SCHEMA, effort: "medium", timeoutMs: FAST_DRAFT_TIMEOUT_MS, retries: 0 })
+      .then((raw) => {
+        if (raw.kind !== "message" && raw.kind !== "insight") return null;
+        const post = shortPost(normalizePostDraft({ skip: false, reason: raw.reason, hook: raw.hook, text: raw.text }), raw.kind, shortChecks);
+        return post ? { kind: raw.kind, post } : null;
+      })
+      .catch(() => null);
     // Medium effort: high reasoning on a ~200-word post often runs past FAST_DRAFT_TIMEOUT_MS.
     const story: Promise<FastPost> = args.fast
       ? runFastPost({ draft: (angle) => draftCall(angle, FAST_DRAFT_TIMEOUT_MS, "medium"), checks, fallback: loop })
       : loop();
-    story.catch(() => {}); // may fail while we wait for the message; the caller still gets it via `return story`
-    const asMessage = messagePost(await message, (text) => hardChecks(text, lang, args.language, null, MESSAGE_WORDS));
-    return asMessage ?? story;
+    story.catch(() => {}); // may fail while we wait for the short draft; choosePost still passes it on
+    return choosePost(await short, story);
   },
 });
 

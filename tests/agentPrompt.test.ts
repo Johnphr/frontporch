@@ -112,3 +112,14 @@ test("posting: every host knows posts go to <accounts>, needn't be a story, and 
     assert.match(text, /So is posting what they want to share/); // the guardrail doesn't contradict it
   }
 });
+
+test("call shape: off-topic for a moment, then back to the interview; under 10 minutes; easy out once there's enough", async () => {
+  const { inboundAgent } = await import("../convex/lib/prompts/inbound.ts");
+  for (const text of [...CHARACTERS.map((c) => characterAgent(c).instructions), inboundAgent(getCharacter("victoria")!).instructions]) {
+    assert.match(text, /gently steer back to their story and their work/);
+    assert.match(text, /Keep the call under 10 minutes/);
+    assert.match(text, /they can wrap up whenever they like/);
+    assert.match(text, /never before you have enough/);
+    assert.doesNotMatch(text, /10 to 20 minutes/);
+  }
+});
