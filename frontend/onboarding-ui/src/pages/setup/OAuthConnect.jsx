@@ -5,6 +5,7 @@
 // connected is kept under OAUTH_KEY. No token from the platform ever reaches this page.
 import { useEffect, useState } from 'react'
 import { signupApi } from '../../api'
+import { errorText } from '../../copy'
 import { takeOAuthReturn } from '../../lib/oauthReturn'
 import { OAUTH_KEY } from '../../lib/session'
 import { CheckMark } from '../../art/setup'
@@ -67,7 +68,7 @@ export function OAuthConnect({ words, elderId, token, beforeLeave }) {
       }
       setError(words.errors[res?.error] || words.errors.failed)
     } catch (err) {
-      setError(err.code === 'NOT_FOUND' ? words.errors.not_found : words.errors.failed)
+      setError(err.code === 'NOT_FOUND' ? words.errors.not_found : err.code === 'NETWORK' ? errorText(err) : words.errors.failed)
     }
     setBusy('')
   }
