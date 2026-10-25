@@ -27,5 +27,5 @@ Thumbs.db
 # call transcripts pulled from Cartesia (personal conversations)
 transcripts/
 
-# full Cartesia agent record (has the Twilio account SID); system_prompt.md is the shared part
-Cartesia/agent_config.json
+# full Cartesia agent records (have the Twilio account SID); prompts/ is the shared part
+Cartesia/configs/
