@@ -1,35 +1,26 @@
 // Sign in (#/signin): welcome -> phone -> straight to #/home if this device already set up (or
-// signed in to) that phone, even after signing out (lib/session.js knownSignup); otherwise the
-// family code (signup:signIn gives a new token) -> #/home. From the code screen: "Sign up" goes
-// to #/setup for a new number, and "Start over" (signup:startOver, behind the code, confirmed
-// first) archives the number's setup and starts setup fresh. welcome -> email -> #/setup.
+// signed in to) that phone, even after signing out (lib/session.js knownSignup); otherwise
+// signup:signIn (a new token) -> #/home, or #/setup for a number that isn't signed up yet.
+// welcome -> email -> #/setup.
 import { useEffect, useRef, useState } from 'react'
 import { coded, signupApi } from '../api'
 import { errorText } from '../copy'
-import { SIGNIN as S, SIGNIN_BY_LANG, showPhone } from '../copy/signin'
+import { SIGNIN as S } from '../copy/signin'
 import { go } from '../lib/route'
-import { clearSession, forgetPhone, knownSignup, loadSession, saveSession } from '../lib/session'
+import { clearSession, knownSignup, loadSession, saveSession } from '../lib/session'
 import { COUNTRIES, digitsOf, formatNational, toE164 } from '../phone'
 import { BackChevron, MailIcon, PhoneIcon, ReadingArt } from '../art/setup'
 import { Footer, Header } from '../ui/Header'
-import { Button, Card, ErrorText, SelectField, TextField, cx } from '../ui/controls'
+import { Button, Card, SelectField, TextField, cx } from '../ui/controls'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-const CODE_LENGTH = 6
 const focus = (id) => document.getElementById(id)?.focus()
-const C = SIGNIN_BY_LANG.en.code
-const O = SIGNIN_BY_LANG.en.startOver
-
-// signIn / startOver's refusal -> an ERRORS code (copy.js)
-const REFUSED = { wrong_code: 'WRONG_CODE', too_many_tries: 'TOO_MANY_TRIES' }
 
 export default function SignIn() {
-  const [view, setView] = useState('welcome') // welcome | phone | code | startOver | email
+  const [view, setView] = useState('welcome') // welcome | phone | email
   const [error, setError] = useState('') // the open screen's field error
   const [country, setCountry] = useState(COUNTRIES[0])
   const [national, setNational] = useState('')
-  const [phone, setPhone] = useState('') // E.164, once the phone screen accepted it
-  const [code, setCode] = useState('') // digits only
   const [busy, setBusy] = useState(false)
   const [email, setEmail] = useState('')
   const heading = useRef(null)
@@ -64,78 +55,33 @@ export default function SignIn() {
     focus(id)
   }
 
-  function continuePhone(e) {
+  async function continuePhone(e) {
     e.preventDefault()
     if (digitsOf(national).length < country.digits) return fieldError('phone', S.phone.tooShort(country.digits))
-    const e164 = toE164(country, national)
+    const phone = toE164(country, national)
     const before = loadSession()
-    if (before.elderId && before.token && before.phone === e164) return go('/home') // already set up on this device
+    if (before.elderId && before.token && before.phone === phone) return go('/home') // already set up on this device
     clearSession() // someone else's sign-up must not carry over (it stays a known device)
-    const known = knownSignup(e164)
+    const known = knownSignup(phone)
     if (known) {
       saveSession(known) // this device set up that phone before: his token comes back
       return go('/home')
     }
-    setPhone(e164)
-    setCode('')
-    return open('code')
-  }
-
-  /** The typed code when it's complete, else null after saying so. */
-  function readCode() {
-    if (code.length === CODE_LENGTH) return code
-    fieldError('code', C.incomplete)
-    return null
-  }
-
-  async function continueCode(e) {
-    e.preventDefault()
-    const typed = readCode()
-    if (!typed) return
     setBusy(true)
     try {
-      const res = await signupApi.signIn(phone, typed)
-      if (!res?.ok) return fieldError('code', errorText(coded(REFUSED[res?.reason] || 'SERVER')))
-      saveSession({ phone, elderId: res.elderId, token: res.token, familyCode: typed })
-      go('/home')
+      const res = await signupApi.signIn(phone)
+      if (res?.ok) {
+        saveSession({ phone, elderId: res.elderId, token: res.token })
+        return go('/home')
+      }
+      if (res?.reason === 'not_found') {
+        saveSession({ phone }) // a new number: setup, with the phone already filled in
+        return go('/setup')
+      }
+      fieldError('phone', errorText(coded(res?.reason === 'too_many_tries' ? 'TOO_MANY_TRIES' : 'SERVER')))
     } catch (err) {
       console.error('signIn failed', err.code || 'error')
-      fieldError('code', errorText(err))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  /** A new number: setup, with the phone already filled in. */
-  function signUp() {
-    saveSession({ phone })
-    go('/setup')
-  }
-
-  function askStartOver() {
-    if (!readCode()) return
-    open('startOver')
-  }
-
-  async function startOver() {
-    setBusy(true)
-    setError('')
-    try {
-      const res = await signupApi.startOver(phone, code)
-      if (!res?.ok) {
-        const text = errorText(coded(REFUSED[res?.reason] || 'SERVER'))
-        if (res?.reason === 'wrong_code') {
-          open('code')
-          return fieldError('code', text)
-        }
-        return setError(text)
-      }
-      forgetPhone(phone) // whatever this device kept for the number is gone on the backend too
-      saveSession({ phone })
-      go('/setup')
-    } catch (err) {
-      console.error('startOver failed', err.code || 'error')
-      setError(errorText(err))
+      fieldError('phone', errorText(err))
     } finally {
       setBusy(false)
     }
@@ -150,7 +96,7 @@ export default function SignIn() {
 
   const title = (text) => <h1 ref={heading} tabIndex={-1} className="text-title">{text}</h1>
   const submit = (label, extra) => <Button type="submit" className="w-full" {...extra}>{label}</Button>
-  const backTo = view === 'welcome' ? null : view === 'code' ? 'phone' : view === 'startOver' ? 'code' : 'welcome'
+  const backTo = view === 'welcome' ? null : 'welcome'
 
   return (
     <>
@@ -205,53 +151,9 @@ export default function SignIn() {
                       id="phone" label={S.phone.label} error={error} type="tel" inputMode="tel" autoComplete="tel-national"
                       placeholder={country.example} value={national} onChange={typing(setNational, (v) => formatNational(country, v))}
                     />
-                    {submit(S.phone.submit)}
+                    {submit(S.phone.submit, { busy, busyLabel: S.continuing })}
                   </form>
                 </>
-              )}
-
-              {view === 'code' && (
-                <>
-                  {title(C.title)}
-                  <p>{C.lead(showPhone(phone))}</p>
-                  <form noValidate onSubmit={continueCode} className="flex flex-col gap-6">
-                    <TextField
-                      id="code" label={C.label} hint={C.hint} error={error} type="text" inputMode="numeric" autoComplete="one-time-code"
-                      pattern="[0-9]*" maxLength={CODE_LENGTH} spellCheck={false} placeholder="000000" value={code}
-                      onChange={typing(setCode, (v) => digitsOf(v).slice(0, CODE_LENGTH))}
-                      style={{ fontSize: '2rem', letterSpacing: '0.4em', fontVariantNumeric: 'tabular-nums' }}
-                    />
-                    {submit(C.submit, { busy, busyLabel: C.busy })}
-                  </form>
-                  <div className="flex flex-col gap-4 border-t border-line pt-6">
-                    <p className="text-sm">
-                      <strong>{C.newHere}</strong>
-                    </p>
-                    <Button variant="secondary" className="w-full" onClick={signUp} disabled={busy}>
-                      {C.signUp}
-                    </Button>
-                    <Button variant="link" small className="self-start" onClick={askStartOver} disabled={busy}>
-                      {C.startOver}
-                    </Button>
-                  </div>
-                </>
-              )}
-
-              {view === 'startOver' && (
-                <div role="alertdialog" aria-labelledby="start-over-title" aria-describedby="start-over-lead" className="flex flex-col gap-6">
-                  <h1 id="start-over-title" ref={heading} tabIndex={-1} className="text-title">{O.title}</h1>
-                  <p id="start-over-lead">{O.lead}</p>
-                  <p className="rounded-inset bg-wash px-5 py-4 font-bold">{showPhone(phone)}</p>
-                  <ErrorText>{error}</ErrorText>
-                  <div className="flex flex-col gap-4">
-                    <Button className="w-full" busy={busy} busyLabel={O.busy} onClick={startOver}>
-                      {O.confirm}
-                    </Button>
-                    <Button variant="link" small className="self-start" onClick={() => open('code')} disabled={busy}>
-                      {O.cancel}
-                    </Button>
-                  </div>
-                </div>
               )}
 
               {view === 'email' && (

@@ -203,7 +203,7 @@ export default function Review({ data, set, words, lang = 'en', headingRef, sign
       </dl>
       <ErrorText id="finish-error">{errorText(error, lang)}</ErrorText>
       {error?.code === 'ALREADY_SIGNED_UP' && (
-        // The number has an account already: the way in is phone + family code, not setup.
+        // The number has an account already: the way in is sign-in, not setup.
         <Button variant="secondary" href="#/signin" className="motion-safe:animate-enter">
           {NAV.signIn}
         </Button>

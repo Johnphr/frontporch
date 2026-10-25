@@ -1,12 +1,11 @@
 // Last screen: "Oscar is calling … now" (a call was placed) or "Oscar will call … every Tuesday",
-// then where that call is (useCallStatus), "Try again" when the status allows it, his family code
-// (shown here once; Home has it behind a button), what to expect, and the way to their page.
+// then where that call is (useCallStatus), "Try again" when the status allows it, what to expect,
+// and the way to their page.
 import { useState } from 'react'
-import { CALL_STATUS_BY_LANG, FAMILY_CODE_BY_LANG, dayName, formatHour, spacedCode } from '../../copy'
+import { CALL_STATUS_BY_LANG, dayName, formatHour } from '../../copy'
 import { SETUP } from '../../copy/setup'
 import { showPhone } from '../../copy/signin'
 import { go } from '../../lib/route'
-import { loadSession } from '../../lib/session'
 import { GOOD, LIVE, useCallStatus } from '../../lib/useCallStatus'
 import { CheckMark, RingingArt } from '../../art/setup'
 import { CallUsLine } from '../../ui/CallUsLine'
@@ -82,26 +81,8 @@ function useCallPanel(callId, reason, CALL_STATUS, lang) {
   }
 }
 
-/** His 6-digit family code in a calm card: one digit at a time, with what it's for. */
-export function FamilyCodeCard({ code, lang = 'en', id = 'family-code-title' }) {
-  const F = FAMILY_CODE_BY_LANG[lang] || FAMILY_CODE_BY_LANG.en
-  if (!code) return null
-  return (
-    <section aria-labelledby={id} className="flex w-full flex-col gap-3 rounded-inset bg-wash px-5 py-5 motion-safe:animate-enter sm:px-6">
-      <h2 id={id} className="text-sm font-bold uppercase tracking-[0.08em] text-muted">
-        {F.title}
-      </h2>
-      <p className="font-display text-[2.5rem] leading-none tracking-[0.2em] [font-variant-numeric:tabular-nums]" aria-label={F.code(spacedCode(code))}>
-        {spacedCode(code)}
-      </p>
-      <p>{F.lead}</p>
-    </section>
-  )
-}
-
 export default function Done({ words, lang = 'en', host, elderId, token, phone, callDay, callHour, headingRef, ...first }) {
   const CALL_STATUS = CALL_STATUS_BY_LANG[lang] || CALL_STATUS_BY_LANG.en
-  const [familyCode] = useState(() => loadSession().familyCode || '')
   const [callId, setCallId] = useState(first.callId || null)
   const [reason, setReason] = useState(first.reason || null)
   const [busy, setBusy] = useState(false)
@@ -134,7 +115,6 @@ export default function Done({ words, lang = 'en', host, elderId, token, phone, 
           {CALL_STATUS.tryAgain}
         </Button>
       )}
-      <FamilyCodeCard code={familyCode} lang={lang} />
       <h2 className="text-subhead">{SETUP.done.expect}</h2>
       <ul className="flex flex-col gap-5">
         {words.expect.map((line) => (

@@ -1,14 +1,16 @@
-// "Connect Threads" / "Connect X" (convex/signup.ts startOAuthConnect). Click -> the backend gives
-// the platform's consent URL -> the browser goes there -> the platform sends him to convex
-// /oauth/<id>/callback -> back to the site with ?connected=<id> or ?connect_error=<code>&platform=<id>
-// (lib/oauthReturn.js). Setup progress survives the trip (lib/setupProgress.js); which platforms
+// "Connect Threads" / "Connect X" (convex/signup.ts startOAuthConnect). Click -> a new tab opens ->
+// the backend gives the platform's consent URL -> the new tab goes there -> the platform sends him
+// to convex /oauth/<id>/callback -> back to the site with ?connected=<id> or
+// ?connect_error=<code>&platform=<id> (lib/oauthReturn.js) -> that tab hands the result to this one
+// and closes, so he's back where he started. A blocked pop-up: this tab makes the trip instead.
+// Setup progress survives the trip (lib/setupProgress.js); which platforms
 // setup connected is kept under OAUTH_KEY:<elderId> in localStorage (the trip may come back in a
 // new tab), and OAUTH_FROM_KEY says whether it started in setup or on his page (App.jsx).
 // No token from the platform ever reaches this page.
 import { useEffect, useState } from 'react'
 import { signupApi } from '../../api'
 import { errorText } from '../../copy'
-import { takeOAuthReturn } from '../../lib/oauthReturn'
+import { listenOAuthResult, takeOAuthReturn } from '../../lib/oauthReturn'
 import { OAUTH_FROM_KEY, OAUTH_KEY } from '../../lib/session'
 import { CheckMark } from '../../art/setup'
 import { Button, ErrorText } from '../../ui/controls'
@@ -34,9 +36,11 @@ const saveConnected = (elderId, value) => {
     /* storage unavailable */
   }
 }
+/** Where the trip started ('setup' | 'home'), for the tab it comes back in; '' clears it. */
 const noteStart = (from) => {
   try {
-    localStorage.setItem(OAUTH_FROM_KEY, from)
+    if (from) localStorage.setItem(OAUTH_FROM_KEY, from)
+    else localStorage.removeItem(OAUTH_FROM_KEY)
   } catch {
     /* storage unavailable: App.jsx falls back to setup progress */
   }
@@ -45,19 +49,21 @@ const noteStart = (from) => {
 /**
  * words = accountsCopy().oauth. beforeLeave() saves setup progress before the browser leaves.
  * `only`: platform ids to offer (his page offers the ones not connected); `labels` overrides
- * the button text per platform (e.g. "Reconnect Threads").
+ * the button text per platform (e.g. "Reconnect Threads"). onConnected(id): a platform got
+ * connected in the new tab (his page updates its list).
  */
-export function OAuthConnect({ words, lang = 'en', elderId, token, beforeLeave, only, labels = {} }) {
+export function OAuthConnect({ words, lang = 'en', elderId, token, beforeLeave, only, labels = {}, onConnected }) {
   const shown = only ? OAUTH_PLATFORMS.filter((p) => only.includes(p.id)) : OAUTH_PLATFORMS
   // His page knows the real states (getProfile), so it doesn't read setup's saved list.
   const [connected, setConnected] = useState(() => (only || !elderId ? {} : loadConnected(elderId)))
   const [notice, setNotice] = useState(null) // { platform, ok, code? }
   const [busy, setBusy] = useState('')
+  const [waiting, setWaiting] = useState('') // platform id open in the new tab
   const [error, setError] = useState('')
 
-  useEffect(() => {
-    const back = takeOAuthReturn()
-    if (!back) return
+  /** A result: from this tab's own trip (start-up) or handed over by the new tab. */
+  function show(back) {
+    setWaiting('')
     setNotice(back)
     if (back.ok) {
       setConnected((prev) => {
@@ -66,26 +72,47 @@ export function OAuthConnect({ words, lang = 'en', elderId, token, beforeLeave, 
         return next
       })
     }
+  }
+
+  useEffect(() => {
+    const back = takeOAuthReturn()
+    if (back) show(back)
+    return listenOAuthResult((handed) => {
+      noteStart('') // this tab showed it: the new tab's routing note is stale
+      show(handed)
+      if (handed.ok) onConnected?.(handed.platform)
+    })
   }, [])
 
   async function connect(id) {
     setError('')
     setNotice(null)
+    setWaiting('')
     if (!elderId || !token) {
       setError(words.errors.not_found)
       return
     }
+    // Open the tab now, inside the click, so pop-up blockers allow it; it goes to the platform
+    // once the backend gives the URL. Cut its link back here, so the platform's page can't
+    // reach this one.
+    const tab = window.open('', '_blank')
+    if (tab) tab.opener = null
     setBusy(id)
     try {
       const res = await signupApi.startOAuthConnect(elderId, token, id)
       if (res?.ok && /^https:\/\//.test(res.url || '')) {
         beforeLeave?.()
         noteStart(only ? 'home' : 'setup')
-        window.location.assign(res.url)
+        if (!tab) return window.location.assign(res.url) // pop-up blocked: this tab goes
+        tab.location.href = res.url
+        setWaiting(id)
+        setBusy('')
         return
       }
+      tab?.close()
       setError(words.errors[res?.error] || words.errors.failed)
     } catch (err) {
+      tab?.close()
       setError(err.code === 'NOT_FOUND' ? words.errors.not_found : err.code === 'NETWORK' ? errorText(err, lang) : words.errors.failed)
     }
     setBusy('')
@@ -96,6 +123,7 @@ export function OAuthConnect({ words, lang = 'en', elderId, token, beforeLeave, 
   return (
     <div className="flex w-full flex-col gap-4">
       <div aria-live="polite" className="flex w-full flex-col gap-4 empty:hidden">
+        {waiting && <p className="rounded-inset bg-wash px-5 py-4 text-sm">{words.inNewTab(nameOf(waiting))}</p>}
         {notice?.ok && <p className="rounded-inset bg-wash px-5 py-4 text-sm">{words.connected(nameOf(notice.platform))}</p>}
         {notice && !notice.ok && <ErrorText>{words.errors[notice.code] || words.errors.failed}</ErrorText>}
         <ErrorText>{error}</ErrorText>

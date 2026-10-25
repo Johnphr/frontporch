@@ -268,7 +268,6 @@ export function newElderFields(
   input: { name: string; phone: string; language: CallLanguage; timeZone?: string },
   nowMs: number,
   tokenHash: string,
-  familyCodeHash?: string,
 ) {
   const timezone = signupTimezone(input.timeZone, input.phone);
   return {
@@ -280,84 +279,36 @@ export function newElderFields(
     timezone,
     ...defaultCallSlot(nowMs, timezone),
     signupTokenHash: tokenHash,
-    ...(familyCodeHash ? { familyCodeHash } : {}),
   };
 }
 
-// ---------- Family code (signup.signIn, signup.startOver) ----------
-// register also hands out a 6-digit family code, once; only its SHA-256 hash is stored
-// (elders.familyCodeHash). Phone + code signs him in from any browser: signIn mints a new token
-// (the old device's stops working). Wrong code and unknown phone both read as wrong_code, and
-// tries are counted per phone (connectAttempts "signin:<phone>") whether or not it's signed up.
-// Never logged.
+// ---------- Sign in (signup.signIn): phone number only ----------
+// Phone -> a new token (the old device's stops working). Tries are counted per phone
+// (connectAttempts "signin:<phone>"), so a number can't be used to keep signing its owner out.
 
-export const FAMILY_CODE_DIGITS = 6;
-export const SIGNIN_TRIES = 5; // wrong codes per phone...
+export const SIGNIN_TRIES = 5; // sign-ins per phone...
 export const SIGNIN_WINDOW_MS = 15 * 60_000; // ...in this window
 
-/** A random 6-digit code as a string ("048213" keeps its leading zero). Make it in an action. */
-export function newFamilyCode(): string {
-  const max = 10 ** FAMILY_CODE_DIGITS;
-  // Reject values past the largest multiple of `max`, so every code is equally likely.
-  const limit = Math.floor(2 ** 32 / max) * max;
-  for (;;) {
-    const [n] = crypto.getRandomValues(new Uint32Array(1));
-    if (n < limit) return String(n % max).padStart(FAMILY_CODE_DIGITS, "0");
-  }
-}
+export type SignInRefusal = "not_found" | "too_many_tries";
 
-/** "482 917", "482-917" -> "482917"; undefined unless it's exactly 6 digits once tidied. */
-export function normalizeFamilyCode(raw: string): string | undefined {
-  const code = raw.replace(/[\s-]/g, "");
-  return new RegExp(`^\\d{${FAMILY_CODE_DIGITS}}$`).test(code) ? code : undefined;
-}
-
-/** Hex SHA-256 of a well-formed code; undefined for anything else (so it never matches). */
-export async function familyCodeHash(raw: string): Promise<string | undefined> {
-  const code = normalizeFamilyCode(raw);
-  if (!code) return undefined;
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`family-code:${code}`));
-  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-export type SignInRefusal = "wrong_code" | "too_many_tries";
-
-/** May this phone try a code now? `attemptTimes` = its recent wrong codes. */
+/** May this phone sign in now? `attemptTimes` = its recent tries. */
 export function signInRateLimit(attemptTimes: number[], now: number): { ok: true } | { ok: false; reason: "too_many_tries" } {
   return attemptTimes.filter((t) => now - t < SIGNIN_WINDOW_MS).length >= SIGNIN_TRIES ? { ok: false, reason: "too_many_tries" } : { ok: true };
 }
 
-/** The wrong-code list to store after one more: only the ones the limit still looks at. */
+/** The try list to store after one more: only the ones the limit still looks at. */
 export function recordSignInAttempt(attemptTimes: number[], now: number): number[] {
   return [...attemptTimes.filter((t) => now - t < SIGNIN_WINDOW_MS), now].slice(-SIGNIN_TRIES);
 }
 
-/**
- * signIn / startOver's decision for a phone: the rate limit first (so a locked-out phone learns
- * nothing), then his row must exist, be live (not archived), have a code, and match it in
- * constant time. A missing row and a wrong code are the same answer.
- */
+/** signIn's decision for a phone: the rate limit first, then his row must exist and be live. */
 export function signInDecision(
-  elder: { stage?: string; familyCodeHash?: string } | null,
-  codeHash: string | undefined,
+  elder: { stage?: string } | null,
   attemptTimes: number[],
   now: number,
 ): { ok: true } | { ok: false; reason: SignInRefusal } {
   const limit = signInRateLimit(attemptTimes, now);
   if (!limit.ok) return limit;
-  if (!elder || elder.stage === "archived" || !sameTokenHash(elder.familyCodeHash, codeHash)) return { ok: false, reason: "wrong_code" };
+  if (!elder || elder.stage === "archived") return { ok: false, reason: "not_found" };
   return { ok: true };
-}
-
-/** The phone an archived row keeps: out of register's way (by_phone), but still readable. */
-export function archivedPhone(phone: string, now: number): string {
-  return `archived:${now}:${phone}`;
-}
-
-/**
- * startOver's patch for his row: archived, the number freed, and both secrets dropped so no old
- * token or code can read or change it. Posts and calls stay as history.
- */
-export function archiveFields(phone: string, now: number) {
-  return { stage: "archived" as const, phone: archivedPhone(phone, now), signupTokenHash: undefined, familyCodeHash: undefined };
 }

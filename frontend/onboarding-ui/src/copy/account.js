@@ -38,9 +38,6 @@ export const HOME = {
   save: 'Save',
   saving: 'Saving…',
   cancel: 'Cancel',
-  // His family code (copy.js FAMILY_CODE_BY_LANG has the card and the button words).
-  familyCodeTitle: 'Signing in on another device',
-  familyCodeLead: 'On any phone or computer, sign in with your phone number and your 6-digit family code.',
 }
 
 export const POSTS = {
