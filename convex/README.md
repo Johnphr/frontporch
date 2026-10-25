@@ -84,7 +84,8 @@ npx convex env remove CALL_INTERVAL_MINUTES       # stop
 - After 3 missed calls in a row (no answer, voicemail, busy...) it stops calling that number until a
   real conversation happens (start one by hand). Our own failures (busy lines, config) don't count.
 - Off with an interval under a day unless `AUTO_POST=off` (posts and thread replies could go out
-  on his real accounts every few minutes). Set `npx convex env set AUTO_POST off` to loop.
+  on his real accounts every few minutes). Set `npx convex env set AUTO_POST off` to loop. While
+  it's blocked, `callLoop.tick` logs a warning once an hour (minute 0) saying so.
 - Numbers it covers are skipped by the weekly `schedule.tick`. No quiet hours: keep the list small.
 
 **Sign-up page call status:** after "Call me now" the page shows what is happening in plain words
@@ -109,9 +110,8 @@ route in `http.ts` once posts are reviewed on LinkedIn.
 ## Try the after-call flow without a phone
 
 Fixtures in `../tests/fixtures/`. Use a throwaway seeded elder: fixture facts merge into his
-profile and memories. A story fixture ends in a post, so `seedEndedCall` refuses it while posting
-is live (`AUTO_POST` on and he has a Bluesky / Reddit login, or LinkedIn is on) unless you pass
-`"allowPost": true`; `npx convex env set AUTO_POST off` keeps the post `pending`.
+profile and memories. A story fixture ends in a post, so `seedEndedCall` refuses it unless `AUTO_POST=off`
+(or you pass `"allowPost": true`); `npx convex env set AUTO_POST off` keeps the post `pending`.
 
 ```bash
 ID=$(npx convex run elders:seed '{"name":"Test Walter","phone":"+15550001111","profile":{"industry":"Baking","specialty":"Bread"}}' | tr -d '"')
@@ -382,7 +382,7 @@ clear error without it).
 | `memories.addMany({ elderId, callId?, items, resolveThreadIds? })` | `pipeline.processCall` | embed + store what he said; merges near-duplicates, resolves finished open threads |
 | `memories.search({ elderId, text, k, kinds? })` | `conversation.planNextCall` | memories closest to a text (e.g. the next question) |
 | `memories.listForElder({ elderId, kinds?, status?, limit? })` | planner | e.g. all active open threads |
-| `blueskyEngagement.scrapeForElder({ elderId })` | `schedule.dailyEngagement` | his Bluesky threads from the last 30 days: likes + reposts on his posts, replies by others → `engagement:upsert` (public AppView, no login). Returns `{ threads, upserted, likes, reposts, replies, gone, errors }` |
+| `blueskyEngagement.scrapeForElder({ elderId })` | `schedule.dailyEngagement` | his Bluesky threads from the last 30 days: likes + reposts on the root post, replies by others (oldest 20, not hidden or labelled) → `engagement:upsert`; a deleted thread → `engagement:markGone` (his session if connected, else the public AppView). Returns `{ threads, upserted, likes, reposts, replies, gone, errors }` |
 | `engagement.upsert(...)` | `blueskyEngagement.scrapeForElder`, `apify.scrapeEngagement` | latest reactions + comments per post per platform (`platform`, default linkedin); schedules a question-bank refresh when something changed |
 | `engagement.recentFeedback({ elderId, sinceDays? })` | planner | posts with reactions + comments, newest first |
 | `schedule.tick` | hourly cron | `conversation.prepareCall` ~1h before his call, `cartesia.startCall` at the call hour |
