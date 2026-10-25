@@ -320,8 +320,9 @@ export async function createThread(
     } catch (error) {
       const sent = error === createError;
       const httpStatus = error instanceof BlueskyHttpError || error instanceof BlueskyNoRecordError ? error.status : undefined;
-      const message =
-        error instanceof BlueskyHttpError || error instanceof BlueskyNoRecordError
+      const message = !sent && error instanceof BlueskyHttpError && error.status >= 400 && error.status < 500
+        ? loginRefusedMessage(error)
+        : error instanceof BlueskyHttpError || error instanceof BlueskyNoRecordError
           ? error.message
           : sent
             ? "Network error, timeout or unreadable answer while posting to Bluesky"
@@ -338,6 +339,11 @@ export async function createThread(
     }
   }
   return { ok: true, records, handle };
+}
+
+/** "Bluesky login refused: HTTP 401 (AuthenticationRequired)": status + XRPC error name only. */
+export function loginRefusedMessage(error: BlueskyHttpError): string {
+  return `Bluesky login refused: HTTP ${error.status}${error.xrpcError ? ` (${error.xrpcError})` : ""}`;
 }
 
 /** His newest posts (straight from his repo, so the cid is there), for finding an earlier run's thread. */

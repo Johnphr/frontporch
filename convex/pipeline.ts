@@ -163,9 +163,11 @@ export const seedEndedCall = internalMutation({
     allowPost: v.optional(v.boolean()),
   },
   handler: async (ctx, { elderId, kind, turns, allowPost, ...rest }) => {
+    // A lookup that throws counts as an account (safe side).
+    const has = (p: Promise<unknown>) => p.then(Boolean, () => true);
     const anyAccount =
-      Boolean(await blueskyLoginForElder(ctx, elderId)) ||
-      Boolean(await redditLoginForElder(ctx, elderId)) ||
+      (await has(blueskyLoginForElder(ctx, elderId))) ||
+      (await has(redditLoginForElder(ctx, elderId))) ||
       (linkedinPostingOn(process.env.LINKEDIN_POSTING) && Boolean(process.env.LINKEDAPI_TOKEN && process.env.LINKEDAPI_ID_TOKEN));
     if (kind === "story" && parseAutoPost(process.env.AUTO_POST) && anyAccount && !allowPost) {
       throw new Error("This fixture would post to his real accounts: set AUTO_POST=off (or pass allowPost: true)");

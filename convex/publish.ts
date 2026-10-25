@@ -250,10 +250,24 @@ function loadData(ctx: ActionCtx, postId: Id<"posts">) {
   return ctx.runQuery(internal.publish.getForPublish, { postId });
 }
 
-/** Which platforms are on for him (lib/logins.ts decides Bluesky and Reddit). */
+/**
+ * Which platforms are on for him (lib/logins.ts decides Bluesky and Reddit). A lookup that
+ * throws (an account we can't read, e.g. a missing key) counts as on, so its row ends up
+ * `failed` with a clear error instead of being skipped silently.
+ */
 async function platformsFor(ctx: ActionCtx, elderId: Id<"elders">): Promise<Record<Platform, boolean>> {
-  const [bluesky, reddit] = await Promise.all([blueskyLoginForElder(ctx, elderId), redditLoginForElder(ctx, elderId)]);
-  return enabledPlatforms({ blueskyLogin: Boolean(bluesky), redditLogin: Boolean(reddit), linkedinOn: linkedinPostingOn(process.env.LINKEDIN_POSTING) });
+  const has = (p: Promise<unknown>) => p.then(Boolean, () => true);
+  const [bluesky, reddit] = await Promise.all([has(blueskyLoginForElder(ctx, elderId)), has(redditLoginForElder(ctx, elderId))]);
+  return enabledPlatforms({ blueskyLogin: bluesky, redditLogin: reddit, linkedinOn: linkedinPostingOn(process.env.LINKEDIN_POSTING) });
+}
+
+/** A login lookup that throws -> null + a fixed error (nothing is posted). Never the error text. */
+async function loginOrError<T>(lookup: Promise<T | null>, what: string): Promise<{ login: T | null; error?: string }> {
+  try {
+    return { login: await lookup };
+  } catch {
+    return { login: null, error: `Couldn't read his ${what} login (account setup error); nothing was posted.` };
+  }
 }
 
 /** Post to one platform. `previous` = the row's status before this claim. Never throws on purpose. */
@@ -266,7 +280,8 @@ async function postTo(
 ): Promise<PlatformOutcome> {
   const { post, lang } = data;
   if (platform === "bluesky") {
-    const login = await blueskyLoginForElder(ctx, post.elderId);
+    const { login, error } = await loginOrError(blueskyLoginForElder(ctx, post.elderId), "Bluesky");
+    if (error) return { status: "failed", error };
     const split = splitBlueskyThread(post.text, lang);
     if (!split.ok) return { status: "failed", error: `Doesn't fit a Bluesky thread: ${split.reason}` };
     const row = await ctx.runQuery(internal.publish.getPublication, { publicationId });
@@ -279,7 +294,8 @@ async function postTo(
     });
   }
   if (platform === "reddit") {
-    const login = await redditLoginForElder(ctx, post.elderId);
+    const { login, error } = await loginOrError(redditLoginForElder(ctx, post.elderId), "Reddit");
+    if (error) return { status: "failed", error };
     return submitRedditStory(timedFetch, login, redditStoryParts(post.text, lang));
   }
   if (!linkedinPostingOn(process.env.LINKEDIN_POSTING)) return { status: "failed", error: skipReason("linkedin") };
@@ -312,8 +328,9 @@ function depsFor(ctx: ActionCtx, postId: Id<"posts">, state: { data: PublishData
         return { pass: false, issues: [`Fact-check crashed: ${what}`], summary: "Fact-check error.", mode: "enforce" };
       }
     },
-    saveGuard: (guard, hold) =>
-      ctx.runMutation(internal.publish.saveGuard, { postId, hold, issues: guard.issues, summary: guard.summary }),
+    saveGuard: async (guard, hold) => {
+      await ctx.runMutation(internal.publish.saveGuard, { postId, hold, issues: guard.issues, summary: guard.summary });
+    },
     ensureRow: (platform, enabled) => ctx.runMutation(internal.publish.ensurePublication, { postId, platform, enabled }),
     claimRow: async (id, approve) => {
       const claim = await ctx.runMutation(internal.publish.claimPublication, { publicationId: id as Id<"postPublications">, approve });
@@ -321,7 +338,9 @@ function depsFor(ctx: ActionCtx, postId: Id<"posts">, state: { data: PublishData
       return claim;
     },
     post: (platform, rowId) => postTo(ctx, state.data!, platform, rowId as Id<"postPublications">, previous.get(rowId)),
-    finishRow: (id, outcome) => ctx.runMutation(internal.publish.finishPublication, { publicationId: id as Id<"postPublications">, outcome }),
+    finishRow: async (id, outcome) => {
+      await ctx.runMutation(internal.publish.finishPublication, { publicationId: id as Id<"postPublications">, outcome });
+    },
     isRemoved: () => ctx.runQuery(internal.publish.isRemoved, { postId }),
     scheduleUndo: async () => {
       try {

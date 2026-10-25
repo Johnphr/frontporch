@@ -493,3 +493,36 @@ test("runQualityLoop: stays inside the time budget", async () => {
   assert.equal(judged, 3); // one try per draft
   assert.deepEqual(noRetry.calls.sleeps, []);
 });
+
+// ---------- Bluesky thread fit ----------
+
+test("hardChecks: a post that can't be a 5-post Bluesky thread is a blocker (hook too long too)", () => {
+  const para = "This is a sentence about the bakery and the oven we ran. ".repeat(4).trim();
+  const long = ["The night the oven died.", para, para, para, para, para, "What would you do?"].join("\n\n");
+  assert.ok(hardChecks(long, "en").some((i) => i.id === "thread_fit" && i.severity === "major"));
+  const hook = `${words(70, "longword")} and more.`;
+  const badHook = [hook, "Short story.", "What about you?"].join("\n\n");
+  const fit = hardChecks(badHook, "en").find((i) => i.id === "thread_fit");
+  assert.match(fit?.message ?? "", /opening line/);
+  assert.ok(!hardChecks(EN_POST, "en").some((i) => i.id === "thread_fit"));
+});
+
+test("evaluate + keepRewrite: a rewrite that fits a thread beats one that doesn't (neither passing)", () => {
+  const fitIssue = { id: "thread_fit", severity: "major" as const, message: "Doesn't fit a Bluesky thread: too long" };
+  const noFit = evaluate(judgement(9), [fitIssue]);
+  assert.equal(noFit.passed, false);
+  assert.equal(noFit.fits, false);
+  assert.equal(noFit.notes[0], fitIssue.message, "blockers come first in the notes");
+  const fitsButWeak = evaluate(judgement(6), []);
+  assert.equal(keepRewrite(noFit, fitsButWeak), true);
+  assert.equal(keepRewrite(fitsButWeak, noFit), false);
+});
+
+test("holdDecision: a post that doesn't fit a thread is held with a clear summary, even if it passed", () => {
+  const passed = qualityReport(evaluate(judgement(9), []), 1);
+  const held = holdDecision(passed, "It needs 6 posts; a thread holds at most 5.");
+  assert.equal(held?.status, "needs_review");
+  assert.match(held?.summary ?? "", /doesn't fit a Bluesky thread of at most 5 posts \(It needs 6 posts/);
+  assert.match(held?.summary ?? "", /publish:approvePost/);
+  assert.equal(holdDecision(passed, null), null);
+});

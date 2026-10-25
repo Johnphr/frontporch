@@ -7,7 +7,7 @@
 // Never log or return tokens, passwords or post text.
 
 import { postWebUrl, type StrongRef } from "./bluesky.ts";
-import { createThread, listOwnPosts, withSession, type FetchFn, type SessionCache } from "./blueskyClient.ts";
+import { BlueskyHttpError, createThread, listOwnPosts, loginRefusedMessage, withSession, type FetchFn, type SessionCache } from "./blueskyClient.ts";
 import { cleanStoryBody, hashtagFacets, recoverThreadRecords } from "./blueskyThread.ts";
 import { disclosureFor, truncate } from "./linkedinPost.ts";
 import type { BlueskyLogin, RedditLogin } from "./logins.ts";
@@ -36,10 +36,14 @@ export async function postBlueskyStory(
     try {
       const listed = await withSession(fetchFn, cache, login, (s) => listOwnPosts(fetchFn, s, 50));
       done = recoverThreadRecords(listed, a.texts, done);
-    } catch {
+    } catch (error) {
+      // Still unclear what the earlier attempt posted, so it stays maybe_posted.
+      const login = error instanceof BlueskyHttpError && /^Bluesky (login|refresh) /.test(error.message) && error.status < 500;
       return {
         status: "maybe_posted",
-        error: `Couldn't read his Bluesky posts to find the earlier attempt; ${CHECK_PROFILE}.`,
+        error: login
+          ? `${loginRefusedMessage(error)}; couldn't look for the earlier attempt, ${CHECK_PROFILE}.`
+          : `Couldn't read his Bluesky posts to find the earlier attempt; ${CHECK_PROFILE}.`,
         ...(done.length ? { records: done } : {}),
       };
     }
