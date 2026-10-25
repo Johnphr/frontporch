@@ -1,4 +1,4 @@
-// Inbound calls (he calls the Front Porch number): pure helpers, unit-tested in
+// Inbound calls (he calls the MEMORIA number): pure helpers, unit-tested in
 // tests/inbound.test.ts. No runtime imports beyond ./ (Node runs them directly).
 //
 // One phone number routes to one Cartesia agent, and nothing lets us hand that agent a
@@ -253,7 +253,7 @@ export function buildLookupTool(a: { url: string; secret: string }) {
     type: "webhook",
     name: LOOKUP_TOOL_NAME,
     description:
-      "Look up who is calling, from their phone number (filled in automatically). Call it right after your greeting, before anything else. It returns whether the caller is a Front Porch member, which call this is, the language to speak, their first name, and what you know about them.",
+      "Look up who is calling, from their phone number (filled in automatically). Call it right after your greeting, before anything else. It returns whether the caller is a Memoria member, which call this is, the language to speak, their first name, and what you know about them.",
     // off: the greeting already said "one moment"; nothing to say before the lookup.
     pre_tool_speech: "off",
     execution_mode: "immediate",

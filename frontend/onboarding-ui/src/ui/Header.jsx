@@ -1,5 +1,6 @@
 import { NAV } from '../copy'
 import { TEXT_SIZES, useTextSize } from '../lib/textSize'
+import { Brand } from './Brand'
 
 // Speech bubble whose tail is a curly phone cord (design-mockups/logo/final/frontporch-symbol.svg).
 const LOGO_PATH =
@@ -9,11 +10,11 @@ export function Logo({ href = '#/', tone = 'text-ink' }) {
   // Rose mark on light backgrounds; soft pink on the dark footer.
   const markTone = tone === 'text-white' ? 'text-pink' : 'text-rose'
   return (
-    <a href={href} className={`inline-flex items-center gap-2.5 font-display text-[1.625rem] font-semibold no-underline ${tone}`}>
+    <a href={href} className={`inline-flex items-center gap-2.5 font-display text-[1.625rem] font-normal tracking-[0.04em] no-underline ${tone}`}>
       <svg viewBox="0 0 256 256" className={`h-9 w-9 ${markTone}`} aria-hidden="true" focusable="false">
         <path d={LOGO_PATH} fill="none" stroke="currentColor" strokeWidth="16" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
-      {NAV.brand}
+      <Brand />
     </a>
   )
 }

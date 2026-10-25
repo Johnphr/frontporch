@@ -1,4 +1,4 @@
-# Front Porch: Devpost submission (draft)
+# MEMORIA: Devpost submission (draft)
 
 Cal Hacks 13.0. Submissions close **Oct 25, 9:00 AM PST**.
 
@@ -35,7 +35,7 @@ to him on the next call?
 
 ## What it does
 
-Front Porch is an AI phone host for older professionals. He never needs an app or a screen.
+MEMORIA is an AI phone host for older professionals. He never needs an app or a screen.
 
 1. **Sign-up.** He, or a family member sitting with him, fills in a simple four-step page in
    Spanish or English: his name and call language, his phone number, who should call him
@@ -204,7 +204,7 @@ What is in place:
   draft 0 if it has a fact that isn't in the call or his profile, and a fact-check against the
   whole call runs before anything is posted. A post that fails is held for review, never
   posted.
-- **An AI note on every post.** "I told this story in a phone interview with Front Porch. It
+- **An AI note on every post.** "I told this story in a phone interview with MEMORIA. It
   was written up with AI from my own words." (or the Spanish version). It goes at the end of
   a Bluesky or Threads thread, and in the first post on X. Thread replies carry a shorter AI
   line.
@@ -223,7 +223,7 @@ What is in place:
 What is still missing (we know):
 
 - **No recording or AI notice in the greeting.** The greeting is "Hi Walter, it's Pip from
-  Front Porch. Is now a good time for a little chat?" (`convex/lib/prompts/agent.ts`). Pip
+  Memoria. Is now a good time for a little chat?" (`convex/lib/prompts/agent.ts`). Pip
   says he's an AI when asked, and the first call explains that some stories become posts,
   but nothing says the call is recorded and transcribed. That should be added before calling
   anyone outside our test group, and checked against the call-recording consent rules where

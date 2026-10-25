@@ -1,4 +1,4 @@
-// Map Apify LinkedIn scraper output to what Front Porch stores.
+// Map Apify LinkedIn scraper output to what MEMORIA stores.
 //
 //   harvestapi/linkedin-profile-posts   (primary)  -> EngagementPost[] (counts + comment text)
 //   apimaestro/linkedin-profile-posts   (backup)   -> EngagementPost[] (counts only, no comment text)

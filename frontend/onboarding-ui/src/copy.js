@@ -69,7 +69,7 @@ export function browserTimezone() {
 }
 
 export const NAV = {
-  brand: 'Front Porch',
+  brand: 'MEMORIA',
   textSize: 'Text size',
   signIn: 'Sign in',
   signOut: 'Sign out',

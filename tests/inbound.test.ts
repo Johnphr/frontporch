@@ -369,16 +369,16 @@ test("inbound prompt: greeting and instructions use no custom {{variables}}; too
     assert.match(p.instructions, new RegExp(`FIRST, before you say anything else: call the ${LOOKUP_TOOL_NAME} tool`));
     assert.match(p.instructions, /caller_known is "no"/);
     assert.match(p.greeting, /Hola/); // bilingual first words
-    assert.match(p.greeting, /Front Porch/);
+    assert.match(p.greeting, /Memoria/);
     assert.match(p.greeting, /pull up your notes/); // covers the lookup's wait
   }
 });
 
 test("inbound prompt: the agent IS the call-in host (voice, language, persona) and never claims to be another", () => {
   const daniel = inboundAgent(); // default host
-  assert.match(daniel.instructions, /^You are Daniel, a phone host from Front Porch/);
+  assert.match(daniel.instructions, /^You are Daniel, a phone host from Memoria/);
   assert.ok(daniel.instructions.includes(getCharacter("daniel")!.personality));
-  assert.match(daniel.greeting, /^Hi, you've reached Front Porch, this is Daniel\./);
+  assert.match(daniel.greeting, /^Hi, you've reached Memoria, this is Daniel\./);
   assert.match(daniel.instructions, /speak English unless the caller speaks Spanish/);
 
   const oscar = inboundAgent(getCharacter("oscar")!);
@@ -386,10 +386,10 @@ test("inbound prompt: the agent IS the call-in host (voice, language, persona) a
   assert.ok(oscar.instructions.includes(getCharacter("oscar")!.personality));
   assert.match(oscar.greeting, /this is Oscar\. Hola, habla Oscar/);
   assert.match(oscar.instructions, /You are always Oscar, and only Oscar\. You never claim to be his_host or anyone else/);
-  assert.equal(oscar.name, "Front Porch - inbound (Oscar)");
+  assert.equal(oscar.name, "MEMORIA - inbound (Oscar)");
 
   const diana = inboundAgent(getCharacter("diana")!);
-  assert.match(diana.greeting, /^Hola, habla Diana, de Front Porch\./); // her language first
+  assert.match(diana.greeting, /^Hola, habla Diana, de Memoria\./); // her language first
   assert.match(diana.instructions, /speak Spanish unless the caller speaks English/);
 });
 
@@ -402,7 +402,7 @@ test("inbound prompt: after caller_known yes it greets by name, says whose colle
   const shape = text.slice(text.indexOf('Shape of the call (caller_known "yes")'));
   const step = (n: number) => shape.slice(shape.indexOf(`\n${n}. `), shape.indexOf(`\n${n + 1}. `));
   assert.match(step(1), /Greet them warmly by first_name and thank them for calling in/);
-  assert.match(step(1), /If same_host is "no", say once, right here, that you're Daniel, his_host's colleague at Front Porch/);
+  assert.match(step(1), /If same_host is "no", say once, right here, that you're Daniel, his_host's colleague at Memoria/);
   assert.match(step(1), /If same_host is "yes", just carry on as yourself/);
   assert.match(step(2), /<memories>.*"Last time you told me about\.\.\."/);
   assert.match(step(3), /If there's <feedback>, share it in one warm sentence/);

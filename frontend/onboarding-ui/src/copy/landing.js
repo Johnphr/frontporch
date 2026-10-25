@@ -50,7 +50,7 @@ export const POST = {
     'People thought I was crazy to change prices so often. But it kept the doors open, and my regulars knew I was being straight with them.',
     'If you run a small shop today: know your costs better than anyone, and tell your customers the truth.',
   ],
-  note: 'Written up with AI from a phone call with Front Porch. Checked against what Margaret said.',
+  note: 'Written up with AI from a phone call with MEMORIA. Checked against what Margaret said.',
 }
 
 export const FAMILY = {

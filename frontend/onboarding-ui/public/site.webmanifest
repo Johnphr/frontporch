@@ -1,5 +1,5 @@
 {
-  "name": "Front Porch",
+  "name": "MEMORIA",
   "icons": [
     {
       "src": "/icon-192.png",
@@ -21,5 +21,5 @@
   "theme_color": "#A8475E",
   "background_color": "#FFFFFF",
   "display": "standalone",
-  "short_name": "Front Porch"
+  "short_name": "MEMORIA"
 }

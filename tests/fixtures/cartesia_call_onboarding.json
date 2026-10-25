@@ -6,7 +6,7 @@
   "start_time": "2026-10-24T17:00:00Z",
   "end_time": "2026-10-24T17:12:30Z",
   "transcript": [
-    { "role": "assistant", "text": "Hi Walter, this is Pip, an AI assistant from Front Porch.", "start_timestamp": 0.5, "end_timestamp": 4.1 },
+    { "role": "assistant", "text": "Hi Walter, this is Pip, an AI assistant from Memoria.", "start_timestamp": 0.5, "end_timestamp": 4.1 },
     { "role": "assistant", "text": "Tell me about your very first job.", "start_timestamp": 4.2, "end_timestamp": 6.0 },
     { "role": "user", "text": "Well, I started at Boeing in 1968,", "start_timestamp": 7.0, "end_timestamp": 9.5 },
     { "role": "user", "text": "riveting wing panels on the 747 line.", "start_timestamp": 9.6, "end_timestamp": 12.0 },

@@ -1,6 +1,6 @@
 # Convex
 
-All of Front Porch's backend: tables, vector memory, crons, the question
+All of MEMORIA's backend: tables, vector memory, crons, the question
 planner, the post writer, and the actions that call OpenAI, Cartesia,
 Bluesky, Threads, X, Reddit, LinkedAPI and Apify. See `../ARCHITECTURE.md` for the loop,
 contracts and who owns which file. Where posts go (and each switch):
@@ -187,7 +187,7 @@ For an elder who already did the onboarding call (his row has `stage: "active"` 
    (or `publish:approvePost` if it was held). Turn auto-posting back on with
    `npx convex env set AUTO_POST on`.
 
-## Test an inbound call (he calls the Front Porch number; `inbound.ts`)
+## Test an inbound call (he calls the MEMORIA number; `inbound.ts`)
 
 One number routes to one Cartesia agent, and an agent has one voice for the whole call (no
 mid-call voice change, no hand-off to another agent), so a single bilingual inbound agent
@@ -214,7 +214,7 @@ colleague; it never claims to be him. Unknown numbers get a polite goodbye and n
    after changing it). For the demo: the host the demo elder picks. Without it, the default host
    for `CARTESIA_INBOUND_LANGUAGE` (`en` → Daniel, `es` → Diana).
 
-2. From the elder's phone (his `phone` field, E.164), call the Front Porch number. The host
+2. From the elder's phone (his `phone` field, E.164), call the MEMORIA number. The host
    greets, looks him up, greets him by name and continues his onboarding or story call.
 3. Watch: a `calls` row with `direction: "inbound"`, `queued` is skipped (`in_progress` →
    `ended` → `done`), then memories, a `pending` post (with `AUTO_POST=off`) and a used bank row.

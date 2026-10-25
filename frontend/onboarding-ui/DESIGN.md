@@ -1,6 +1,6 @@
 ---
 version: alpha
-name: Front Porch
+name: MEMORIA
 description: A quiet, large-and-calm system for older professionals and the family helping them. White canvas, an editorial serif for feeling and a hyperlegible sans for facts, hairlines and space that pace the page, and one rose accent for every action. Warmth comes from the illustrations, the serif and the copy, not the background.
 
 colors:
@@ -62,7 +62,7 @@ components:
 
 ## Overview
 
-Front Porch should feel like a letter from someone who is glad to hear from you, printed on clean white stock. The page is **white**. Sections are chapters split by a 1px neutral hairline and big gaps, not by colored bands. The landing page has six: hero, how it works, example post, promises, family, final call to action; say less, not more. Illustrations are flat head-and-shoulders portraits in soft circles (`src/art/hosts.jsx` style), for hosts and people alike. One soft neutral **wash** is the only fill (notes, summaries, the example-post band). One color, **rose**, means "you can act here". Pink and sage appear only inside the illustrations, which is where the warmth lives.
+MEMORIA should feel like a letter from someone who is glad to hear from you, printed on clean white stock. The page is **white**. Sections are chapters split by a 1px neutral hairline and big gaps, not by colored bands. The landing page has six: hero, how it works, example post, promises, family, final call to action; say less, not more. Illustrations are flat head-and-shoulders portraits in soft circles (`src/art/hosts.jsx` style), for hosts and people alike. One soft neutral **wash** is the only fill (notes, summaries, the example-post band). One color, **rose**, means "you can act here". Pink and sage appear only inside the illustrations, which is where the warmth lives.
 
 Users are 60 to 80, or a family member helping. So every craft choice below sits under the **Large & Calm** rules: big text, big targets, labels always shown, a strong focus ring, and no motion that people did not ask for.
 
@@ -186,6 +186,9 @@ Shadows are warm (ink-tinted), soft and low. Never hard or grey.
 - **Card**: white, 1px hairline, 24px radius, flat. Add `shadow-card` only for the main card of a screen.
 - **Panels inside cards** (host preview, switch-host confirm, summaries, notes): 16px radius, wash fill, no shadow; they ease in when they open.
 - **Tag**: small caps eyebrow in muted on white, 1px line border, pill.
+
+### Name
+- **MEMORIA**, always in capitals (memoria + IA). Wherever the UI can style it, "IA" is bold: the logo wordmark uses `<Brand />` (Literata 400, 0.04em tracking, IA 700), and sentences use `branded(text)` (`src/ui/Brand.jsx`). Plain-text places (tab title, manifest, posts) write MEMORIA. Spoken phone scripts write "Memoria", so the voice says the word instead of spelling it out.
 
 ### Navigation
 - **Header**: white, 1px hairline below. Logo left; text-size toggle and page actions right.

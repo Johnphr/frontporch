@@ -16,11 +16,11 @@ export const MAX_HASHTAGS = 3;
 
 // Posted on his own account, so it's in his voice.
 export const DEFAULT_DISCLOSURE =
-  "I told this story in a phone interview with Front Porch. It was written up with AI from my own words.";
+  "I told this story in a phone interview with MEMORIA. It was written up with AI from my own words.";
 
 // Same line for Spanish-speaking elders (callLanguage(elder.language) === "es").
 export const SPANISH_DISCLOSURE =
-  "Conté esta historia en una entrevista telefónica con Front Porch. Se redactó con ayuda de IA a partir de mis propias palabras.";
+  "Conté esta historia en una entrevista telefónica con MEMORIA. Se redactó con ayuda de IA a partir de mis propias palabras.";
 
 /** The disclosure line in the elder's call language ("es" -> Spanish, anything else -> English). */
 export function disclosureFor(lang: string | undefined): string {
