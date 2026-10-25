@@ -2,7 +2,7 @@
 // "Switch to …?" confirm before saving.
 import { useState } from 'react'
 import { signupApi } from '../../api'
-import { HostAvatar } from '../../art/hosts'
+import { HostStage } from '../../art/host3d/HostStage'
 import { HOSTS, errorText } from '../../copy'
 import { HOME } from '../../copy/account'
 import { Button, Card, ErrorText, cx } from '../../ui/controls'
@@ -52,7 +52,7 @@ export default function HostCard({ elderId, token, current, onSaved }) {
               )}
             >
               <input type="radio" name="host" value={id} checked={picked === id} onChange={() => pick(id)} className="sr-only" />
-              <HostAvatar id={id} />
+              <HostStage id={id} className="h-40 w-40" />
               <span className="font-display text-[1.875rem] leading-tight">{host.name}</span>
               <span>{HOME.callsIn(host.languageName)}</span>
               <QualityChips qualities={host.qualities} className="justify-center" />
