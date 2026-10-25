@@ -48,6 +48,11 @@ import { templateVariables } from "./lib/cartesia";
 import { buildOnboardingVariables, callCharacter } from "./lib/onboarding";
 import { addMentioned, newComments, quotableComments } from "./lib/readerSafety";
 import { asElderV2, isOnboarding, type ElderV2 } from "./lib/v2Fields";
+import { accountsLine } from "./lib/prompts/agent";
+import { xPostingOn } from "./lib/xPublishing";
+
+// Convex exposes env vars on process.env (declared so we don't need @types/node).
+declare const process: { env: Record<string, string | undefined> };
 
 const bankItemValidator = v.object({
   question: v.string(),
@@ -88,6 +93,7 @@ type PlanningContext = {
   readerComments: string;
   pendingCommentKeys: string[];
   mentionedComments: string[];
+  accounts: string; // <accounts>: which of Bluesky / X his posts go to (lib/prompts/agent.accountsLine)
 };
 
 const RECENTLY_USED_COUNT = 10;
@@ -118,6 +124,12 @@ export const getPlanningContext = internalQuery({
       .query("questionBankMeta")
       .withIndex("by_elder", (q) => q.eq("elderId", elderId))
       .first();
+    const connected = async (platform: "bluesky" | "x") =>
+      (await ctx.db
+        .query("elderAccounts")
+        .withIndex("by_elder_platform", (q) => q.eq("elderId", elderId).eq("platform", platform))
+        .first())?.status === "connected";
+    const accounts = accountsLine({ bluesky: await connected("bluesky"), x: xPostingOn(process.env) && (await connected("x")) });
     return {
       elder,
       queued: queued.map((r) => ({
@@ -136,6 +148,7 @@ export const getPlanningContext = internalQuery({
       readerComments: meta?.readerComments ?? "",
       pendingCommentKeys: meta?.pendingCommentKeys ?? [],
       mentionedComments: meta?.mentionedComments ?? [],
+      accounts,
     };
   },
 });
@@ -535,6 +548,6 @@ export const planNextCall = internalAction({
       readerComments: context.readerComments,
       commentKeys: context.pendingCommentKeys,
     });
-    return { plan, dynamicVariables: templateVariables(toPromptVariables(plan, elder, { avoid: avoidMemories, lang })) };
+    return { plan, dynamicVariables: templateVariables(toPromptVariables(plan, elder, { avoid: avoidMemories, lang, accounts: context.accounts })) };
   },
 });

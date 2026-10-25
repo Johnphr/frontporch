@@ -18,8 +18,10 @@ import {
   detectLanguage,
   draftOutcome,
   evaluate,
+  MESSAGE_WORDS,
   hardChecks,
   hasMarkdown,
+  messagePost,
   holdDecision,
   keepRewrite,
   nextStep,
@@ -544,4 +546,34 @@ test("hardChecks: the thread fit uses the language it goes out in", () => {
   const issues = hardChecks(EN_POST, "en", "es");
   assert.ok(!issues.some((i) => i.id === "language"), "the spoken-language check is unchanged");
   assert.deepEqual(hardChecks(EN_POST, "en", "en"), hardChecks(EN_POST, "en"));
+});
+
+// ---------- message posts (he asked to post something specific) ----------
+
+const MESSAGE = `I came to Cal Hacks with no idea at all.
+
+I met a team there, we built something together, and we won. Tomorrow we go for more tracks.
+
+Wish us luck, friends!`;
+
+test("message posts: short is fine with MESSAGE_WORDS, a blocker for a story", () => {
+  const story = hardChecks(MESSAGE, "en", "en");
+  assert.ok(story.some((i) => i.id === "length" && i.severity === "major"));
+  const message = hardChecks(MESSAGE, "en", "en", null, MESSAGE_WORDS);
+  assert.equal(message.some((i) => i.severity === "major"), false);
+  const tiny = hardChecks("We won.\n\nThanks all.", "en", "en", null, MESSAGE_WORDS);
+  assert.ok(tiny.some((i) => i.id === "length" && i.severity === "major"));
+});
+
+test("messagePost: a written message wins; a skip, an empty text or a blocker leaves it to the story", () => {
+  const checks = (t: string) => hardChecks(t, "en", "en", null, MESSAGE_WORDS);
+  const post = messagePost({ skip: false, text: MESSAGE, hook: "I came to Cal Hacks with no idea at all." }, checks);
+  assert.ok(post && !post.skip);
+  assert.equal(post.hold, false);
+  assert.equal(post.quality.mode, "message");
+  assert.equal(post.quality.passed, true);
+  assert.equal(messagePost(null, checks), null);
+  assert.equal(messagePost({ skip: true, reason: "no message requested" }, checks), null);
+  assert.equal(messagePost({ skip: false, text: "  ", hook: "" }, checks), null);
+  assert.equal(messagePost({ skip: false, text: `${MESSAGE}\n\nhttps://example.com`, hook: "x" }, checks), null);
 });

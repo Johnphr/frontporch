@@ -38,7 +38,7 @@ export const postQuality = v.object({
     question: v.number(),
     clarity: v.number(),
   }),
-  mode: v.optional(v.literal("fast")), // FAST_POST's single draft: not judged, score 0
+  mode: v.optional(v.union(v.literal("fast"), v.literal("message"))), // FAST_POST's single draft / a message he asked to post: not judged, score 0
 });
 
 // What we remember about him (memories.kind). Keep in sync with lib/memoryText.ts.
