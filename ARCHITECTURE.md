@@ -391,8 +391,8 @@ Threads (Meta) is connected with OAuth, not a password. The flow is generic so X
 **Creating the Meta app (once):**
 1. At developers.facebook.com → My Apps → Create app, pick the **"Access the Threads API"** use case.
 2. In the use case's permissions, add `threads_basic`, `threads_content_publish`, `threads_manage_replies`, `threads_read_replies`, `threads_manage_insights` and `threads_delete`.
-3. In Settings, set the **Redirect Callback URL** to `https://<deployment>.convex.site/oauth/threads/callback`. It must match exactly (the dashboard may add a trailing slash). Set the deauthorize and delete callbacks to the same host.
-4. In App roles → Roles, add each elder (and you) as a **Threads Tester**. Each person accepts on threads.com → Settings → Account → Website permissions → Invites.
+3. In the Threads use case's settings, set the **Redirect Callback URL** to `https://<deployment>.convex.site/oauth/threads/callback`. It must match exactly (the dashboard may add a trailing slash). If the dashboard also asks for uninstall / delete callback URLs, any page on the same host works for the demo.
+4. In App roles → Roles, add each elder (and you) as a **Threads Tester**. Each person accepts while signed in, at threads.com/settings/account → Website permissions.
 5. Set the env vars: `THREADS_APP_ID`, `THREADS_APP_SECRET` (the **Threads** app id and secret, not the Facebook ones) and `SIGNUP_SITE_URL`. Set `THREADS_REDIRECT_URI` only if the callback isn't on `CONVEX_SITE_URL`.
 
 The app stays in **development mode**, where only invited testers can connect. That's enough for the demo; letting anyone connect needs Meta's app review.
