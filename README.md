@@ -61,7 +61,8 @@ coming soon. A shared demo account is used only with `DEMO_ACCOUNT_FALLBACK=on`.
   `needs_review` instead of posted; someone reviews held posts after each call
   (`publish:approvePost`).
 - Each platform is posted at most once (one claimed row per post per platform). If we can't
-  tell whether a post went out, it's marked `maybe_posted` and never retried on its own.
+  tell whether a post went out, it's marked `maybe_posted` and never retried on its own. A
+  Bluesky thread that stopped partway shows as `partly_posted`; a retry continues it.
 - A post that's taken down (`removedAt`) is never posted, and one taken down mid-post is
   removed again.
 - Reddit posting stays off until Reddit approves our API use (`REDDIT_POSTING`).

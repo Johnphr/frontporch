@@ -135,22 +135,30 @@ by hand with `pipeline:processCall`; safe: `memories.addMany` skips a callId it 
 the post row is reused, so no second post).
 
 **Publishing** (`publish.publishPost`; rules in `lib/postFlow.ts`, HTTP in `lib/storyPublishing.ts`):
-never a post with `removedAt` → claim the post (`posts.status: "posting"`, one run at a time)
+scheduled by `pipeline.insertPost` in the mutation that saves the post (which also sets
+`posts.language` and holds it when needed) → never a post with `removedAt` → claim the post
+(`posts.status: "posting"`, one run at a time)
 → `postGuard.checkPost` once, against the whole call and his profile → fail: `needs_review`,
 posted nowhere → pass: each platform in order, each with its own `postPublications` row
-(claim → post → finish; a claim older than 15 min can be retaken; `maybe_posted` only with
-`approve: true`), re-reading the post after each one (taken down meanwhile → `undo:removePost`):
-- **Bluesky** (his login, `lib/logins.ts`): `lib/blueskyThread.ts` splits the post into 3-5 posts
-  of ≤300 graphemes (hook = post 1, AI disclosure at the end of the last post), posted as a
+(claim → post → finish; a claim older than 15 min: Bluesky retakes it, Reddit / LinkedIn
+become `maybe_posted`; `maybe_posted` only with `approve: true`), re-reading the post after
+each one (taken down meanwhile → `undo:removePost`):
+- **Bluesky** (his login, `lib/logins.ts`; a refused login marks his account invalid):
+  `lib/blueskyThread.ts` splits the post into 3-5 posts
+  of ≤300 graphemes (hook = post 1, AI disclosure whole at the end of the last post), posted as a
   thread (`com.atproto.repo.createRecord`, root + parent refs). `records` = every post, root first;
-  `url` = post 1. A half-posted thread keeps its records and a retry continues it.
+  `url` = post 1. A half-posted thread keeps its records and a retry continues it (looking in
+  his repo first for posts made after the row existed).
 - **Reddit** (only when `REDDIT_POSTING=on` + his login): a self post on `u/<name>`, title = the hook.
 - **LinkedIn** (only when `LINKEDIN_POSTING=on`): `linkedapi.startPublication` → poll; else `skipped`.
 
-`posts.status`: `published` once any platform posted (`linkedinUrl` only from LinkedIn), `failed`
-when none did, `needs_review` when held. Human commands: `publish:approvePost` (held post),
-`publish:retryPublication` (one platform row). The writer keeps posts short enough for a 5-post
-thread (`lib/postQuality.ts`); one that still doesn't fit is held for quality.
+`posts.status`: `published` once any platform posted (`linkedinUrl` only from LinkedIn),
+`partly_posted` when only part of a Bluesky thread is out, `failed` when nothing went out,
+`needs_review` when held (`heldFor`: `quality`, `thread_fit`, `guard`). Human commands:
+`publish:approvePost` (held post; fact-checked first unless the fact-check held it),
+`publish:retryPublication` (one platform row of a post the fact-check cleared, `guardPassedAt`).
+The writer keeps posts short enough for a 5-post thread (`lib/postQuality.ts`); one that still
+doesn't fit is held as `thread_fit`.
 
 ### ④ Feedback loop (slice 3)
 Daily cron → `schedule.dailyEngagement` → `blueskyEngagement.scrapeForElder` per active elder
