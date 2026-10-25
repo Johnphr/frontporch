@@ -23,6 +23,7 @@ import {
   rankCandidates,
   runSteps,
   startsWithHook,
+  questionSourceLine,
   toPromptVariables,
   type Candidate,
 } from "../convex/lib/planner.ts";
@@ -440,4 +441,18 @@ test("story call context says where his posts go in <accounts>", () => {
   const ctx = toPromptVariables(buildCallPlan({ kind: "story" }), { name: "W", profile: null }, { accounts: "Connected: Bluesky, X." }).context;
   assert.match(ctx, /<accounts>\nConnected: Bluesky, X\.\n<\/accounts>/);
   assert.equal(toPromptVariables(buildCallPlan({ kind: "story" }), { name: "W", profile: null }).context.includes("accounts"), false);
+});
+
+test("research questions say where they came from in <question_source>; others don't", () => {
+  assert.match(questionSourceLine("audience") ?? "", /real people in their field asked/);
+  assert.match(questionSourceLine("recent_topic", "A hackathon challenge on glasses apps.") ?? "", /talked about in their field lately\. Background: A hackathon challenge on glasses apps\./);
+  for (const s of ["profile", "memory", "open_thread", "reader", undefined]) assert.equal(questionSourceLine(s), undefined);
+
+  const bank = [{ _id: "b1", question: "What did hands-free design teach you?", topicKey: "glasses", source: "recent_topic", why: "Glasses apps are in the news." }];
+  const plan = buildCallPlan({ kind: "story", bank });
+  assert.match(plan.questionSource ?? "", /Background: Glasses apps are in the news\./);
+  assert.match(toPromptVariables(plan, { name: "W", profile: null }).context, /<question_source>\nResearch before this call/);
+  const fromMemory = buildCallPlan({ kind: "story", bank: [{ ...bank[0], source: "memory" }] });
+  assert.equal("questionSource" in fromMemory, false);
+  assert.equal(toPromptVariables(fromMemory, { name: "W", profile: null }).context.includes("question_source"), false);
 });
