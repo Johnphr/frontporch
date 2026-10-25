@@ -18,10 +18,11 @@ import {
   detectLanguage,
   draftOutcome,
   evaluate,
-  MESSAGE_WORDS,
+  SHORT_WORDS,
+  choosePost,
   hardChecks,
   hasMarkdown,
-  messagePost,
+  shortPost,
   holdDecision,
   keepRewrite,
   nextStep,
@@ -548,7 +549,7 @@ test("hardChecks: the thread fit uses the language it goes out in", () => {
   assert.deepEqual(hardChecks(EN_POST, "en", "en"), hardChecks(EN_POST, "en"));
 });
 
-// ---------- message posts (he asked to post something specific) ----------
+// ---------- short posts: a message he asked for, or an insight ----------
 
 const MESSAGE = `I came to Cal Hacks with no idea at all.
 
@@ -556,24 +557,44 @@ I met a team there, we built something together, and we won. Tomorrow we go for 
 
 Wish us luck, friends!`;
 
-test("message posts: short is fine with MESSAGE_WORDS, a blocker for a story", () => {
+test("short posts: short is fine with SHORT_WORDS, a blocker for a story", () => {
   const story = hardChecks(MESSAGE, "en", "en");
   assert.ok(story.some((i) => i.id === "length" && i.severity === "major"));
-  const message = hardChecks(MESSAGE, "en", "en", null, MESSAGE_WORDS);
-  assert.equal(message.some((i) => i.severity === "major"), false);
-  const tiny = hardChecks("We won.\n\nThanks all.", "en", "en", null, MESSAGE_WORDS);
+  const short = hardChecks(MESSAGE, "en", "en", null, SHORT_WORDS);
+  assert.equal(short.some((i) => i.severity === "major"), false);
+  const tiny = hardChecks("We won.\n\nThanks all.", "en", "en", null, SHORT_WORDS);
   assert.ok(tiny.some((i) => i.id === "length" && i.severity === "major"));
 });
 
-test("messagePost: a written message wins; a skip, an empty text or a blocker leaves it to the story", () => {
-  const checks = (t: string) => hardChecks(t, "en", "en", null, MESSAGE_WORDS);
-  const post = messagePost({ skip: false, text: MESSAGE, hook: "I came to Cal Hacks with no idea at all." }, checks);
-  assert.ok(post && !post.skip);
-  assert.equal(post.hold, false);
-  assert.equal(post.quality.mode, "message");
-  assert.equal(post.quality.passed, true);
-  assert.equal(messagePost(null, checks), null);
-  assert.equal(messagePost({ skip: true, reason: "no message requested" }, checks), null);
-  assert.equal(messagePost({ skip: false, text: "  ", hook: "" }, checks), null);
-  assert.equal(messagePost({ skip: false, text: `${MESSAGE}\n\nhttps://example.com`, hook: "x" }, checks), null);
+test("shortPost: a written draft is a post; a skip, an empty text or a blocker isn't", () => {
+  const checks = (t: string) => hardChecks(t, "en", "en", null, SHORT_WORDS);
+  const draft = { skip: false as const, text: MESSAGE, hook: "I came to Cal Hacks with no idea at all." };
+  for (const kind of ["message", "insight"] as const) {
+    const post = shortPost(draft, kind, checks);
+    assert.ok(post && !post.skip);
+    assert.equal(post.hold, false);
+    assert.equal(post.quality.mode, kind);
+    assert.equal(post.quality.passed, true);
+  }
+  assert.equal(shortPost(null, "insight", checks), null);
+  assert.equal(shortPost({ skip: true, reason: "none" }, "insight", checks), null);
+  assert.equal(shortPost({ skip: false, text: "  ", hook: "" }, "message", checks), null);
+  assert.equal(shortPost({ ...draft, text: `${MESSAGE}\n\nhttps://example.com` }, "message", checks), null);
+});
+
+test("choosePost: message beats the story; the story beats an insight; an insight fills in for no story", async () => {
+  const checks = (t: string) => hardChecks(t, "en", "en", null, SHORT_WORDS);
+  const draft = { skip: false as const, text: MESSAGE, hook: "I came to Cal Hacks with no idea at all." };
+  const message = { kind: "message" as const, post: shortPost(draft, "message", checks)! };
+  const insight = { kind: "insight" as const, post: shortPost(draft, "insight", checks)! };
+  const told = { ...insight.post, text: "the story", quality: { ...insight.post.quality, mode: undefined } };
+  const declined = { skip: true as const, reason: "thin call" };
+  const failed = () => Promise.reject(new Error("writePost: drafts failed"));
+
+  assert.equal((await choosePost(message, Promise.resolve(told))).text, MESSAGE);
+  assert.equal((await choosePost(insight, Promise.resolve(told))).text, "the story");
+  assert.equal(await choosePost(insight, Promise.resolve(declined)), insight.post);
+  assert.equal(await choosePost(insight, failed()), insight.post);
+  assert.deepEqual(await choosePost(null, Promise.resolve(declined)), declined);
+  await assert.rejects(choosePost(null, failed()), /drafts failed/);
 });

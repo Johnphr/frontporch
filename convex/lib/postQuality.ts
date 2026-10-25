@@ -86,10 +86,10 @@ export const MAX_WORDS = 200;
 /** Far outside the target length is a blocker, not just a penalty. */
 export const HARD_MIN_WORDS = 90;
 export const HARD_MAX_WORDS = 260;
-/** Word targets for hardChecks: a story post, or a message post (he asked to share something specific). */
+/** Word targets for hardChecks: a story post, or a short post (a message he asked for, or an insight). */
 export type WordLimits = { min: number; max: number; hardMin: number; hardMax: number };
 export const STORY_WORDS: WordLimits = { min: MIN_WORDS, max: MAX_WORDS, hardMin: HARD_MIN_WORDS, hardMax: HARD_MAX_WORDS };
-export const MESSAGE_WORDS: WordLimits = { min: 20, max: 120, hardMin: 10, hardMax: HARD_MAX_WORDS };
+export const SHORT_WORDS: WordLimits = { min: 20, max: 120, hardMin: 10, hardMax: HARD_MAX_WORDS };
 /** The first line is the opening post of a thread: keep it well under one post (300). */
 export const MAX_HOOK_CHARS = 200;
 /**
@@ -297,7 +297,7 @@ export function quotesVerbatim(post: string, question: string): boolean {
  * so a Spanish post is never penalized by English-only rules. `disclosureLang`: the language
  * the post goes out in (posts.language, publish.postLanguage), for the thread-fit check.
  * `askedQuestion`: the question the call answered (also checks it isn't quoted word for word).
- * `limits`: the length targets (STORY_WORDS, or MESSAGE_WORDS for a message post).
+ * `limits`: the length targets (STORY_WORDS, or SHORT_WORDS for a short post).
  * An @mention or a link is always a blocker: a story post never needs one.
  */
 export function hardChecks(
@@ -496,8 +496,8 @@ export type QualityReport = {
   rounds: number; // rewrite rounds run (0-MAX_REWRITE_ROUNDS)
   notes: string[];
   scores: CriterionScores;
-  /** "fast": FAST_POST's single draft; "message": a message he asked to post. Never judged (score 0 means "not scored"). */
-  mode?: "fast" | "message";
+  /** "fast": FAST_POST's single draft; a short post (ShortKind). Never judged (score 0 means "not scored"). */
+  mode?: "fast" | ShortKind;
 };
 
 /** Keep the stored notes short (they're shown on /posts and saved on the posts row). */
@@ -640,13 +640,21 @@ export function fastQualityReport(issues: CheckIssue[]): QualityReport {
   };
 }
 
-// ---------- message posts: he asked to post something specific ----------
+// ---------- short posts: not every post is a story ----------
+//   message  he asked for something specific to be posted (wins over a story)
+//   insight  something interesting he shared: knowledge, what he's learning, a view (used only
+//            when there's no story)
 
-export const MESSAGE_NOTE = "Message post: he asked to share this; not judged as a story.";
+export type ShortKind = "message" | "insight";
 
-/** A message post's quality: passed (the story rubric doesn't apply), the minor issues as notes. */
-export function messageQualityReport(issues: CheckIssue[]): QualityReport {
-  return { ...fastQualityReport(issues), notes: trimNotes([MESSAGE_NOTE, ...issues.map((i) => i.message)]), mode: "message" };
+export const SHORT_NOTES: Record<ShortKind, string> = {
+  message: "Message post: he asked to share this; not judged as a story.",
+  insight: "Insight post: something interesting he shared; not judged as a story.",
+};
+
+/** A short post's quality: passed (the story rubric doesn't apply), the minor issues as notes. */
+export function shortQualityReport(issues: CheckIssue[], kind: ShortKind): QualityReport {
+  return { ...fastQualityReport(issues), notes: trimNotes([SHORT_NOTES[kind], ...issues.map((i) => i.message)]), mode: kind };
 }
 
 /**
@@ -672,14 +680,25 @@ export async function runFastPost(deps: FastDeps): Promise<FastPost> {
 }
 
 /**
- * A message draft (he asked to post something specific) -> the post, or null when it declined,
- * came back empty or has a blocker (then the story flow decides). Checked with MESSAGE_WORDS.
+ * A short draft -> the post, or null when it declined, came back empty or has a blocker (then
+ * the story flow decides). `checks` uses SHORT_WORDS.
  */
-export function messagePost(draft: DraftResult | null, checks: (text: string) => CheckIssue[]): WrittenPost | null {
+export function shortPost(draft: DraftResult | null, kind: ShortKind, checks: (text: string) => CheckIssue[]): WrittenPost | null {
   if (!draft || draft.skip || !draft.text.trim()) return null;
   const issues = checks(draft.text);
   if (issues.some((i) => i.severity === "major")) return null;
-  return { skip: false, text: draft.text, hook: draft.hook, quality: messageQualityReport(issues), hold: false };
+  return { skip: false, text: draft.text, hook: draft.hook, quality: shortQualityReport(issues, kind), hold: false };
+}
+
+/**
+ * Which post wins: a message he asked for, else the story, else an insight (when the story
+ * declined or failed). No short post: the story's result as is (a failure still throws).
+ */
+export async function choosePost(short: { kind: ShortKind; post: WrittenPost } | null, story: Promise<FastPost>): Promise<FastPost> {
+  if (!short) return story;
+  if (short.kind === "message") return short.post;
+  const told = await story.catch(() => null);
+  return told && !told.skip ? told : short.post;
 }
 
 /**
