@@ -129,7 +129,7 @@ export function splitXThread(raw: string, lang: string | undefined): ThreadSplit
     const split = splitBlueskyThread(raw, lang, { limit, maxPosts: X_MAX_THREAD_POSTS, minPosts: X_MIN_THREAD_POSTS });
     if (!split.ok) {
       // We shrank the limit to make room for the note, and now the opening sentence alone is too long.
-      if (limit < X_MAX_WEIGHTED && /^The opening line/.test(split.reason)) {
+      if (limit < X_MAX_WEIGHTED && /^The opening (line|sentence)/.test(split.reason)) {
         const room = X_MAX_WEIGHTED - weightedLength(`\n\n${short}`);
         return fail(`The opening sentence is too long to share the first X post with the AI note (at most ${room} X characters).`);
       }
