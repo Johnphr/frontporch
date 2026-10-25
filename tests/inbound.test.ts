@@ -2,7 +2,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildAgentConfig } from "../convex/lib/cartesia.ts";
+import { buildAgentConfig, templateVariables } from "../convex/lib/cartesia.ts";
+import { buildCallPlan, toPromptVariables } from "../convex/lib/planner.ts";
 import {
   LOOKUP_PATH,
   LOOKUP_TOOL_NAME,
@@ -285,6 +286,27 @@ test("inbound prompt: greeting and instructions use no custom {{variables}}; too
   assert.match(p.instructions, new RegExp(`call the ${LOOKUP_TOOL_NAME} tool`));
   assert.match(p.instructions, /caller_known is "no"/);
   assert.match(p.greeting, /Hola/); // bilingual first words
+});
+
+test("inbound story lookup: today's feedback line, the reader's question and memories reach the agent", () => {
+  // What handleLookup sends for an active elder: conversation.planNextCall's variables.
+  const plan = buildCallPlan({
+    kind: "story",
+    bank: [{ _id: "bank1", question: "A reader asked: how did you price bread back then?", topicKey: "price-bread" }],
+    memories: [{ kind: "person", name: "Eddie", text: "His first hire at the bakery." }],
+    feedbackLine: "A reader asked how you priced bread back then.",
+  });
+  assert.equal(plan.bankId, "bank1"); // marked used after the call (inboundPlanToMark)
+  const vars = templateVariables(toPromptVariables(plan, { name: "Walter Smith" }));
+  const res = knownCallerResponse({ kind: "story", lang: "en", character: getCharacter("daniel")!, variables: vars });
+  assert.equal(res.call_kind, "story");
+  assert.match(res.context, /<feedback>\nA reader asked how you priced bread back then\.\n<\/feedback>/);
+  assert.match(res.context, /<question>\nA reader asked: how did you price bread back then\?\n<\/question>/);
+  assert.match(res.context, /<memories>[\s\S]*Eddie/);
+  // The inbound prompt knows the tags and shares the feedback first.
+  const p = inboundAgent();
+  assert.match(p.instructions, /<feedback> \(what readers said about a recent post\)/);
+  assert.match(p.instructions, /If there's <feedback>, share it in one warm sentence/);
 });
 
 test("buildAgentConfig attaches tools by id only when given", () => {
