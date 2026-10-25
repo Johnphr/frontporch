@@ -67,6 +67,11 @@ export function nextSnapshot(
   return { comments, changed };
 }
 
+/** recentFeedback keeps a row unless the post is gone on its platform or we took it down. */
+export function feedbackVisible(row: { goneAt?: number }, post: { removedAt?: number } | null | undefined): boolean {
+  return row.goneAt === undefined && post?.removedAt === undefined;
+}
+
 /** Start of the recentFeedback window (epoch ms). Bad or negative values mean 14 days. */
 export function feedbackWindowStart(nowMs: number, sinceDays?: number): number {
   const days = typeof sinceDays === "number" && Number.isFinite(sinceDays) && sinceDays >= 0 ? sinceDays : 14;
@@ -110,9 +115,13 @@ export function linkedinEngagementOn(env: Record<string, string | undefined>): b
 
 export type EngagementJob = { kind: "bluesky" | "linkedin"; elderId: string; delayMs: number };
 
+/** LinkedIn runs start this long after the last Bluesky run: past the bank-refresh debounce
+ *  (plus its delay), so their comments schedule a refresh of their own instead of being dropped. */
+export const LINKEDIN_AFTER_BLUESKY_MS = BANK_REFRESH_DEBOUNCE_MS + BANK_REFRESH_DELAY_MS;
+
 /**
  * Daily engagement runs: Bluesky for every active elder, LinkedIn (when on) for active
- * elders with a LinkedIn profile. Each kind is staggered on its own.
+ * elders with a LinkedIn profile, after the whole Bluesky batch. Each kind is staggered.
  */
 export function planDailyEngagement<Id extends string>(
   elders: { _id: Id; stage?: string; linkedinUrl?: string }[],
@@ -122,9 +131,10 @@ export function planDailyEngagement<Id extends string>(
   const active = elders.filter((e) => e.stage === "active");
   const jobs: (EngagementJob & { elderId: Id })[] = active.map((e, i) => ({ kind: "bluesky", elderId: e._id, delayMs: i * staggerMs }));
   if (linkedinOn) {
+    const start = active.length * staggerMs + LINKEDIN_AFTER_BLUESKY_MS;
     active
       .filter((e) => !!e.linkedinUrl)
-      .forEach((e, i) => jobs.push({ kind: "linkedin", elderId: e._id, delayMs: i * staggerMs }));
+      .forEach((e, i) => jobs.push({ kind: "linkedin", elderId: e._id, delayMs: start + i * staggerMs }));
   }
   return jobs;
 }
