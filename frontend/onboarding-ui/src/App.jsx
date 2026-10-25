@@ -35,7 +35,13 @@ const MAX_NAME = 100
 // app password are never stored.
 const load = () => {
   try {
-    return JSON.parse(sessionStorage.getItem(KEY)) || {}
+    const state = JSON.parse(sessionStorage.getItem(KEY)) || {}
+    // A sign-up without its token (saved by an older version) can't go on: start fresh.
+    if (state.elderId && !state.token) {
+      clearSaved()
+      return {}
+    }
+    return state
   } catch {
     return {}
   }

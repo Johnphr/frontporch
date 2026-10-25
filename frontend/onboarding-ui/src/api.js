@@ -70,10 +70,11 @@ export const signupApi = {
    * The token proves this browser made the sign-up: every later call needs it.
    */
   register: (name, phone, language) => call('action', 'register', { name, phone, language, timeZone: browserTimeZone() }),
-  setCharacter: (elderId, token, characterId) => call('mutation', 'setCharacter', { elderId, token, characterId }),
+  setCharacter: (elderId, token, characterId) => call('action', 'setCharacter', { elderId, token, characterId }),
   /**
    * { ok: true, handle } | { ok: false, error } with error one of: invalid_handle, not_app_password,
-   * not_found, locked, rate_limited, wrong_password, account_unavailable, bluesky_busy, failed.
+   * privileged_app_password, not_found, locked, rate_limited, busy, wrong_password, account_unavailable,
+   * bluesky_busy, failed.
    * The app password is sent once and never kept here.
    */
   connectBluesky: (elderId, token, handle, appPassword) => call('action', 'connectBluesky', { elderId, token, handle, appPassword }),
