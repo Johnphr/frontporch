@@ -167,6 +167,41 @@ calls the `lookup_caller` webhook tool (filled from `system__caller_id` +
 no row. Backstop: `inbound.syncInboundCalls` every 10 min lists the agent's recent calls
 (`GET /agents/calls`) and records finished ones from elders that have no row.
 
+### ⑥ Undo: taking a post back
+Posting is automatic, so undo is the safety valve. `convex/undo.ts` (rules: `lib/undo.ts`,
+Bluesky deletes: `lib/blueskyDelete.ts`), internal functions only:
+- `undo.removePost({ postId, reason? })` → `{ removed, failed, manual, waiting }`. Sets
+  `posts.removedAt` / `removedReason` / `status: "removed"` first (publishing never sends a post
+  with `removedAt`), then each `postPublications` row: `pending` / `failed` / `skipped` →
+  `removed`; `posted` / `maybe_posted` → claimed as `removing` → deleted → `removed` (on failure:
+  back to its status with a short error, listed in `failed`); `posting` → left alone (the
+  publisher re-checks `removedAt` after posting and calls `removePost` again). Bluesky:
+  `com.atproto.repo.deleteRecord` for every post of the thread, replies first, root last (only
+  records in his own repo; already gone = success). Reddit: `POST /api/del`. LinkedIn: no delete
+  through LinkedAPI → `manual` with the link; after removing it by hand,
+  `undo.markRemovedByHand`. Safe to run twice.
+- `undo.removeReply({ replyId })`: the same for a thread reply (Bluesky `postedUri`, or his reply
+  found under the question post on older rows; Reddit by the comment's fullname from its link).
+  A reply that was taken down, or whose call's post was, is never posted (`claimReply`); one taken
+  down mid-post is removed right after (`finishReply`).
+- `undo.removeLatest({ elderId, reason?, askedOnCallId? })`: his newest post that went out in
+  the last 14 days, plus the thread replies from that call. An already-removed newest post still
+  counts, so asking twice never reaches back to an older post.
+
+**By phone.** Every character's prompt (and the inbound agent's) says: if he asks to take a
+post down, never argue; confirm which one ("the one about…?"), then say a fixed line ("I'll
+have it taken down right after our call"). After the call, `pipeline.processCall` runs one
+isolated step before anything else (so even a 20-second "please take that down" call counts):
+`lib/undo.detectTakeDown` reads the transcript and, on a clear request (or a vague one Pip
+committed to), schedules `undo.removeLatest` with `askedOnCallId` (never that call's own post,
+never anything newer than the call). A mid-call webhook tool was not built: the outbound agents
+have no tools, and Cartesia doesn't document that `system__conversation_id` matches our
+`cartesiaCallId`, so we couldn't tie a tool request to the elder reliably.
+
+**By command (family / admin):** `npx convex run undo:removePost '{"postId":"..."}'` (or
+`undo:removeLatest '{"elderId":"..."}'`). `lib/undo.postUndoInfo` renders the command and a
+status line for the /posts page.
+
 ## Build order
 
 | Slice | What works at the end | Context the call uses |

@@ -74,7 +74,7 @@ export async function deleteBlueskyThread(
 ): Promise<DeleteOutcome> {
   if (!login) return { ok: false, error: "His Bluesky account isn't connected." };
   const order = blueskyDeleteOrder(uris);
-  if (!order.length) return { ok: false, error: "No Bluesky post uris saved for it." };
+  if (!order.length) return { ok: false, error: "No Bluesky post uris saved for it: check his profile and delete by hand." };
   let deleted = 0;
   let alreadyGone = 0;
   try {
