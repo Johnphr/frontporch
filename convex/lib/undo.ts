@@ -19,7 +19,7 @@ import type { FetchFn } from "./blueskyClient.ts";
 import type { RedditLogin } from "./logins.ts";
 import { redditToken } from "./replyPosting.ts";
 
-export type Platform = "bluesky" | "reddit" | "linkedin";
+export type Platform = "bluesky" | "reddit" | "linkedin" | "threads" | "x";
 
 /** A claim older than this is assumed crashed and can be retaken. */
 export const STALE_REMOVE_MS = 15 * 60_000;

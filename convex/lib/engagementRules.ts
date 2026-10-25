@@ -75,7 +75,7 @@ export function feedbackWindowStart(nowMs: number, sinceDays?: number): number {
 
 // ---------- platforms ----------
 
-export type EngagementPlatform = "linkedin" | "bluesky";
+export type EngagementPlatform = "linkedin" | "bluesky" | "threads" | "x";
 
 /** Rows written before Bluesky have no platform: they're LinkedIn. */
 export function platformOf(row: { platform?: EngagementPlatform } | null | undefined): EngagementPlatform {

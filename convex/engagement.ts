@@ -23,6 +23,7 @@ import {
   nextSnapshot,
   platformOf,
   shouldRefreshBank,
+  type EngagementPlatform,
 } from "./lib/engagementRules";
 import { canonicalLinkedInPostUrl } from "./lib/linkedinUrl";
 
@@ -126,7 +127,7 @@ export const upsert = internalMutation({
 export type Feedback = {
   /** the post's link on its platform */
   linkedinUrl: string;
-  platform: "linkedin" | "bluesky";
+  platform: EngagementPlatform;
   postText?: string;
   reactions: number;
   comments: { author: string; text: string }[];

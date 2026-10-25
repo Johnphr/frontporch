@@ -90,8 +90,8 @@ export default defineSchema({
   // actions (lib/logins.ts). One row per elder + platform.
   elderAccounts: defineTable({
     elderId: v.id("elders"),
-    platform: v.union(v.literal("bluesky"), v.literal("reddit")),
-    handle: v.optional(v.string()), // Bluesky handle or Reddit username
+    platform: v.union(v.literal("bluesky"), v.literal("reddit"), v.literal("threads"), v.literal("x")),
+    handle: v.optional(v.string()), // Bluesky handle, Reddit / Threads / X username
     did: v.optional(v.string()), // Bluesky DID, e.g. did:plc:...
     secret: v.optional(v.object({ ciphertext: v.string(), iv: v.string() })), // base64; removed on disconnect
     status: v.union(v.literal("connected"), v.literal("invalid"), v.literal("disconnected")),
@@ -99,7 +99,24 @@ export default defineSchema({
     lastCheckedAt: v.optional(v.number()), // epoch ms, last time the login was verified
     lastError: v.optional(v.string()), // short, never a secret
     attemptTimes: v.optional(v.array(v.number())), // recent connect attempts (rate limit)
+    // OAuth platforms (threads, x): `secret` holds the encrypted token JSON
+    // {accessToken, refreshToken?}; these say who he is and when the access token expires.
+    externalUserId: v.optional(v.string()), // Threads user id / X user id
+    tokenExpiresAt: v.optional(v.number()), // epoch ms
+    scopes: v.optional(v.array(v.string())),
   }).index("by_elder_platform", ["elderId", "platform"]),
+
+  // One row per OAuth "Connect" click (Threads, X): the random state we check on the callback,
+  // plus the PKCE verifier (X). Single use; expires after 15 minutes. Never returned to the site.
+  oauthStates: defineTable({
+    state: v.string(), // random, base64url
+    elderId: v.id("elders"),
+    platform: v.union(v.literal("threads"), v.literal("x")),
+    codeVerifier: v.optional(v.string()), // PKCE (X)
+    returnTo: v.optional(v.string()), // website URL to send him back to
+    createdAt: v.number(), // epoch ms
+    usedAt: v.optional(v.number()),
+  }).index("by_state", ["state"]),
 
   // One Cartesia agent per character (lib/characters.ts), written by cartesiaAgents.syncAgent.
   characterAgents: defineTable({
@@ -197,7 +214,7 @@ export default defineSchema({
   engagement: defineTable({
     elderId: v.id("elders"),
     postId: v.optional(v.id("posts")),
-    platform: v.optional(v.union(v.literal("linkedin"), v.literal("bluesky"))), // missing = linkedin
+    platform: v.optional(v.union(v.literal("linkedin"), v.literal("bluesky"), v.literal("threads"), v.literal("x"))), // missing = linkedin
     linkedinUrl: v.string(),
     reactions: v.number(), // Bluesky: likes + reposts on his posts in the thread
     comments: v.array(v.object({ author: v.string(), text: v.string() })), // Bluesky: replies by others
@@ -311,7 +328,7 @@ export default defineSchema({
   postPublications: defineTable({
     postId: v.id("posts"),
     elderId: v.id("elders"),
-    platform: v.union(v.literal("bluesky"), v.literal("reddit"), v.literal("linkedin")),
+    platform: v.union(v.literal("bluesky"), v.literal("reddit"), v.literal("linkedin"), v.literal("threads"), v.literal("x")),
     status: v.union(
       v.literal("pending"),
       v.literal("posting"),
