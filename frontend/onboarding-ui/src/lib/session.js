@@ -1,15 +1,15 @@
-// Who is signed in on this device. Sign-in is not real yet (no code or link is asked for),
-// so this remembers the phone they typed, the elderId sign-up returned, and the sign-up token
-// (signup:register). Every call about his sign-up or his page sends the token; the elderId
-// alone is not enough. Real auth will replace both with a session.
+// Who is signed in on this device: the phone they typed, the elderId the backend returned, the
+// sign-up token (signup:register, or a new one from signup:signIn) and his family code. Every
+// call about his sign-up or his page sends the token; the elderId alone is not enough.
 //
-// The backend hands a token out once (register), so signing out must not lose it: every
-// complete { phone, elderId, token } is also kept under KNOWN_KEY ("known device"), and the
-// same phone signing in again gets it back (SignIn.jsx, finish.js). A sign-up the backend no
-// longer knows (NOT_FOUND) is dropped from both (forgetDevice).
+// Signing out must not lose the token: every complete { phone, elderId, token, familyCode? } is
+// also kept under KNOWN_KEY ("known device"), and the same phone signing in again on this device
+// gets it back without the code (SignIn.jsx, finish.js). On another device he signs in with his
+// phone + family code (signup:signIn), which gives a new token and signs the old device out. A
+// sign-up the backend no longer knows (NOT_FOUND) is dropped from both (forgetDevice).
 
 const KEY = 'fp-session'
-const KNOWN_KEY = 'fp-known' // [{ phone, elderId, token }], newest first
+const KNOWN_KEY = 'fp-known' // [{ phone, elderId, token, familyCode? }], newest first
 const KNOWN_MAX = 5
 export const SETUP_KEY = 'fp-setup' // setup progress (lib/setupProgress.js)
 export const OAUTH_KEY = 'fp-oauth' // OAuth platforms connected during setup (OAuthConnect.jsx)
@@ -18,7 +18,7 @@ export const OAUTH_FROM_KEY = 'fp-oauth-from' // 'setup' | 'home': where a Threa
 const complete = (s) =>
   Boolean(s && typeof s.phone === 'string' && s.phone && typeof s.elderId === 'string' && s.elderId && typeof s.token === 'string' && s.token)
 
-/** { phone?: string (E.164), elderId?: string, token?: string } — empty object when nobody is signed in. */
+/** { phone?: string (E.164), elderId?: string, token?: string, familyCode?: string } — empty object when nobody is signed in. */
 export function loadSession() {
   try {
     const raw = localStorage.getItem(KEY)
@@ -81,13 +81,25 @@ function writeKnown(list) {
 /** Keep a complete sign-up for this phone (newest first). Anything incomplete is ignored. */
 export function rememberDevice(session) {
   if (!complete(session)) return
-  const { phone, elderId, token } = session
-  writeKnown([{ phone, elderId, token }, ...readKnown().filter((k) => k.phone !== phone && k.elderId !== elderId)])
+  const { phone, elderId, token, familyCode } = session
+  writeKnown([{ phone, elderId, token, ...(familyCode ? { familyCode } : {}) }, ...readKnown().filter((k) => k.phone !== phone && k.elderId !== elderId)])
 }
 
-/** The sign-up this device made for a phone, or null. */
+/** The sign-up this device made (or signed in to) for a phone, or null. */
 export function knownSignup(phone) {
   return readKnown().find((k) => k.phone === phone) || null
+}
+
+/** He started over with this phone: nothing saved for it on this device is good any more. */
+export function forgetPhone(phone) {
+  writeKnown(readKnown().filter((k) => k.phone !== phone))
+  if (loadSession().phone === phone) {
+    try {
+      localStorage.removeItem(KEY)
+    } catch {
+      /* storage unavailable */
+    }
+  }
 }
 
 /** The backend no longer knows this sign-up: drop it here too (session and known device). */

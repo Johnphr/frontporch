@@ -1,6 +1,6 @@
-// Four screens on hash routes: landing (#/), sign in (#/signin), first-time setup (#/setup),
-// and his page (#/home, #/posts). His page needs a signed-in elderId + sign-up token; without
-// them it sends them to sign in.
+// Four screens on hash routes: landing (#/), sign in (#/signin: phone, then the family code on a
+// new device), first-time setup (#/setup), and his page (#/home, #/posts). His page needs a
+// signed-in elderId + token; without them it sends them to sign in.
 import { useEffect } from 'react'
 import { isConfigured } from './api'
 import { SETUP_NEEDED } from './copy'
