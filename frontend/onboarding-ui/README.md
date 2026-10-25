@@ -11,12 +11,12 @@ A / A+ / A++ text size. English only. Talks to `convex/signup.ts` and `convex/ac
 | Route | Screen | Convex functions |
 |---|---|---|
 | `#/` | Landing | none |
-| `#/signin` | Phone + 6-digit code, or email link | none yet (both mocked in `src/api.js`) |
+| `#/signin` | Phone number or email (no code or link yet) | none |
 | `#/setup` | Who sets up, name, language + host, weekly day + time, LinkedIn, review, Finish, call status | `signup:register`, `signup:setCharacter`, `account:setSchedule`, `signup:setLinkedin`, `signup:requestCall`, `signup:callStatus` |
 | `#/home` | Switch host, change call day/time | `account:getProfile`, `signup:setCharacter`, `account:setSchedule` |
 | `#/posts` | Published posts with reaction/comment counts | `account:listPosts` |
 
-**No real sign-in yet.** Any code works, except `000000`, which shows the "wrong code" error. The device
+**No real sign-in yet.** No code or link is asked for; the device
 remembers `{ phone, elderId }` in `localStorage` (`src/lib/session.js`). Anyone with the link
 and an elderId can see that page, so keep the link private until real auth exists.
 `requestCall` only rings when the backend allows it (`PUBLIC_CALLS`); otherwise the last screen
@@ -50,7 +50,7 @@ hash-based, so `vercel.json` needs no rewrites.
 
 - `tailwind.config.js`: colors (ink, rose, pink, blush, sage), fonts (Literata, Atkinson Hyperlegible), sizes
 - `src/App.jsx`: routes. `src/lib/`: hash routing, session, text size, call-status polling
-- `src/api.js`: Convex calls (`ConvexHttpClient` + `anyApi`, no codegen), error codes, and the sign-in mocks
+- `src/api.js`: Convex calls (`ConvexHttpClient` + `anyApi`, no codegen) and error codes
 - `src/copy.js`: shared copy and error messages. `src/copy/<page>.js` holds each page's copy
 - `src/ui/`: header, buttons, fields, choice cards, toast. `src/art/`: the SVG illustrations
 - `src/pages/`: `Landing`, `SignIn`, `setup/*` (onboarding), `account/*` (Home + Posts)

@@ -87,7 +87,6 @@ export const SETUP_NEEDED = {
 
 // Error codes thrown by api.js -> what we say.
 export const ERRORS = {
-  BAD_CODE: "That code doesn't match. Check the text message and try again, or send a new code.",
   NAME_INVALID: 'Please enter a name (up to 100 characters).',
   PHONE_INVALID: 'Please check the phone number and try again.',
   LINKEDIN_INVALID: 'Please check the link. It should look like linkedin.com/in/your-name.',

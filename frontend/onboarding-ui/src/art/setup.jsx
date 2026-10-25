@@ -85,19 +85,6 @@ export function ReadingArt({ className, label }) {
   )
 }
 
-/** Envelope with a check badge ("Check your email"). */
-export const EmailSentArt = ({ className }) => (
-  <Svg viewBox="0 0 240 180" className={className}>
-    <circle cx="120" cy="88" r="82" fill="#F7D6DE" />
-    <ellipse cx="120" cy="164" rx="84" ry="7" fill="#3A2A2E" opacity="0.08" />
-    <rect x="46" y="58" width="148" height="98" rx="12" fill="#FFFFFF" />
-    <path d="M50 154 L106 106 L120 116 L134 106 L190 154 Z" fill="#FCEEF1" />
-    <path d="M46 70 A12 12 0 0 1 58 58 H182 A12 12 0 0 1 194 70 L120 120 Z" fill="#F2B8C6" />
-    <circle cx="186" cy="58" r="20" fill="#A8475E" />
-    <path d="M177 58.5 L183.5 65 L196 52" fill="none" stroke="#FFFFFF" strokeWidth="4.5" strokeLinecap="round" strokeLinejoin="round" />
-  </Svg>
-)
-
 // Setup steps
 /** Step 1: a house with a porch. */
 export const PorchArt = ({ className }) => (
