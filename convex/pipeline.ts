@@ -35,6 +35,7 @@ import { internalAction, internalMutation, internalQuery, type ActionCtx } from 
 import { clip, isNoConversation, type Turn } from "./lib/cartesia";
 import type { MemoryDoc } from "./lib/dataRefs";
 import { markBankRowUsed } from "./conversation";
+import { postingMayBeLive } from "./lib/callLoop";
 import { inboundPlanToMark } from "./lib/inbound";
 import { canClaimProcessing, finishPatch, isProfileUsable, mergeProfile, type Profile } from "./lib/onboarding";
 import { runSteps, type StepReport } from "./lib/planner";
@@ -146,7 +147,7 @@ export const findPostForCall = internalQuery({
  * Dev/testing: a finished call from a fixture (tests/fixtures/onboarding_call.json,
  * story_call.json), so the whole post-call flow runs without a phone. Use a throwaway seeded
  * elder: fixture facts merge into his profile and memories. A story fixture would post to his
- * real LinkedIn, so it's refused while posting is live unless allowPost is set.
+ * real accounts, so it's refused unless AUTO_POST=off or allowPost is set.
  */
 export const seedEndedCall = internalMutation({
   args: {
@@ -159,10 +160,8 @@ export const seedEndedCall = internalMutation({
     allowPost: v.optional(v.boolean()),
   },
   handler: async (ctx, { elderId, kind, turns, allowPost, ...rest }) => {
-    const postingLive =
-      parseAutoPost(process.env.AUTO_POST) && Boolean(process.env.LINKEDAPI_TOKEN && process.env.LINKEDAPI_ID_TOKEN);
-    if (kind === "story" && postingLive && !allowPost) {
-      throw new Error("This fixture would post to his LinkedIn: set AUTO_POST=off (or pass allowPost: true)");
+    if (kind === "story" && postingMayBeLive(process.env) && !allowPost) {
+      throw new Error("This fixture could post publicly (story post, thread reply): set AUTO_POST=off (or pass allowPost: true)");
     }
     const callId = await ctx.db.insert("calls", { elderId, kind, status: "ended", transcript: turns, ...rest });
     await ctx.scheduler.runAfter(0, internal.pipeline.processCall, { callId });

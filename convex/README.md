@@ -69,6 +69,7 @@ call ends ──► wait CALL_INTERVAL_MINUTES ──► next call ──► cal
 ```
 
 ```bash
+npx convex env set AUTO_POST off                  # required for a fast loop (nothing posts)
 npx convex env set CALL_INTERVAL_MINUTES 5        # next call 5 min after the last one ENDS
 npx convex env set CALL_ALLOWLIST "+1...,+52..."  # only these numbers are repeated (Twilio-verified ones)
 npx convex env remove CALL_INTERVAL_MINUTES       # stop
@@ -79,7 +80,8 @@ npx convex env remove CALL_INTERVAL_MINUTES       # stop
 - Never the first call: that's "Call me now" (or `cartesia:startCall` by hand).
 - After 3 missed calls in a row (no answer, voicemail, busy...) it stops calling that number until a
   real conversation happens (start one by hand). Our own failures (busy lines, config) don't count.
-- Off while real posting is live (`AUTO_POST` on + LinkedAPI tokens) with an interval under a day.
+- Off with an interval under a day unless `AUTO_POST=off` (posts and thread replies could go out
+  on his real accounts every few minutes). Set `npx convex env set AUTO_POST off` to loop.
 - Numbers it covers are skipped by the weekly `schedule.tick`. No quiet hours: keep the list small.
 
 **Sign-up page call status:** after "Call me now" the page shows what is happening in plain words
@@ -363,7 +365,7 @@ Crons (`crons.ts`, UTC): hourly `schedule.tick`; daily 13:15 `schedule.dailyEnga
 (→ `apify.scrapeEngagement` per active elder with a `linkedinUrl`); weekly Monday 14:30
 `schedule.weeklyAudienceQuestions` (→ `apify.findAudienceQuestions`). `tick` only acts
 on elders with `stage`, `timezone`, `callDay` and `callHour` set, and skips a target
-that isn't deployed yet (it retries next hour).
+that isn't deployed yet (that slot is NOT retried: start that week's call by hand).
 
 Set up a demo elder in the dashboard (Data → elders → edit): `stage: "active"`,
 `timezone: "America/Los_Angeles"`, `callDay: "sunday"`, `callHour: 10`,

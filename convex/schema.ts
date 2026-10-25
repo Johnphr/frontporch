@@ -113,7 +113,7 @@ export default defineSchema({
     elderId: v.id("elders"),
     questionId: v.optional(v.id("questions")),
     // v2: queued | in_progress | ended | done | no_conversation | failed |
-    //     poll_error | poll_timeout | process_failed
+    //     start_unknown | poll_error | poll_timeout | process_failed
     status: v.string(),
     transcript: v.array(v.object({ role: v.string(), text: v.string() })),
     // ---- v2 (onboarding slice, PR #7) ----
@@ -126,6 +126,7 @@ export default defineSchema({
     lastPolledAt: v.optional(v.number()), // epoch ms
     processingAt: v.optional(v.number()), // epoch ms; claim, stale after 15 min
     processedAt: v.optional(v.number()), // epoch ms; set only on success
+    memoriesAppliedAt: v.optional(v.number()), // epoch ms; memories.applyChanges ran for this call (re-runs skip it)
     endedAt: v.optional(v.number()), // epoch ms; when the call ended (callLoop counts its interval from here)
     liveStatus: v.optional(v.string()), // Cartesia status while live: created | started (sign-up page)
     // ---- v2 (Brain) ----
@@ -225,7 +226,7 @@ export default defineSchema({
   // conversation.planNextCall via apify.topAudienceQuestions.
   audienceQuestions: defineTable({
     elderId: v.id("elders"),
-    source: v.string(), // reddit | quora | stackexchange | discourse
+    source: v.string(), // reddit | quora | stackexchange | discourse | bluesky
     title: v.string(),
     body: v.optional(v.string()),
     url: v.string(),
