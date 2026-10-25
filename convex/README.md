@@ -337,7 +337,8 @@ post, so publishing can turn it into a short thread (at most 5 Bluesky posts). 3
 different angles, a judge scores each (hook, story, voice, lesson, question, clarity, 0-10, plus
 any fact not in the call or his profile = score 0), code checks (120-200 words, under 1,250
 characters in total, hook ≤200 chars, ≤2 hashtags, stock phrases, markdown or lists, closing
-question, language), then up to 2 critique -> rewrite rounds on the best. The call is skipped
+question, language), then at most one critique -> rewrite round on the best (`FAST_POST=on`:
+one draft, no judge, falling back to this loop). The call is skipped
 only when most of the 3 drafts decline; failed drafts never count as a skip (too many failures
 fail the post step, which is safe to retry). A failed judge call is retried once; if it still
 fails, the post is held (fail closed). The loop is `runQualityLoop` (unit-tested with fake model

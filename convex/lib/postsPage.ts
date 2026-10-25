@@ -3,6 +3,7 @@
 // platform stands, to iterate fast on the content. Pure HTML rendering, no Convex imports
 // (unit-tested). Remove with postsPage.ts.
 
+import { timingSummary, type PostTimings } from "./fastPost.ts";
 import { isHoldReason, postUndoInfo } from "./undo.ts";
 
 export type PagePost = {
@@ -23,7 +24,9 @@ export type PagePost = {
   guardIssues?: string[];
   error?: string;
   /** Post quality (lib/postQuality.ts), when writePost scored it. */
-  quality?: { score: number; passed: boolean; rounds: number; notes: string[] };
+  quality?: { score: number; passed: boolean; rounds: number; notes: string[]; mode?: "fast" };
+  /** posts.timings: hang-up -> posted, per stage (lib/fastPost.ts). */
+  timings?: PostTimings;
   /** Why a needs_review post is held (posts.heldFor; missing = the fact-check). */
   heldFor?: "quality" | "thread_fit" | "guard";
   /** Taken down (posts.removedAt / removedReason; "held: ..." = held by him on the call). */
@@ -170,8 +173,21 @@ export function undoBlock(p: Pick<PagePost, "id" | "removedAt" | "removedReason"
 
 function qualityBlock(q: PagePost["quality"]): string {
   if (!q) return "";
+  if (q.mode === "fast") {
+    const rest = q.notes.filter((n) => !/^Fast mode/.test(n));
+    return `<div class="check good"><strong>Fast mode: one draft, no judge</strong> (FAST_POST=on; fact-checked before posting)${issuesList(rest)}</div>`;
+  }
   const rewrites = `${q.rounds} rewrite${q.rounds === 1 ? "" : "s"}`;
   return `<div class="check ${q.passed ? "good" : "bad"}"><strong>Quality: ${q.score}/100 (${q.passed ? "passed" : "below the bar"})</strong>, ${rewrites}${issuesList(q.notes)}</div>`;
+}
+
+/** "Posted 21.1 s after hang-up (detect 2.1s, write 9.8s, ...)", or the stages so far. */
+export function timingBlock(t: PagePost["timings"]): string {
+  const s = timingSummary(t);
+  if (!s.stages.length && s.totalSeconds === undefined) return "";
+  const stages = s.stages.map((x) => `${x.stage} ${x.seconds}s`).join(", ");
+  const head = s.totalSeconds !== undefined ? `Posted ${s.totalSeconds} s after hang-up` : "Not posted yet";
+  return `<p class="cmd">${escapeHtml(head)}${stages ? ` (${escapeHtml(stages)})` : ""}</p>`;
 }
 
 function card(p: PagePost, key: string, check: PageCheck | undefined): string {
@@ -189,6 +205,7 @@ function card(p: PagePost, key: string, check: PageCheck | undefined): string {
   ${p.question ? `<p class="q">Call question: ${escapeHtml(p.question)}</p>` : ""}
   ${threadBlock(p)}
   ${publicationsBlock(p)}
+  ${timingBlock(p.timings)}
   ${p.error ? `<p class="err">${escapeHtml(p.error)}</p>` : ""}
   ${qualityBlock(p.quality)}${stored}${checkBlock(check?.postId === p.id ? check : undefined)}
   ${cmd && p.removedAt === undefined ? `<p class="cmd">${p.status === "needs_review" ? "Approve and post" : "Post it"}: <code>${escapeHtml(cmd)}</code></p>` : ""}

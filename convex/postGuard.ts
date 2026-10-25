@@ -16,7 +16,9 @@
 //
 // Called by publish.ts (every story post, before any platform) and by linkedapi.previewPost /
 // previewText (the /posts "Fact-check now" button) and linkedapi.createPost (old LinkedIn rows):
-//   await ctx.runAction(internal.postGuard.checkPost, { postText, turns, context? })
+//   await ctx.runAction(internal.postGuard.checkPost, { postText, turns, context?, timeoutMs? })
+// timeoutMs (FAST_POST): one try with that timeout; a timeout comes back crashed: true and
+// publish.ts runs the normal check instead. Never skipped.
 //
 // Env: OPENAI_API_KEY, OPENAI_MODEL (optional), POST_GUARD_MODE. Owner: Integrations.
 
@@ -72,8 +74,9 @@ export const checkPost = internalAction({
     postText: v.string(),
     turns: v.array(turnValidator),
     context: v.optional(v.string()),
+    timeoutMs: v.optional(v.number()),
   },
-  handler: async (_ctx, { postText, turns, context }): Promise<GuardResult> => {
+  handler: async (_ctx, { postText, turns, context, timeoutMs }): Promise<GuardResult> => {
     const mode = parseGuardMode(process.env.POST_GUARD_MODE);
     if (mode === "off") {
       return { pass: true, issues: [], summary: "Post guard is off (POST_GUARD_MODE=off).", mode };
@@ -111,6 +114,7 @@ export const checkPost = internalAction({
         user: sections.join("\n\n"),
         schema: RESULT_SCHEMA,
         effort: "medium",
+        ...(timeoutMs ? { timeoutMs, retries: 0 } : {}),
       });
       return { ...normalizeJudgeResult(raw), mode };
     } catch (err) {
@@ -120,6 +124,7 @@ export const checkPost = internalAction({
         issues: [`Fact-check failed to run: ${message}`],
         summary: "Fact-check error.",
         mode,
+        crashed: true,
       };
     }
   },

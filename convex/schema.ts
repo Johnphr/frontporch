@@ -38,6 +38,7 @@ export const postQuality = v.object({
     question: v.number(),
     clarity: v.number(),
   }),
+  mode: v.optional(v.literal("fast")), // FAST_POST's single draft: not judged, score 0
 });
 
 // What we remember about him (memories.kind). Keep in sync with lib/memoryText.ts.
@@ -169,6 +170,8 @@ export default defineSchema({
     processedAt: v.optional(v.number()), // epoch ms; set only on success
     memoriesAppliedAt: v.optional(v.number()), // epoch ms; memories.applyChanges ran for this call (re-runs skip it)
     endedAt: v.optional(v.number()), // epoch ms; when the call ended (callLoop counts its interval from here)
+    hungUpAt: v.optional(v.number()), // epoch ms; Cartesia's end_time, when it gave one (posts.timings)
+    pollStartedAt: v.optional(v.number()), // epoch ms; first poll, for the poll time cap (lib/cartesia.shouldGiveUp)
     liveStatus: v.optional(v.string()), // Cartesia status while live: created | started (sign-up page)
     // ---- v2 (Brain) ----
     plan: v.optional(v.any()), // CallPlan from conversation.planNextCall, for debugging
@@ -346,6 +349,16 @@ export default defineSchema({
     // never posts a post with removedAt set; undo removes it from every platform it reached.
     removedAt: v.optional(v.number()), // epoch ms
     removedReason: v.optional(v.string()), // short note: "he asked on the call", "family request"
+    // ---- hang-up -> posted, epoch ms (lib/fastPost.ts; shown on /posts, logged by publish.ts)
+    timings: v.optional(
+      v.object({
+        endedAt: v.optional(v.number()), // he hung up (Cartesia's end_time, else when we saw it)
+        detectedAt: v.optional(v.number()), // our poll saw it
+        writtenAt: v.optional(v.number()), // the post was saved
+        checkedAt: v.optional(v.number()), // the fact-check answered
+        postedAt: v.optional(v.number()), // the first platform finished posting
+      }),
+    ),
   })
     .index("by_elder", ["elderId"])
     .index("by_url", ["linkedinUrl"])

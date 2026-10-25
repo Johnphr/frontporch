@@ -541,6 +541,7 @@ tests/                          node --test + fixtures/
 | `CALL_INTERVAL_MINUTES` | optional, default off. Repeat calls this many minutes after the last call ENDS (`callLoop.tick`, every minute); covers only `CALL_ALLOWLIST` numbers unless `CALL_LOOP=all`. Under a day it needs `AUTO_POST=off` |
 | `CALL_LOOP` | optional. `all` = the repeating loop covers every elder (default: only `CALL_ALLOWLIST`) |
 | `POSTS_PAGE_KEY` | optional. Turns on the `/posts?key=...` review page (404 without it); a long random string |
+| `FAST_POST` | optional, default off. `on`/`true`/`1`/`yes`: post ~15-30 s after hang-up. Live calls are polled every 3 s (else 15 s); the post is one draft with no judge or rewrite (else 3 drafts, a judge, one rewrite round), falling back to the full loop if the draft times out (12 s), declines or fails a code check; the fact-check still runs (8 s, then the normal check if it timed out). `/posts` shows "posted N s after hang-up" (`posts.timings`) |
 
 Share keys through a password manager, never the repo or chat.
 

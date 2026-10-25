@@ -5,6 +5,8 @@
 // llm.writePost writes 3 drafts (ANGLES), a judge scores each one against CRITERIA, the best
 // goes through up to MAX_REWRITE_ROUNDS critique -> rewrite rounds, and a post that still
 // doesn't clear the bar is held as `needs_review` (pipeline.ts) instead of auto-posting.
+// FAST_POST=on: runFastPost writes one draft (no judge, no rewrite), keeps hardChecks, and falls
+// back to runQualityLoop when the draft fails, times out, declines or fails a blocker.
 // The thread split itself is lib/blueskyThread.ts: a post that can't become a 3-5 post thread
 // (hook in post 1, the AI line in the last) is a blocker, so the writer gets a rewrite round
 // with that note, and a post that still doesn't fit is held (holdDecision).
@@ -39,15 +41,15 @@ export const MIN_CRITERION = 5;
 /** Points taken off per minor code-side issue (major issues block a pass outright). */
 export const MINOR_PENALTY = 5;
 /** Critique -> rewrite rounds on the best draft, at most. */
-export const MAX_REWRITE_ROUNDS = 2;
+export const MAX_REWRITE_ROUNDS = 1;
 
 // Time: writePost runs inside pipeline.processCall, and Convex actions stop at 10 minutes
-// (ACTION_LIMIT_MS). The memories step runs first (extractKnowledge: up to 2 x 120 s, plus
-// embeddings), so the post step gets what's left: postBudgetMs() = the smaller of
+// (ACTION_LIMIT_MS). The memories step runs alongside it (extractKnowledge: up to 2 x 120 s,
+// plus embeddings), so the post step gets: postBudgetMs() = the smaller of
 // QUALITY_BUDGET_MS and (10 min - time already used - ACTION_SAFETY_MS for saving the post and
 // scheduling the next steps). runQualityLoop never starts a model call past that deadline and
 // caps each call's timeout to the time left. Worst case inside the budget: drafts (parallel)
-// 75 s + judges (parallel) 45 s + 2 s + a 45 s judge retry = 167 s, then a rewrite round
+// 75 s + judges (parallel) 45 s + 2 s + a 45 s judge retry = 167 s, then one rewrite round
 // (75 s + 45 s) only if it fits. So processCall ends by about 10 min - ACTION_SAFETY_MS.
 // With less than MIN_POST_BUDGET_MS left, the post step fails instead of starting
 // (process_failed; a retry is safe, see pipeline.ts).
@@ -487,6 +489,8 @@ export type QualityReport = {
   rounds: number; // rewrite rounds run (0-MAX_REWRITE_ROUNDS)
   notes: string[];
   scores: CriterionScores;
+  /** "fast": FAST_POST's single draft, never judged (score 0 means "not scored"). */
+  mode?: "fast";
 };
 
 /** Keep the stored notes short (they're shown on /posts and saved on the posts row). */
@@ -596,6 +600,59 @@ export async function runQualityLoop(deps: QualityDeps): Promise<WrittenPost> {
 
   const quality = qualityReport(best.evaluation, rounds);
   return { skip: false, text: best.text, hook: best.hook, quality, hold: !quality.passed };
+}
+
+// ---------- FAST_POST=on: one draft, no judge ----------
+
+/** The fast draft's own timeout; the fact-check gets FAST_GUARD_TIMEOUT_MS (publish.ts). */
+export const FAST_DRAFT_TIMEOUT_MS = 12_000;
+export const FAST_GUARD_TIMEOUT_MS = 8_000;
+/** The single angle: the turning point reads well as a short thread. */
+export const FAST_ANGLE = ANGLES[0];
+export const FAST_NOTE = "Fast mode (FAST_POST=on): one draft, no judge.";
+
+export type FastDeps = {
+  /** The one draft. Throwing (or a timeout) = fall back. */
+  draft: (angle: string, timeoutMs: number) => Promise<DraftResult>;
+  checks: (text: string) => CheckIssue[];
+  /** The normal loop, used when the fast draft can't be used. */
+  fallback: () => Promise<WrittenPost>;
+};
+
+export type FastPost = WrittenPost & { fallback?: string };
+
+/** The fast draft's quality: passed (no judge), the minor issues as notes. */
+export function fastQualityReport(issues: CheckIssue[]): QualityReport {
+  return {
+    score: 0,
+    passed: true,
+    rounds: 0,
+    notes: trimNotes([FAST_NOTE, ...issues.map((i) => i.message)]),
+    scores: { ...ZERO_SCORES },
+    mode: "fast",
+  };
+}
+
+/**
+ * One draft with a short timeout, the code checks, no judge or rewrite. Falls back to the normal
+ * loop (`fallback`, a fixed reason, for the log) when the draft throws or times out, declines
+ * (three drafts decide that), comes back empty, or has a blocker (a link or @, the thread fit,
+ * the language, the asked question quoted word for word). The fact-check still runs on publish.
+ */
+export async function runFastPost(deps: FastDeps): Promise<FastPost> {
+  const fallback = async (reason: string): Promise<FastPost> => ({ ...(await deps.fallback()), fallback: reason });
+  let draft: DraftResult;
+  try {
+    draft = await deps.draft(FAST_ANGLE, FAST_DRAFT_TIMEOUT_MS);
+  } catch {
+    return fallback("fast draft failed or timed out");
+  }
+  if (draft.skip) return fallback("fast draft declined");
+  if (!draft.text.trim()) return fallback("fast draft empty");
+  const issues = deps.checks(draft.text);
+  const blockers = issues.filter((i) => i.severity === "major");
+  if (blockers.length) return fallback(`fast draft blocked (${blockers.map((i) => i.id).join(", ")})`);
+  return { skip: false, text: draft.text, hook: draft.hook, quality: fastQualityReport(issues), hold: false };
 }
 
 /**

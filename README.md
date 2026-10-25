@@ -35,7 +35,10 @@ Built at Cal Hacks 13.0.
 | Reddit | `REDDIT_POSTING=on` (after Reddit approves the API) | Self post on his profile |
 | LinkedIn | `LINKEDIN_POSTING=on` | Through LinkedAPI; off by default (see Safety) |
 
-Each post is fact-checked once, then goes to every platform that's on, in that order. Feedback
+Each post is fact-checked once, then goes to every platform that's on, in that order. It's
+written while the call's memories are saved, usually a few minutes after hang-up. For a demo,
+`FAST_POST=on` posts in ~15-30 s: one draft (no judge), still fact-checked; `/posts` shows how
+long each post took after hang-up. Feedback
 (likes, reposts, replies) is read daily from Bluesky and Threads; from X only with
 `X_READ_FEEDBACK=on` (X bills every read); from LinkedIn only with `LINKEDIN_POSTING=on`. Every env var:
 [ARCHITECTURE.md → Env vars](ARCHITECTURE.md#env-vars-all-in-convex).

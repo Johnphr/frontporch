@@ -12,9 +12,24 @@ export type GuardResult = {
   issues: string[];
   summary: string;
   mode: GuardMode;
+  /** The check itself didn't run (timeout, model error). Still a fail; fast mode retries it slowly. */
+  crashed?: boolean;
 };
 
 /** Hold the post only when the check failed AND the guard is enforcing. */
+/**
+ * FAST_POST's fact-check: the quick try (short timeout), and the normal check only if the quick
+ * one didn't run. A real fail from the quick try stands. Never skipped.
+ */
+export async function quickThenFullGuard(
+  quick: () => Promise<GuardResult>,
+  full: () => Promise<GuardResult>,
+): Promise<GuardResult & { slow?: true }> {
+  const first = await quick();
+  if (!first.crashed) return first;
+  return { ...(await full()), slow: true };
+}
+
 export function guardDecision(guard: Pick<GuardResult, "pass" | "mode">): "post" | "hold" {
   return !guard.pass && guard.mode === "enforce" ? "hold" : "post";
 }
@@ -474,6 +489,8 @@ export type PublishDeps = {
   scheduleUndo(): Promise<void>;
   /** Recompute posts.status from the rows. */
   settle(): Promise<{ status: string; error?: string }>;
+  /** FAST_POST: start the fact-check while the platform logins are read (it only needs the post). */
+  guardEarly?: boolean;
 };
 
 /**
@@ -516,9 +533,11 @@ export async function runPublish(deps: PublishDeps, approve: boolean): Promise<P
   const claim = await deps.claimPost(approve);
   if (!claim.ok) return { status: post.status, reason: claim.reason };
 
+  const runGuard = shouldRunGuard(post, approve);
+  const early = deps.guardEarly && runGuard ? deps.guard() : null;
   const enabled = await deps.platforms();
-  if (PLATFORMS.some((p) => enabled[p]) && shouldRunGuard(post, approve)) {
-    const guard = await deps.guard();
+  if (PLATFORMS.some((p) => enabled[p]) && runGuard) {
+    const guard = await (early ?? deps.guard());
     const hold = guardDecision(guard) === "hold";
     await deps.saveGuard(guard, hold);
     if (hold) return { status: "needs_review", reason: "Held by the fact-check." };
