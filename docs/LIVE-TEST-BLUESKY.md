@@ -169,7 +169,9 @@ Connect Bluesky **while he is still in onboarding**. Once `stage` is `active`, c
 locked (section 10).
 
 1. Open https://onboarding-ui-delta.vercel.app in a normal (not private) window. The sign-up
-   token is saved in this browser's localStorage (`fp-session`), so keep using the same browser.
+   token is saved in this browser's localStorage (`fp-session`). To open his page from another
+   browser, sign in with his phone + the 6-digit **family code** the last setup screen showed
+   (that signs this browser out: it gets a new token).
 2. Enter a name, pick English, and use a phone number that never signed up before, in E.164 form
    (for example `+15550001111`). There's no SMS code screen. If you'll do section 9, use a real
    phone you hold.
@@ -197,6 +199,18 @@ locked (section 10).
    You want `[{ platform: "bluesky", handle: "fp-walter-test.bsky.social", status: "connected", connectedAt: <ms> }]`.
    In the dashboard, the `elderAccounts` row has `status: "connected"` and `secret` (ciphertext +
    iv). The password is never stored in plain text.
+
+### Running it again
+
+The same phone can't sign up twice (`already_signed_up`). Either:
+
+- **Start over from the website:** sign in → phone → family code → "Start over with this
+  number" → confirm. His row becomes `stage: "archived"` with `phone: "archived:<ms>:+1555…"`,
+  his accounts are disconnected (secrets dropped), posts and calls stay. The number is free and
+  setup starts fresh.
+- **No code (a row from before codes, or it got lost):**
+  `npx convex run signup:setFamilyCode '{"elderId":"<id>"}'` prints a new code once; then sign
+  in or start over with it.
 
 ## 3. Path B: quick (demo account from env)
 
@@ -466,9 +480,11 @@ continue from section 4.3.
 | Website: "please use an app password, not your regular password" | His main password, or not the `xxxx-xxxx-xxxx-xxxx` shape | Make an app password (section 1) |
 | Website: "That app password can read your private messages" | The DM access box was checked | Make a new one without DM access |
 | Website: "Something went wrong on our side" (`failed`) | `ACCOUNTS_ENC_KEY` missing or malformed (logs: `connectBluesky: ACCOUNTS_ENC_KEY ...`) | Set it (section 1), then connect again |
-| Website jumps to done, but `accounts:status` is `[]` | He was already `active`: connect is **locked** and the page treats that as done | On his `elders` row set `stage` to `"onboarding"`, connect again in the **same browser** (the token is in localStorage `fp-session`), then section 4.1. Another browser, or site data cleared (token lost)? Sign up again with a new phone |
+| Website jumps to done, but `accounts:status` is `[]` | He was already `active`: connect is **locked** and the page treats that as done | On his `elders` row set `stage` to `"onboarding"`, connect again from his page (Home → "Where your stories go"), then section 4.1. Another browser, or site data cleared? Sign in with his phone + family code (`signup:setFamilyCode` if he has none) |
 | Website: too many tries | 5 tries an hour per sign-up and per handle, 5 s apart | Wait |
-| Website: "already signed up" | That phone is in `elders` | Use a new number |
+| Website: "This number is already signed up. Sign in with your family code." | That phone is in `elders` | Sign in with the code, or "Start over with this number" (section 2, "Running it again"), or use a new number |
+| Website: "That code didn't match" for a row you made before codes | No `familyCodeHash` on his row | `npx convex run signup:setFamilyCode '{"elderId":"<id>"}'` |
+| Website: "Too many tries" | 5 wrong codes in 15 minutes for that phone | Wait 15 minutes, or delete the `connectAttempts` row with key `signin:<phone>` |
 | `seedEndedCall`: "This fixture could post publicly…" | `AUTO_POST` isn't `off` | `npx convex env set AUTO_POST off` (or add `allowPost:true`) |
 | Post `failed`: "Nowhere to post…", Bluesky row `skipped`: "His Bluesky account isn't connected." | No usable login: not connected, account `invalid`, `ACCOUNTS_ENC_KEY` changed (logs: `Bluesky secret could not be read (check ACCOUNTS_ENC_KEY)`), or Path B without `DEMO_ACCOUNT_FALLBACK=on` + both env vars | Fix the login, then run `publish:publishPost` again (`failed` can be re-run) |
 | Bluesky row `failed`, `elderAccounts.status: "invalid"` | Bluesky refused the login (app password revoked) | Reconnect (see the "locked" row above) |
