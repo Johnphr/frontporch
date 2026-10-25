@@ -4,11 +4,18 @@
 // One phone number routes to one Cartesia agent, and nothing lets us hand that agent a
 // per-caller plan before it speaks. So the inbound agent greets generically, then calls the
 // `lookup_caller` webhook tool (docs.cartesia.ai/agents/webhook-tools): Cartesia fills
-// caller_id + conversation_id from system variables, our Convex HTTP action finds the elder
-// by phone and answers with his plan as JSON. The tool result is read by the in-call model
-// (any 2xx text body, max 16 KiB); `assignments` also copy a few fields into the call's
-// dynamic variables, so the call record shows who it was.
+// caller_id (+ conversation_id when it has one) from system variables, our Convex HTTP action
+// finds the elder by phone and answers with his plan as JSON. The tool result is read by the
+// in-call model (any 2xx text body, max 16 KiB); `assignments` also copy a few fields into the
+// call's dynamic variables, so the call record shows who it was.
+//
+// Voice: a Cartesia agent has ONE voice (config.audio.output.voice_id), fixed for the call; no
+// mid-call voice change and no hand-off to another agent exist (docs.cartesia.ai/agents/
+// configuration, /agents/system-tools). So the call-in line speaks as one host for everyone:
+// CARTESIA_INBOUND_HOST (inboundHost). An elder whose host is someone else hears that host
+// introduce itself as his host's colleague; it never claims to be a voice it isn't.
 
+import { characterFor, getCharacter, type CharacterConfig } from "./characters.ts";
 import type { CallLanguage } from "./prompts/principles.ts";
 import { isE164 } from "./signupRules.ts";
 
@@ -30,7 +37,8 @@ export { isE164 };
  */
 export function normalizePhone(raw: unknown): string {
   if (typeof raw !== "string") return "";
-  const trimmed = raw.trim();
+  // "tel:+1415..." / "sip:+1415...@host" are how some carriers write a caller id.
+  const trimmed = raw.trim().replace(/^(?:tel|sip):/i, "").replace(/@.*$/, "");
   const plus = trimmed.startsWith("+") || trimmed.startsWith("00");
   let digits = trimmed.replace(/\D/g, "");
   if (trimmed.startsWith("00")) digits = digits.slice(2);
@@ -74,24 +82,60 @@ export function verifyBearer(header: string | null | undefined, secret: string |
   return sameSecret(match ? match[1].trim() : "", secret);
 }
 
-export type LookupRequest = { callerId: string; conversationId: string };
+export type LookupRequest = { callerId: string; conversationId?: string };
+
+export type ParsedLookup =
+  | ({ ok: true } & LookupRequest)
+  /** bad_body: not the tool's JSON (-> 400). no_caller_id: a withheld/unusable number (-> "unknown"). */
+  | { ok: false; reason: "bad_body" | "no_caller_id" };
 
 /** Printable, no spaces, at most 128 chars: Cartesia's id format isn't documented, so stay open. */
 const CALL_ID = /^[\x21-\x7E]{1,128}$/;
 
 /**
- * The tool's JSON body -> validated fields. Both are required: the caller number to find him,
- * and the conversation id so the call can be verified with Cartesia before any data goes out.
+ * The tool's JSON body -> validated fields. caller_id must be a string (Cartesia sends "" when
+ * the number is withheld: that's a polite "unknown", not a 400). conversation_id is optional:
+ * without a usable one the call is verified by listing the inbound agent's live calls instead.
  * The id is only ever used as an index value and in URL paths through encodeURIComponent.
  */
-export function parseLookupRequest(body: unknown): LookupRequest | null {
-  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+export function parseLookupRequest(body: unknown): ParsedLookup {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: false, reason: "bad_body" };
   const b = body as Record<string, unknown>;
+  if (typeof b.caller_id !== "string") return { ok: false, reason: "bad_body" };
   const callerId = normalizePhone(b.caller_id);
-  if (!callerId) return null;
+  if (!callerId) return { ok: false, reason: "no_caller_id" };
   const conv = typeof b.conversation_id === "string" ? b.conversation_id.trim() : "";
-  if (!CALL_ID.test(conv)) return null;
-  return { callerId, conversationId: conv };
+  return { ok: true, callerId, ...(CALL_ID.test(conv) ? { conversationId: conv } : {}) };
+}
+
+/** Which host answers the call-in line: CARTESIA_INBOUND_HOST, else the default for CARTESIA_INBOUND_LANGUAGE. */
+export function inboundHost(env: { CARTESIA_INBOUND_HOST?: string; CARTESIA_INBOUND_LANGUAGE?: string }): CharacterConfig {
+  const id = (env.CARTESIA_INBOUND_HOST ?? "").trim().toLowerCase();
+  const lang: CallLanguage = env.CARTESIA_INBOUND_LANGUAGE === "es" ? "es" : "en";
+  return getCharacter(id) ?? characterFor(undefined, lang);
+}
+
+/** The env says a host that doesn't exist: syncAgent refuses rather than silently using Daniel. */
+export function inboundHostProblem(env: { CARTESIA_INBOUND_HOST?: string }): string | undefined {
+  const id = (env.CARTESIA_INBOUND_HOST ?? "").trim().toLowerCase();
+  return id && !getCharacter(id) ? `Unknown CARTESIA_INBOUND_HOST "${id}" (see lib/characters.ts)` : undefined;
+}
+
+export type LookupOutcome = "known" | "unknown" | "error";
+
+/** What the answer told the agent, for the one log line and the inboundLookups row. */
+export function lookupOutcome(res: LookupResponse): LookupOutcome {
+  return res.caller_known === "yes" ? "known" : res.caller_known === "no" ? "unknown" : "error";
+}
+
+/**
+ * The one log line per lookup: outcome + a code-chosen reason. Reasons are lowercase words
+ * joined by "_" and ":" (e.g. "not_verified:not_found"); anything else, digits included, is
+ * dropped, so a number or a secret can never end up in the log.
+ */
+export function lookupLogLine(outcome: LookupOutcome, reason?: string): string {
+  const safe = (reason ?? "").toLowerCase().replace(/[^a-z_:]/g, "");
+  return `inbound-lookup: ${outcome}${safe ? ` ${safe}` : ""}`;
 }
 
 /** `GET /agents/calls/{id}` path for any call id (never interpolated raw). */
@@ -137,37 +181,46 @@ export function pickLiveCallForCaller(list: unknown, want: { agentId: string; ca
 
 export type LookupResponse = Record<string, string>;
 
+type HostName = { name: string; language?: CallLanguage };
+const DEFAULT_HOST: HostName = { name: "Daniel", language: "en" };
+
 /**
  * Unknown number: nothing about anyone, just enough for the agent to say a polite goodbye.
  * Field names match the known-caller answer so the prompt reads one shape.
  */
-export function unknownCallerResponse(): LookupResponse {
-  return { caller_known: "no", call_kind: "none", language: "en", speak_as: "Daniel", first_name: "" };
+export function unknownCallerResponse(host: HostName = DEFAULT_HOST): LookupResponse {
+  return { caller_known: "no", call_kind: "none", language: host.language ?? "en", speak_as: host.name, his_host: host.name, first_name: "" };
 }
 
 /** Lookup failed on our side: the agent apologizes and ends the call (no details). */
-export function lookupErrorResponse(): LookupResponse {
-  return { caller_known: "error", call_kind: "none", language: "en", speak_as: "Daniel", first_name: "" };
+export function lookupErrorResponse(host: HostName = DEFAULT_HOST): LookupResponse {
+  return { caller_known: "error", call_kind: "none", language: host.language ?? "en", speak_as: host.name, his_host: host.name, first_name: "" };
 }
 
 /**
- * Known caller: who to be (his character), in which language, which call, and the same
- * variables an outbound call of that kind sends to the character agents: first_name, goal and
- * context (lib/prompts/agent.ts). Values are already "none"-filled strings.
+ * Known caller: which call, in which language, and the same variables an outbound call of
+ * that kind sends to the character agents: first_name, goal and context (lib/prompts/agent.ts).
+ * speak_as is always the host whose voice answers the line (`host`); his_host is the host who
+ * usually calls him. When they differ the agent introduces itself as his host's colleague.
+ * Values are already "none"-filled strings.
  */
 export function knownCallerResponse(a: {
   kind: "onboarding" | "story";
   lang: CallLanguage;
-  /** His character (lib/characters.ts): who the inbound agent speaks as, and how. */
-  character: { name: string; personality?: string };
+  /** His character (lib/characters.ts): the host who calls him. */
+  character: { name: string };
+  /** The call-in line's host (inboundHost). Missing = same as his character. */
+  host?: { name: string };
   variables: Record<string, string>;
 }): LookupResponse {
+  const host = a.host ?? a.character;
   const out: LookupResponse = {
     caller_known: "yes",
     call_kind: a.kind,
     language: a.lang,
-    speak_as: a.character.name,
-    persona: a.character.personality?.trim() || "none",
+    speak_as: host.name,
+    his_host: a.character.name,
+    same_host: host.name === a.character.name ? "yes" : "no",
   };
   for (const [k, value] of Object.entries(a.variables)) out[k] = String(value);
   return clampResponse(out);
@@ -191,6 +244,7 @@ export const LOOKUP_ASSIGNMENTS = [
   { dynamic_variable: "call_kind", value_path: "call_kind" },
   { dynamic_variable: "first_name", value_path: "first_name" },
   { dynamic_variable: "language", value_path: "language" },
+  { dynamic_variable: "his_host", value_path: "his_host" },
 ];
 
 /** POST /v1/agents/tools body for the lookup (shape from docs.cartesia.ai/agents/webhook-tools). */
@@ -199,8 +253,9 @@ export function buildLookupTool(a: { url: string; secret: string }) {
     type: "webhook",
     name: LOOKUP_TOOL_NAME,
     description:
-      "Look up who is calling, from their phone number (filled in automatically). Call it right after your greeting, before anything else. It returns whether the caller is a Front Porch member, which call this is, the language to speak, and what you know about them.",
-    pre_tool_speech: "auto",
+      "Look up who is calling, from their phone number (filled in automatically). Call it right after your greeting, before anything else. It returns whether the caller is a Front Porch member, which call this is, the language to speak, their first name, and what you know about them.",
+    // off: the greeting already said "one moment"; nothing to say before the lookup.
+    pre_tool_speech: "off",
     execution_mode: "immediate",
     response_timeout_secs: LOOKUP_TIMEOUT_SECS,
     api_schema: {
@@ -212,7 +267,9 @@ export function buildLookupTool(a: { url: string; secret: string }) {
           caller_id: { type: "string", dynamic_variable: "system__caller_id" },
           conversation_id: { type: "string", dynamic_variable: "system__conversation_id" },
         },
-        required: ["caller_id", "conversation_id"],
+        // Only caller_id is required: a missing required variable makes Cartesia skip the
+        // request and hand the model a tool error (docs.cartesia.ai/agents/dynamic-variables).
+        required: ["caller_id"],
       },
       authentication: { mode: "bearer", token: { type: "secret", secret_value: a.secret } },
     },
