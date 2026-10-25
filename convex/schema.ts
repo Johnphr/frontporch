@@ -38,6 +38,7 @@ export const postQuality = v.object({
     question: v.number(),
     clarity: v.number(),
   }),
+  mode: v.optional(v.literal("fast")), // FAST_POST's single draft: not judged, score 0
 });
 
 // What we remember about him (memories.kind). Keep in sync with lib/memoryText.ts.

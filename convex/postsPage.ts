@@ -58,8 +58,17 @@ export const listForPage = internalQuery({
           ...(p.guardIssues?.length ? { guardIssues: p.guardIssues } : {}),
           ...(p.error ? { error: p.error } : {}),
           ...(p.quality
-            ? { quality: { score: p.quality.score, passed: p.quality.passed, rounds: p.quality.rounds, notes: p.quality.notes } }
+            ? {
+                quality: {
+                  score: p.quality.score,
+                  passed: p.quality.passed,
+                  rounds: p.quality.rounds,
+                  notes: p.quality.notes,
+                  ...(p.quality.mode ? { mode: p.quality.mode } : {}),
+                },
+              }
             : {}),
+          ...(p.timings ? { timings: p.timings } : {}),
           ...(p.heldFor ? { heldFor: p.heldFor } : {}),
           ...(p.removedAt !== undefined ? { removedAt: p.removedAt } : {}),
           ...(p.removedReason ? { removedReason: p.removedReason } : {}),

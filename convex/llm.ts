@@ -7,8 +7,9 @@
 //   extractKnowledge   story call -> memories (facts, story seeds, open threads,
 //                      people, places, topics covered / to avoid)
 //   writePost          story call -> a short story post in his voice (may decline): 3 drafts, a judge
-//                      rubric, critique -> rewrite; below the bar, or too long for a 5-post Bluesky
-//                      thread (lib/blueskyThread.ts), it's held (lib/postQuality.ts)
+//                      rubric, one critique -> rewrite; below the bar, or too long for a 5-post
+//                      Bluesky thread (lib/blueskyThread.ts), it's held (lib/postQuality.ts).
+//                      fast (FAST_POST=on): one draft, no judge, else the full loop
 //   summarizeFeedback  reader reactions + comments -> what resonated, reader questions, one line
 //   planQuestions      everything we know -> 8-12 candidate questions for the bank
 //   findRecentTopics   web search: recent news/issues in his field where he can help
@@ -22,6 +23,7 @@ import { internalAction } from "./_generated/server";
 import { elderWords, labelledTranscript } from "./lib/linkedinPost";
 import {
   CRITERIA,
+  FAST_DRAFT_TIMEOUT_MS,
   MAX_HOOK_CHARS,
   MAX_TOTAL_CHARS,
   MAX_WORDS,
@@ -33,10 +35,11 @@ import {
   detectLanguage,
   hardChecks,
   normalizeJudgement,
+  runFastPost,
   runQualityLoop,
   withAskedQuestion,
   writerContextParts,
-  type WrittenPost,
+  type FastPost,
 } from "./lib/postQuality";
 import { MAX_POST_GRAPHEMES } from "./lib/bluesky";
 import { neutralizeFences } from "./lib/text";
@@ -286,10 +289,13 @@ type RawPost = { skip: boolean; reason: string; hook: string; text: string };
 
 /**
  * The story post: 3 drafts (different angles) -> a judge scores each against the rubric in
- * lib/postQuality.ts -> the best goes through up to 2 critique -> rewrite rounds -> below the bar,
- * `hold: true` (the pipeline saves it as needs_review instead of posting). The loop itself is
+ * lib/postQuality.ts -> the best goes through at most one critique -> rewrite round -> below the
+ * bar, `hold: true` (the pipeline saves it as needs_review instead of posting). The loop itself is
  * lib/postQuality.runQualityLoop (unit-tested); this wires in the model calls. Each call gets
  * its own timeout and no retry inside lib/openai; the loop retries a failed judge call once.
+ * fast (FAST_POST=on): lib/postQuality.runFastPost, one medium-effort draft within
+ * FAST_DRAFT_TIMEOUT_MS, same writer rules and code checks, no judge; it falls back to the loop
+ * above (`fallback` on the result says why, a fixed reason).
  */
 export const writePost = internalAction({
   args: {
@@ -302,8 +308,11 @@ export const writePost = internalAction({
     language: v.optional(v.union(v.literal("en"), v.literal("es"))),
     /** The question the call answered, when a real person asked it (pipeline.getAskedQuestion): the post opens with it. */
     askedQuestion: v.optional(v.object({ text: v.string(), source: v.union(v.literal("audience"), v.literal("reader")) })),
+    /** FAST_POST=on (pipeline): one draft, no judge. */
+    fast: v.optional(v.boolean()),
   },
-  handler: async (_ctx, args): Promise<WrittenPost> => {
+  handler: async (_ctx, args): Promise<FastPost> => {
+    const startedAt = Date.now();
     const lang = detectLanguage(elderWords(args.turns));
     const askedText = args.askedQuestion ? cleanAskedQuestion(args.askedQuestion.text) : "";
     const asked = args.askedQuestion && askedText ? { text: askedText, source: args.askedQuestion.source } : null;
@@ -320,14 +329,19 @@ export const writePost = internalAction({
     const writerRules = askedQuestionRules(asked, postLang);
     const judgeSystem = withAskedQuestion(JUDGE_SYSTEM, askedQuestionJudgeRules(asked));
 
-    const writeCall = (system: string, user: string, timeoutMs: number) =>
-      structured<RawPost>({ name: "post", system, user, schema: POST_SCHEMA, effort: "high", timeoutMs, retries: 0 }).then(
+    const writeCall = (system: string, user: string, timeoutMs: number, effort: Effort = "high") =>
+      structured<RawPost>({ name: "post", system, user, schema: POST_SCHEMA, effort, timeoutMs, retries: 0 }).then(
         (raw): PostDraft => normalizePostDraft(raw),
       );
+    const draftCall = (angle: string, timeoutMs: number, effort?: Effort) =>
+      writeCall(withAskedQuestion(`${POST_SYSTEM}\n\n${angle}`, writerRules), context, timeoutMs, effort);
+    const checks = (text: string) => hardChecks(text, lang, args.language, asked);
+    const budgetMs = Math.min(args.budgetMs ?? QUALITY_BUDGET_MS, QUALITY_BUDGET_MS);
 
-    return runQualityLoop({
-      budgetMs: Math.min(args.budgetMs ?? QUALITY_BUDGET_MS, QUALITY_BUDGET_MS),
-      draft: (angle, timeoutMs) => writeCall(withAskedQuestion(`${POST_SYSTEM}\n\n${angle}`, writerRules), context, timeoutMs),
+    const loop = () => runQualityLoop({
+      // A fast attempt's time comes out of the same budget.
+      budgetMs: budgetMs - (Date.now() - startedAt),
+      draft: (angle, timeoutMs) => draftCall(angle, timeoutMs),
       judge: async (text, timeoutMs) =>
         normalizeJudgement(
           await structured<unknown>({
@@ -342,7 +356,15 @@ export const writePost = internalAction({
         ),
       rewrite: (text, notes, timeoutMs) =>
         writeCall(withAskedQuestion(REWRITE_SYSTEM, writerRules), `${context}\n\n${tagged("draft", text)}\n\n${tagged("notes", notes.join("\n"))}`, timeoutMs),
-      checks: (text) => hardChecks(text, lang, args.language, asked),
+      checks,
+    });
+
+    if (!args.fast) return loop();
+    // Medium effort: high reasoning on a ~200-word post often runs past FAST_DRAFT_TIMEOUT_MS.
+    return runFastPost({
+      draft: (angle) => draftCall(angle, FAST_DRAFT_TIMEOUT_MS, "medium"),
+      checks,
+      fallback: loop,
     });
   },
 });
