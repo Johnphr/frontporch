@@ -10,7 +10,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { shortAccountError } from "./lib/accountConnect";
-import { connectRateLimit, recordAttempt } from "./lib/signupRules";
+import { connectRateLimit, recordAttempt, sameTokenHash } from "./lib/signupRules";
 
 const platform = v.union(v.literal("bluesky"), v.literal("reddit"));
 const sealed = v.object({ ciphertext: v.string(), iv: v.string() });
@@ -50,14 +50,14 @@ export const status = internalQuery({
 });
 
 /**
- * Sign-up: count one connect attempt. Refuses an unknown elder, an active one (his accounts are
+ * Sign-up: count one connect attempt. Refuses an unknown elder or a wrong sign-up token (hash), an active one (his accounts are
  * locked once he's active, like setLinkedin), and too many tries (lib/signupRules.connectRateLimit).
  */
 export const reserveConnect = internalMutation({
-  args: { elderId: v.id("elders"), platform, now: v.number() },
-  handler: async (ctx, { elderId, platform: p, now }): Promise<{ ok: true } | { ok: false; error: "not_found" | "locked" | "rate_limited" }> => {
+  args: { elderId: v.id("elders"), tokenHash: v.string(), platform, now: v.number() },
+  handler: async (ctx, { elderId, tokenHash, platform: p, now }): Promise<{ ok: true } | { ok: false; error: "not_found" | "locked" | "rate_limited" }> => {
     const elder = await ctx.db.get(elderId);
-    if (!elder) return { ok: false, error: "not_found" };
+    if (!elder || !sameTokenHash(elder.signupTokenHash, tokenHash)) return { ok: false, error: "not_found" };
     if (elder.stage === "active") return { ok: false, error: "locked" };
     const row = await accountRow(ctx, elderId, p);
     const times = row?.attemptTimes ?? [];

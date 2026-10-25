@@ -82,6 +82,7 @@ export default defineSchema({
     lastBankRefreshAt: v.optional(v.number()), // epoch ms, debounces question-bank refreshes
     characterId: v.optional(v.string()), // who calls him (lib/characters.ts); missing = default for his language
     loopRequestedAt: v.optional(v.number()), // epoch ms; when callLoop last scheduled a call (may be ahead)
+    signupTokenHash: v.optional(v.string()), // SHA-256 hex of the sign-up page's token (signup.register)
   }).index("by_phone", ["phone"]),
 
   // His own social accounts, connected at sign-up (convex/accounts.ts). The app password is

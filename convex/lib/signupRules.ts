@@ -1,7 +1,9 @@
-// Sign-up page rules (signup.ts): input checks, language codes, and the call rate limit.
+// Sign-up page rules (signup.ts): input checks, language codes, the call and connect rate
+// limits, weekly-call defaults and the sign-up token.
 // No runtime imports: unit-tested directly with Node (tests/signup.test.ts).
 
 import type { CallLanguage } from "./prompts/principles.ts";
+import { localParts, type Weekday } from "./schedule.ts";
 
 export const MAX_NAME_CHARS = 100;
 export const CALLS_PER_DAY = 3;
@@ -131,4 +133,89 @@ export function connectRateLimit(attemptTimes: number[], now: number): { ok: tru
 /** The attempt list to store after one more attempt: only the ones the limit still looks at. */
 export function recordAttempt(attemptTimes: number[], now: number): number[] {
   return [...attemptTimes.filter((t) => now - t < HOUR_MS), now].slice(-CONNECT_ATTEMPTS_PER_HOUR);
+}
+
+// ---------- Weekly call defaults (register) ----------
+
+export const DEFAULT_CALL_HOUR = 10;
+
+/** Country code -> a zone when the browser didn't send a usable one. */
+export function zoneFromPhone(phone: string): string {
+  if (phone.startsWith("+52")) return "America/Mexico_City";
+  if (phone.startsWith("+34")) return "Europe/Madrid";
+  return "America/Los_Angeles";
+}
+
+/** A real IANA zone name (Intl knows it), e.g. "America/Mexico_City" or "UTC". */
+export function isIanaZone(zone: string): boolean {
+  if (!/^(?:UTC|[A-Za-z]+(?:\/[A-Za-z0-9_+-]+){1,2})$/.test(zone) || zone.length > 64) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The browser's zone if it's real, else one from his phone's country. */
+export function signupTimezone(raw: string | undefined, phone: string): string {
+  const zone = (raw ?? "").trim();
+  return zone && isIanaZone(zone) ? zone : zoneFromPhone(phone);
+}
+
+/** Default weekly slot (lib/schedule.ts format): the sign-up weekday in his zone, 10:00. */
+export function defaultCallSlot(nowMs: number, timeZone: string): { callDay: Weekday; callHour: number } {
+  return { callDay: localParts(nowMs, timeZone).weekday, callHour: DEFAULT_CALL_HOUR };
+}
+
+// ---------- Sign-up token ----------
+// register gives the browser a random token and keeps only its SHA-256 hash on his row. Every
+// later sign-up step needs it, so knowing his phone number (or elderId) isn't enough to change
+// his sign-up. Never logged.
+
+/** 32 random bytes, base64url (43 chars). Make it in an action (real randomness). */
+export function newSignupToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  let s = "";
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** Hex SHA-256 of a well-formed token; undefined for anything else (so it never matches). */
+export async function signupTokenHash(token: string): Promise<string | undefined> {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return undefined;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Constant-time compare of two hashes (false if either is missing). */
+export function sameTokenHash(stored: string | undefined, given: string | undefined): boolean {
+  if (!stored || !given || stored.length !== given.length) return false;
+  let diff = 0;
+  for (let i = 0; i < stored.length; i++) diff |= stored.charCodeAt(i) ^ given.charCodeAt(i);
+  return diff === 0;
+}
+
+/** Does `token` belong to this elder row? */
+export async function tokenMatches(row: { signupTokenHash?: string } | null, token: string): Promise<boolean> {
+  return !!row && sameTokenHash(row.signupTokenHash, await signupTokenHash(token));
+}
+
+/** The new elders row register inserts (only ever for a new phone: existing rows are never changed). */
+export function newElderFields(
+  input: { name: string; phone: string; language: CallLanguage; timeZone?: string },
+  nowMs: number,
+  tokenHash: string,
+) {
+  const timezone = signupTimezone(input.timeZone, input.phone);
+  return {
+    name: input.name,
+    phone: input.phone,
+    language: languageTag(input.language),
+    stage: "onboarding" as const,
+    expertise: [] as string[], // v1 field, still required by the schema
+    timezone,
+    ...defaultCallSlot(nowMs, timezone),
+    signupTokenHash: tokenHash,
+  };
 }
