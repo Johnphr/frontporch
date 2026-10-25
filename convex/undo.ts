@@ -34,10 +34,8 @@ import {
   cleanReason,
   deleteRedditThing,
   finishPatch,
-  legacyLinkedinEntry,
   pickLatestPost,
-  postRemovalPatch,
-  publicationStep,
+  planPostRemoval,
   replyDeleteTarget,
   replyStep,
   runRemoval,
@@ -74,28 +72,14 @@ export const claimPostRemoval = internalMutation({
   handler: async (ctx, { postId, reason }): Promise<{ found: false } | { found: true; elderId: Id<"elders">; entries: Entry[] }> => {
     const post = await ctx.db.get(postId);
     if (!post) return { found: false };
-    const now = Date.now();
-    await ctx.db.patch(postId, postRemovalPatch(post, reason, now));
     const rows = await ctx.db
       .query("postPublications")
       .withIndex("by_post", (q) => q.eq("postId", postId))
       .collect();
-    const entries: Entry[] = [];
-    for (const row of rows) {
-      const step = publicationStep(row, now);
-      const patch = claimPatch(step, now);
-      if (patch) await ctx.db.patch(row._id, patch);
-      entries.push({
-        id: row._id,
-        platform: row.platform,
-        ...(row.url ? { url: row.url } : {}),
-        step,
-        ...(row.records?.length ? { uris: row.records.map((r) => r.uri) } : {}),
-        ...(row.externalId ? { externalId: row.externalId } : {}),
-      });
-    }
-    const legacy = legacyLinkedinEntry(post, rows);
-    if (legacy) entries.push(legacy);
+    const plan = planPostRemoval(post, rows, reason, Date.now());
+    await ctx.db.patch(postId, plan.postPatch); // first: nothing new goes out
+    for (const { id, patch } of plan.rowPatches) await ctx.db.patch(id as Id<"postPublications">, patch);
+    const entries = plan.entries;
     return { found: true, elderId: post.elderId, entries };
   },
 });

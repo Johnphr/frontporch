@@ -194,6 +194,46 @@ export function legacyLinkedinEntry(post: { linkedinUrl?: string }, rows: Array<
   return { id: "", platform: "linkedin", url: post.linkedinUrl, step: { kind: "manual" } };
 }
 
+export type PubRow = {
+  _id: string;
+  platform: Platform;
+  status: string;
+  url?: string;
+  records?: Array<{ uri: string; cid: string }>;
+  externalId?: string;
+  claimedAt?: number;
+};
+
+/**
+ * The claim transaction for one post (undo.claimPostRemoval applies it): the post patch,
+ * each row's patch, and the entries the action works through.
+ */
+export function planPostRemoval(
+  post: { removedAt?: number; removedReason?: string; linkedinUrl?: string },
+  rows: PubRow[],
+  reason: string | undefined,
+  now: number,
+): { postPatch: ReturnType<typeof postRemovalPatch>; rowPatches: Array<{ id: string; patch: Record<string, unknown> }>; entries: Entry[] } {
+  const rowPatches: Array<{ id: string; patch: Record<string, unknown> }> = [];
+  const entries: Entry[] = [];
+  for (const row of rows) {
+    const step = publicationStep(row, now);
+    const patch = claimPatch(step, now);
+    if (patch) rowPatches.push({ id: row._id, patch });
+    entries.push({
+      id: row._id,
+      platform: row.platform,
+      ...(row.url ? { url: row.url } : {}),
+      step,
+      ...(row.records?.length ? { uris: row.records.map((r) => r.uri) } : {}),
+      ...(row.externalId ? { externalId: row.externalId } : {}),
+    });
+  }
+  const legacy = legacyLinkedinEntry(post, rows);
+  if (legacy) entries.push(legacy);
+  return { postPatch: postRemovalPatch(post, reason, now), rowPatches, entries };
+}
+
 /** One line for logs and the command's output (no post text). */
 export function summaryLine(r: RemovalResult): string {
   if (!r.removed.length && !r.failed.length && !r.manual.length && !r.waiting.length) return "nothing to remove";
@@ -316,33 +356,36 @@ function fold(text: string): string {
     .replace(/[’‘]/g, "'");
 }
 
-const FILLER_EN = "(?:(?:the|that|this|my|last|latest|previous|recent|newest|other|week'?s?|new)\s+){0,4}";
-const NOUN_EN = "(?:post|posts|story|stories|one (?:about|you|from|we|i|with))";
-const FILLER_ES = "(?:(?:la|el|las|los|esa|ese|esta|este|mi|mis|ultima|ultimo|pasada|pasado|de|que|semana|nueva)\s+){0,4}";
-const NOUN_ES = "(?:publicacion|publicaciones|post|posts|historia|historias)";
-const VERB_ES = "(?:quit|baj|borr|elimin|retir)[a-z]*";
+// Regex pieces, as RegExp sources (String.raw keeps the backslashes).
+const FILLER_EN = String.raw`(?:(?:the|that|this|my|last|latest|previous|recent|newest|other|week'?s?|new)\s+){0,4}`;
+const NOUN_EN = String.raw`(?:post|posts|story|stories|one (?:about|you|from|we|i|with))`;
+const FILLER_ES = String.raw`(?:(?:la|el|las|los|esa|ese|esta|este|mi|mis|ultima|ultimo|pasada|pasado|de|que|semana|nueva)\s+){0,4}`;
+const NOUN_ES = String.raw`(?:publicacion|publicaciones|post|posts|historia|historias)`;
+const VERB_ES = String.raw`(?:quit|baj|borr|elimin|retir)[a-z]*`;
+const re = (source: string) => new RegExp(source, "g");
 
 /** Requests naming the post. Each match's verb is where the framing check looks back from. */
 const STRICT = [
-  new RegExp(`\b(?:take|pull)\s+(?:down|off)\s+${FILLER_EN}${NOUN_EN}\b`, "g"),
-  new RegExp(`\b(?:take|pull)\s+${FILLER_EN}${NOUN_EN}\s+(?:down|off)\b`, "g"),
-  new RegExp(`\b(?:delete|remove|unpost|unpublish|erase)\s+${FILLER_EN}${NOUN_EN}\b`, "g"),
-  new RegExp(`\b${VERB_ES}\s+${FILLER_ES}${NOUN_ES}\b`, "g"),
+  re(String.raw`\b(?:take|pull)\s+(?:down|off)\s+${FILLER_EN}${NOUN_EN}\b`),
+  re(String.raw`\b(?:take|pull)\s+${FILLER_EN}${NOUN_EN}\s+(?:down|off)\b`),
+  re(String.raw`\b(?:take|pull)\s+${FILLER_EN}${NOUN_EN}\s+(?:about|from|on|with)\b[^.?!,]{0,40}\s(?:down|off)\b`),
+  re(String.raw`\b(?:delete|remove|unpost|unpublish|erase)\s+${FILLER_EN}${NOUN_EN}\b`),
+  re(String.raw`\b${VERB_ES}\s+${FILLER_ES}${NOUN_ES}\b`),
   /\bdar de baja\s+(?:la|esa|mi)\s+(?:publicacion|historia)\b/g,
 ];
 
 /** Said as a wish, no lead-in needed: "I'd like that post taken down", "I don't want that story up". */
 const WISH = [
-  new RegExp(`\b(?:want|like|need|rather have)\s+${FILLER_EN}${NOUN_EN}\s+(?:(?:taken|pulled|brought)\s+(?:down|off)|deleted|removed)\b`, "g"),
-  new RegExp(`\b(?:don'?t|do not) want\s+${FILLER_EN}${NOUN_EN}\s+(?:up|online|out there|on there|on the internet)\b`, "g"),
-  new RegExp(`\bya no quiero\s+${FILLER_ES}${NOUN_ES}\b`, "g"),
+  re(String.raw`\b(?:want|like|need|rather have)\s+${FILLER_EN}${NOUN_EN}\s+(?:(?:taken|pulled|brought)\s+(?:down|off)|deleted|removed)\b`),
+  re(String.raw`\b(?:don'?t|do not) want\s+${FILLER_EN}${NOUN_EN}\s+(?:up|online|out there|on there|on the internet)\b`),
+  re(String.raw`\bya no quiero\s+${FILLER_ES}${NOUN_ES}\b`),
 ];
 
 /** Any take-down wording at all: counts only when Pip commits to it right after. */
 const VAGUE = [
   /\b(?:take|pull)\b[^.?!]{0,30}\b(?:down|off)\b/g,
   /\b(?:delete|remove|erase|unpost)\b/g,
-  new RegExp(`\b${VERB_ES}\b`, "g"),
+  re(String.raw`\b${VERB_ES}\b`),
   /\bdar de baja\b/g,
 ];
 
@@ -351,7 +394,7 @@ const LEAD_IN = /^(?:(?:oh|um|uh|well|so|and|yes|yeah|ok|okay|actually|hey|liste
 const FRAMING_EN =
   /^(?:(?:please|can you|could you|would you|will you|you can|just|go ahead and|let's|i want you to|i want them to|i need you to|i'd like you to|i would like you to|i want to|i'd like to|i would like to|i'd rather you|have them|can we|could we|we should|you should|i think we should|get them to)\s*,?\s*)+$/;
 const FRAMING_ES =
-  /^(?:(?:por favor|puede|podria|pudiera|quiero que|me gustaria que|quisiera que|necesito que|le pido que|favor de|me hace el favor de|hagame el favor de|haga el favor de|que|me|se|la|lo|usted|ustedes)\s*,?\s*)+$/;
+  /^(?:(?:por favor|puede|podria|pudiera|quiero que|me gustaria que|quisiera que|necesito que|le pido que|favor de|me hace el favor de|hagame el favor de|haga el favor de|que|me|se|la|lo|usted|ustedes|no)\s*,?\s*)+$/;
 
 /** Is the text before the verb (same sentence) a request lead-in? */
 function framed(before: string): boolean {
@@ -375,7 +418,7 @@ const CONFIRM = [
 ];
 
 /** Pip's line when he changes his mind ("No problem, I'll leave it up."). */
-const PIP_KEEP_UP = [/i'll leave it up/, /la dejamos/];
+const PIP_KEEP_UP = [/\bi'll leave it up\b/, /\bla dejamos\b/];
 
 /** He changed his mind later in the call. */
 const RETRACT = [
