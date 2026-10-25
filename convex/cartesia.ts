@@ -43,6 +43,7 @@ import {
   type PollOutcome,
 } from "./lib/cartesia";
 import { cartesiaFetch, httpError, requireEnv } from "./lib/cartesiaHttp";
+import { callPath } from "./lib/inbound";
 import {
   buildOnboardingVariables,
   callCharacter,
@@ -99,7 +100,13 @@ export const reserveCall = internalMutation({
     // Same normalized input as conversation.planNextCall, so both pick the same kind.
     const decision = reserveDecision(asElderV2(elder) ?? {}, recent, Date.now(), { force, expectedKind });
     if (!decision.ok) return { ok: false as const, reason: decision.reason };
-    const callId = await ctx.db.insert("calls", { elderId, kind: decision.kind, status: "queued", transcript: [] });
+    const callId = await ctx.db.insert("calls", {
+      elderId,
+      kind: decision.kind,
+      direction: "outbound",
+      status: "queued",
+      transcript: [],
+    });
     return {
       ok: true as const,
       callId,
@@ -296,7 +303,7 @@ export const pollCall = internalAction({
     if (shouldGiveUp(seenAttempts)) {
       outcome = { kind: "timeout" };
     } else {
-      const res = await cartesiaFetch(`/agents/calls/${call.cartesiaCallId}`, { method: "GET" });
+      const res = await cartesiaFetch(callPath(call.cartesiaCallId), { method: "GET" });
       const http = classifyHttp(res.status);
       if (http === "fatal") {
         outcome = { kind: "fatal", error: httpError(res) };

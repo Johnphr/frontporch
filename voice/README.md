@@ -64,6 +64,21 @@ Tune in the Cartesia playground if you like, but copy the final values back into
   "don't know" instead of guessing). Not adopted from the draft: ending every turn with a
   question, "no reason for the call", promising a person will follow up.
 
+## Inbound calls (he calls us)
+
+- **One number, one agent.** A Cartesia number routes inbound calls to exactly one agent
+  (`PATCH /agents/phone-numbers/{id} {agent_id}`), so a single bilingual "Front Porch - inbound"
+  agent (`convex/lib/prompts/inbound.ts`) answers everyone; outbound calls from the number are
+  unaffected. Set it up with `npx convex run cartesiaAgents:syncAgent '{"inbound":true,"assignNumber":true}'`.
+- **Generic greeting, then a lookup.** Nothing about the caller is known before the greeting
+  (placeholder defaults never apply on real calls), so it greets in English and Spanish, then calls
+  the `lookup_caller` webhook tool. The tool result says who's calling, which call it is, and the
+  language; the agent becomes Pip or Juanito and runs the onboarding or story flow.
+- **Unknown numbers** get a polite goodbye; the agent never confirms who is or isn't a member.
+- **Language:** Cartesia documents one primary language per agent (speech recognition + voice).
+  The inbound agent uses `CARTESIA_INBOUND_LANGUAGE` (default `en`) with `CARTESIA_VOICE_ID`;
+  check Spanish recognition on a real call before relying on it for Spanish callers.
+
 ## Dynamic variables (from Convex)
 
 Every call sends the same three (`convex/lib/prompts/agent.ts` `CALL_VARIABLES`). Every variable

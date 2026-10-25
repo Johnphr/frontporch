@@ -148,6 +148,17 @@ and (once enabled) Quora and Discourse for real questions people in his field as
 dedupes and ranks them into `audienceQuestions`. `planNextCall` takes one from
 `apify.topAudienceQuestions` and calls `apify.markAudienceQuestionUsed`.
 
+### ⑤ He calls in (inbound)
+Our one number routes to one Cartesia agent: the bilingual inbound agent
+(`lib/prompts/inbound.ts`). Cartesia has no pre-call hook, so it greets generically and first
+calls the `lookup_caller` webhook tool (filled from `system__caller_id` +
+`system__conversation_id`) → `POST /cartesia/inbound-lookup` (`http.ts`, bearer
+`CARTESIA_TOOL_SECRET`) → `inbound.handleLookup`: elder by phone → same plan as outbound
+(onboarding or `conversation.planNextCall`), `calls` row `direction: "inbound"`, `markPlanUsed`,
+`cartesia.pollCall` → `pipeline.processCall`. Unknown number → polite goodbye, nothing revealed,
+no row. Backstop: `inbound.syncInboundCalls` every 10 min lists the agent's recent calls
+(`GET /agents/calls`) and records finished ones from elders that have no row.
+
 ## Build order
 
 | Slice | What works at the end | Context the call uses |
@@ -326,7 +337,7 @@ tests/                          node --test + fixtures/
 
 | Var | Provided by |
 |---|---|
-| `CARTESIA_API_KEY`, `CARTESIA_FROM_NUMBER_ID`, `CARTESIA_VOICE_ID` (optional, Pip), `CARTESIA_VOICE_ID_ES` (Juanito), `CARTESIA_MODEL` (optional). Agent ids live in the `characterAgents` table, not env | Voice |
+| `CARTESIA_API_KEY`, `CARTESIA_FROM_NUMBER_ID`, `CARTESIA_VOICE_ID` (optional, Pip), `CARTESIA_VOICE_ID_ES` (Juanito), `CARTESIA_MODEL` (optional). Agent ids live in the `characterAgents` table, not env. Inbound: `CARTESIA_INBOUND_AGENT_ID` + `CARTESIA_LOOKUP_TOOL_ID` (printed by `syncAgent '{"inbound":true}'`), `CARTESIA_TOOL_SECRET` (bearer for the lookup tool), `CARTESIA_INBOUND_LANGUAGE` (optional, default `en`), `INBOUND_SITE_URL` (only if `CONVEX_SITE_URL` isn't available) | Voice |
 | `LINKEDAPI_TOKEN`, `LINKEDAPI_ID_TOKEN`, `APIFY_TOKEN`, `STACKEXCHANGE_KEY` (optional), `POST_GUARD_MODE` (optional, default `enforce`), `AUTO_POST` (optional, default `on`; `off` = preview-only for tests) | Integrations |
 | `OPENAI_API_KEY` | Data (embeddings), Brain (LLM), Integrations (post guard) |
 | `OPENAI_MODEL` | optional, default `gpt-6-luna` |

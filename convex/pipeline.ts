@@ -30,6 +30,8 @@ import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery, type ActionCtx } from "./_generated/server";
 import { clip, isNoConversation, type Turn } from "./lib/cartesia";
 import type { MemoryDoc } from "./lib/dataRefs";
+import { markBankRowUsed } from "./conversation";
+import { inboundPlanToMark } from "./lib/inbound";
 import { canClaimProcessing, finishPatch, isProfileUsable, mergeProfile, type Profile } from "./lib/onboarding";
 import { runSteps, type StepReport } from "./lib/planner";
 import { parseAutoPost } from "./lib/postFlow";
@@ -63,6 +65,11 @@ export const finishProcessing = internalMutation({
   handler: async (ctx, { callId, status, error }) => {
     // Releases the claim (a failed run can be retried right away); keeps Cartesia's reason.
     await ctx.db.patch(callId, finishPatch(status, error, Date.now()));
+    // Inbound: his question counts as used only now that a real conversation happened.
+    const call = await ctx.db.get(callId);
+    const bankId = inboundPlanToMark(call, status);
+    const bankDocId = bankId ? ctx.db.normalizeId("questionBank", bankId) : null;
+    if (call && bankDocId) await markBankRowUsed(ctx, call.elderId, bankDocId, callId);
   },
 });
 

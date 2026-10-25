@@ -24,7 +24,7 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { internalAction, internalMutation, internalQuery, type MutationCtx } from "./_generated/server";
 import type { MemoryDoc, MemoryHit } from "./lib/dataRefs";
 import {
   FALLBACK_MAIN_QUESTION,
@@ -180,18 +180,29 @@ export const listQueued = internalQuery({
  */
 export const markPlanUsed = internalMutation({
   args: { elderId: v.id("elders"), bankId: v.id("questionBank"), callId: v.optional(v.id("calls")) },
-  handler: async (ctx, { elderId, bankId, callId }) => {
-    const row = await ctx.db.get(bankId);
-    if (!row || row.elderId !== elderId) return { ok: false };
-    const now = Date.now();
-    await ctx.db.patch(bankId, { status: "used", usedAt: now, ...(callId ? { usedInCallId: callId } : {}) });
-    if (row.source === "audience" && row.sourceRef) {
-      const audienceId = ctx.db.normalizeId("audienceQuestions", row.sourceRef);
-      if (audienceId) await ctx.db.patch(audienceId, { usedAt: now, ...(callId ? { usedInCallId: callId } : {}) });
-    }
-    return { ok: true };
-  },
+  handler: async (ctx, { elderId, bankId, callId }) => markBankRowUsed(ctx, elderId, bankId, callId),
 });
+
+/**
+ * Shared by markPlanUsed (outbound: when the phone rings) and pipeline.finishProcessing
+ * (inbound: once the call turned out to be a real conversation).
+ */
+export async function markBankRowUsed(
+  ctx: MutationCtx,
+  elderId: Id<"elders">,
+  bankId: Id<"questionBank">,
+  callId?: Id<"calls">,
+): Promise<{ ok: boolean }> {
+  const row = await ctx.db.get(bankId);
+  if (!row || row.elderId !== elderId) return { ok: false };
+  const now = Date.now();
+  await ctx.db.patch(bankId, { status: "used", usedAt: now, ...(callId ? { usedInCallId: callId } : {}) });
+  if (row.source === "audience" && row.sourceRef) {
+    const audienceId = ctx.db.normalizeId("audienceQuestions", row.sourceRef);
+    if (audienceId) await ctx.db.patch(audienceId, { usedAt: now, ...(callId ? { usedInCallId: callId } : {}) });
+  }
+  return { ok: true };
+}
 
 // ---------- actions ----------
 

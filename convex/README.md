@@ -147,6 +147,41 @@ For an elder who already did the onboarding call (his row has `stage: "active"` 
    (or `linkedapi:approvePost` if the fact-check held it). Turn auto-posting back on with
    `npx convex env set AUTO_POST on`.
 
+## Test an inbound call (he calls the Front Porch number; `inbound.ts`)
+
+One number routes to one Cartesia agent, so a single bilingual inbound agent answers every
+call. It greets generically, then calls the `lookup_caller` tool → `POST /cartesia/inbound-lookup`
+(`http.ts`) → `inbound.handleLookup`: his number → elder → the same plan an outbound call would
+use (onboarding or story, his language), a `calls` row with `direction: "inbound"`, and the usual
+poll → `pipeline.processCall`. Unknown numbers get a polite goodbye and no row. A 10-minute cron
+(`inbound.syncInboundCalls`) records any finished inbound call the lookup missed.
+
+1. Once (needs the HTTPS site URL; Convex gives functions `CONVEX_SITE_URL`, else set
+   `INBOUND_SITE_URL=https://<deployment>.convex.site`):
+
+   ```bash
+   npx convex env set CARTESIA_TOOL_SECRET <long random string>
+   npx convex run cartesiaAgents:syncAgent '{"inbound":true,"assignNumber":true}'   # prints the next two lines
+   npx convex env set CARTESIA_LOOKUP_TOOL_ID <id>
+   npx convex env set CARTESIA_INBOUND_AGENT_ID <id>
+   ```
+
+   Optional: `CARTESIA_INBOUND_LANGUAGE=es` makes Spanish the agent's primary language (Cartesia
+   agents have one primary language for speech recognition + voice; the prompt itself is bilingual).
+
+2. From the elder's phone (his `phone` field, E.164), call the Front Porch number. Pip (or
+   Juanito) greets, looks him up, and continues his onboarding or story call.
+3. Watch: a `calls` row with `direction: "inbound"`, `queued` is skipped (`in_progress` →
+   `ended` → `done`), then memories, a `pending` post (with `AUTO_POST=off`) and a used bank row.
+4. From a number that isn't an elder: polite goodbye, no row.
+5. Backstop by hand: `npx convex run inbound:syncInboundCalls`.
+
+Safety: every lookup is checked with Cartesia first (a live call on `CARTESIA_INBOUND_AGENT_ID`
+from that caller), so the tool secret alone gets nothing; a repeated lookup of the same call gets
+the same cached answer; phones typed in the dashboard in other formats still match (normalized
+comparison). A plain `syncAgent` only updates the inbound pieces when both
+`CARTESIA_INBOUND_AGENT_ID` and `CARTESIA_LOOKUP_TOOL_ID` are set.
+
 ## Apify scrapers (`apify.ts`, Integrations)
 
 Env: `APIFY_TOKEN` (required), `STACKEXCHANGE_KEY` (optional; raises the free

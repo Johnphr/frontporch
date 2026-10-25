@@ -111,9 +111,17 @@ export default defineSchema({
     processedAt: v.optional(v.number()), // epoch ms; set only on success
     // ---- v2 (Brain) ----
     plan: v.optional(v.any()), // CallPlan from conversation.planNextCall, for debugging
+    // ---- inbound calls (inbound.ts) ----
+    direction: v.optional(v.union(v.literal("outbound"), v.literal("inbound"))), // missing = outbound
+    // The lookup's system__conversation_id when it differs from cartesiaCallId (the id
+    // GET /agents/calls/{id} accepts). The docs don't say whether the two are the same.
+    cartesiaConversationId: v.optional(v.string()),
+    // The exact answer the lookup tool gave this call: a repeated lookup gets it back unchanged.
+    inboundLookup: v.optional(v.any()),
   })
     .index("by_sid", ["callSid"])
     .index("by_cartesia", ["cartesiaCallId"])
+    .index("by_conversation", ["cartesiaConversationId"])
     .index("by_elder", ["elderId"]),
 
   // ---- Data: memory ----

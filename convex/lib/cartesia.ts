@@ -142,6 +142,8 @@ export type AgentSettings = {
   language?: string;
   /** Defaults Cartesia uses when a call doesn't send a variable. */
   placeholders?: Record<string, string>;
+  /** Shared webhook/client tool ids (POST /v1/agents/tools) the agent may call. */
+  tools?: string[];
 };
 
 export function buildAgentConfig(s: AgentSettings) {
@@ -158,6 +160,8 @@ export function buildAgentConfig(s: AgentSettings) {
         inactivity_end_call_secs: INACTIVITY_END_CALL_SECS,
       },
       ...(s.voiceId ? { audio: { output: { voice_id: s.voiceId } } } : {}),
+      // docs.cartesia.ai/agents/configuration: `tools` lists shared tools by id, as objects.
+      ...(s.tools?.length ? { tools: s.tools.map((id) => ({ id })) } : {}),
       system_tools: {
         end_call: {
           description:
