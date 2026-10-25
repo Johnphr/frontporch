@@ -1,4 +1,4 @@
-// Story posts, the HTTP side (fetchFn passed in; tests/storyPublishing.test.ts drives it with fakes).
+// Story posts, the HTTP side (fetchFn passed in; tests/publish.test.ts drives it with fakes).
 // publish.ts only wires these to the database. Outcomes (lib/postFlow.PlatformOutcome):
 //   posted        it's on his profile (url; Bluesky: every post of the thread in records)
 //   failed        nothing new went out (refused, or failed before posting): safe to retry.
@@ -11,9 +11,13 @@ import { BlueskyHttpError, createThread, listOwnPosts, loginRefusedMessage, with
 import { cleanStoryBody, hashtagFacets, recoverThreadRecords } from "./blueskyThread.ts";
 import { disclosureFor, truncate } from "./linkedinPost.ts";
 import type { BlueskyLogin, RedditLogin } from "./logins.ts";
-import type { PlatformOutcome } from "./postFlow.ts";
+import type { PlatformOutcome, ThreadRecord } from "./postFlow.ts";
 import { redditToken } from "./replyPosting.ts";
 import { writeFailureStatus } from "./threadReplies.ts";
+import type { ThreadsAuth } from "./threadsClient.ts";
+import { postThreadsStory, splitThreadsThread, type WaitOptions } from "./threadsPublishing.ts";
+import type { XLogin } from "./xLogin.ts";
+import { postXStory, xStoryTexts, type XMode } from "./xPublishing.ts";
 
 const CHECK_PROFILE = "check his profile before retrying";
 
@@ -157,4 +161,41 @@ export async function submitRedditStory(
   if (parsed.errors.length) return { status: "failed", error: `Reddit: ${parsed.errors.join(", ")}` }; // refused (RATELIMIT...)
   if (!parsed.url && !parsed.name) return { status: "maybe_posted", error: `Reddit answered without a post link: ${CHECK_PROFILE}.` };
   return { status: "posted", ...(parsed.url ? { url: parsed.url } : {}), ...(parsed.name ? { externalId: parsed.name } : {}) };
+}
+
+// ---------- Threads and X: split the story, then post (publish.ts passes the row's records) ----------
+
+/**
+ * Threads: the story as a 2-5 post thread (lib/threadsPublishing). `done` = the row's records
+ * (a retry continues after them); `recover` = look in his profile first for posts an earlier
+ * attempt made.
+ */
+export async function publishThreadsStory(
+  fetchFn: FetchFn,
+  login: ThreadsAuth | null,
+  a: { text: string; lang?: string; done?: ThreadRecord[]; recover?: boolean } & WaitOptions,
+): Promise<PlatformOutcome> {
+  if (!login) return { status: "failed", error: "His Threads account isn't connected." };
+  const split = splitThreadsThread(a.text, a.lang);
+  if (!split.ok) return { status: "failed", error: `Doesn't fit a Threads thread: ${split.reason}` };
+  return postThreadsStory(fetchFn, login, {
+    texts: split.posts,
+    done: a.done ?? [],
+    recover: Boolean(a.recover),
+    ...(a.sleep ? { sleep: a.sleep } : {}),
+    ...(a.maxWaitMs !== undefined ? { maxWaitMs: a.maxWaitMs } : {}),
+    ...(a.pollMs !== undefined ? { pollMs: a.pollMs } : {}),
+  });
+}
+
+/** X: a self-thread, or one post with X_THREAD=off (lib/xPublishing.xMode). `done` = the row's records. */
+export async function publishXStory(
+  fetchFn: FetchFn,
+  login: XLogin | null,
+  a: { text: string; lang?: string; mode: XMode; done?: ThreadRecord[] },
+): Promise<PlatformOutcome> {
+  if (!login) return { status: "failed", error: "His X account isn't connected." };
+  const split = xStoryTexts(a.text, a.lang, a.mode);
+  if (!split.ok) return { status: "failed", error: `Doesn't fit X (${a.mode === "single" ? "one post" : "thread"}): ${split.reason}` };
+  return postXStory(fetchFn, login, { texts: split.posts, done: a.done ?? [] });
 }

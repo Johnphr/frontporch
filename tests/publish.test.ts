@@ -9,6 +9,8 @@ import { splitBlueskyThread } from "../convex/lib/blueskyThread.ts";
 import { DEFAULT_DISCLOSURE, SPANISH_DISCLOSURE } from "../convex/lib/linkedinPost.ts";
 import { isBlueskyLoginRefused, redditLoginForElder } from "../convex/lib/logins.ts";
 import {
+  PLATFORMS,
+  PLATFORM_LABEL,
   STALE_CLAIM_MS,
   canClaimPublication,
   canRetry,
@@ -19,6 +21,8 @@ import {
   mayBeOut,
   overallPostStatus,
   runPublish,
+  shouldRecover,
+  skipReason,
   type GuardResult,
   type Platform,
   type PlatformOutcome,
@@ -271,7 +275,10 @@ test("gating: LINKEDIN_POSTING off unless on/true/1/yes; Reddit only with REDDIT
   const env = { REDDIT_CLIENT_ID: "a", REDDIT_CLIENT_SECRET: "b", REDDIT_USERNAME: "c", REDDIT_PASSWORD: "d" };
   assert.equal(await redditLoginForElder(null, null, env), null);
   assert.notEqual(await redditLoginForElder(null, null, { ...env, REDDIT_POSTING: "on" }), null);
-  assert.deepEqual(enabledPlatforms({ blueskyLogin: true, redditLogin: false, linkedinOn: false }), { bluesky: true, reddit: false, linkedin: false });
+  assert.deepEqual(
+    enabledPlatforms({ blueskyLogin: true, threadsLogin: false, xOn: false, xLogin: false, redditLogin: false, linkedinOn: false }),
+    { bluesky: true, threads: false, x: false, reddit: false, linkedin: false },
+  );
 });
 
 // ---------- claim / finish rules ----------
@@ -407,7 +414,7 @@ function fakeDeps(o: {
   const state = { removed: o.removedAt !== undefined, status: o.status ?? "pending" };
   const deps: PublishDeps = {
     load: async () => ({ status: state.status, ...(o.removedAt !== undefined ? { removedAt: o.removedAt } : {}), ...(o.heldFor ? { heldFor: o.heldFor } : {}) }),
-    platforms: async () => ({ bluesky: false, reddit: false, linkedin: false, ...o.enabled }),
+    platforms: async () => ({ bluesky: false, threads: false, x: false, reddit: false, linkedin: false, ...o.enabled }),
     claimPost: async (approve) => {
       log.push(`claimPost:${approve}`);
       const c = canStartPublish({ status: state.status }, NOW, approve);
@@ -454,14 +461,14 @@ function fakeDeps(o: {
   return { deps, log, rows, state };
 }
 
-test("runPublish: Bluesky on, Reddit and LinkedIn off -> one post, skipped rows, published", async () => {
+test("runPublish: Bluesky on, the rest off -> one post, skipped rows, published", async () => {
   const f = fakeDeps({ enabled: { bluesky: true } });
   const out = await runPublish(f.deps, false);
   assert.equal(out.status, "published");
   assert.deepEqual(f.log, ["claimPost:false", "guard", "saveGuard:false", "post:bluesky"]);
   assert.equal(f.rows.get("row-reddit")?.status, "skipped");
   assert.equal(f.rows.get("row-linkedin")?.status, "skipped");
-  assert.deepEqual(out.platforms, { bluesky: "posted", reddit: "skipped", linkedin: "skipped" });
+  assert.deepEqual(out.platforms, { bluesky: "posted", threads: "skipped", x: "skipped", reddit: "skipped", linkedin: "skipped" });
 });
 
 test("runPublish: every enabled platform in order; all failed -> failed", async () => {
@@ -552,4 +559,68 @@ test("runPublish: a maybe_posted row is not retried by a second automatic run", 
   f.log.length = 0;
   await runPublish(f.deps, false);
   assert.ok(!f.log.includes("post:bluesky"));
+});
+
+// ---------- Threads and X ----------
+
+test("enabledPlatforms: Threads with a login (no switch); X only with X_POSTING and a login", () => {
+  const base = { blueskyLogin: false, threadsLogin: false, xOn: false, xLogin: false, redditLogin: false, linkedinOn: false };
+  assert.equal(enabledPlatforms({ ...base, threadsLogin: true }).threads, true);
+  assert.equal(enabledPlatforms(base).threads, false);
+  assert.equal(enabledPlatforms({ ...base, xOn: true, xLogin: true }).x, true);
+  assert.equal(enabledPlatforms({ ...base, xOn: true }).x, false, "no X login");
+  assert.equal(enabledPlatforms({ ...base, xLogin: true }).x, false, "X_POSTING off");
+  assert.deepEqual(PLATFORMS, ["bluesky", "threads", "x", "reddit", "linkedin"]);
+  assert.equal(PLATFORM_LABEL.threads, "Threads");
+  assert.equal(PLATFORM_LABEL.x, "X");
+  assert.match(skipReason("threads"), /Threads account isn't connected/);
+  assert.match(skipReason("x"), /X_POSTING/);
+});
+
+test("shouldRecover: after maybe_posted / a crashed claim / a partial thread", () => {
+  assert.equal(shouldRecover("maybe_posted", []), true);
+  assert.equal(shouldRecover("posting", undefined), true);
+  assert.equal(shouldRecover("failed", [{ uri: "p1", cid: "" }]), true);
+  assert.equal(shouldRecover("pending", []), false);
+  assert.equal(shouldRecover(undefined, undefined), false);
+});
+
+test("canClaimPublication: a stale Threads / X claim becomes maybe_posted (no repo check)", () => {
+  for (const platform of ["threads", "x"]) {
+    const c = canClaimPublication({ platform, status: "posting", claimedAt: NOW - STALE_CLAIM_MS - 1 }, NOW, true, false);
+    assert.ok(!c.ok && "becomes" in c && c.becomes === "maybe_posted", platform);
+  }
+});
+
+test("overallPostStatus: a half-posted Threads or X thread is partly_posted, named in the error", () => {
+  for (const platform of ["threads", "x"]) {
+    const out = overallPostStatus([
+      { platform: "bluesky", status: "skipped" },
+      { platform, status: "failed", error: "HTTP 400", records: [{ uri: "1", cid: "" }] },
+    ]);
+    assert.equal(out.status, "partly_posted", platform);
+    assert.match(out.error ?? "", platform === "x" ? /^X: partly posted/ : /^Threads: partly posted/);
+  }
+});
+
+test("runPublish: Bluesky, Threads, X in order, then Reddit and LinkedIn", async () => {
+  const f = fakeDeps({ enabled: { bluesky: true, threads: true, x: true, reddit: true, linkedin: true } });
+  const out = await runPublish(f.deps, false);
+  assert.equal(out.status, "published");
+  assert.deepEqual(f.log.filter((l) => l.startsWith("post:")), ["post:bluesky", "post:threads", "post:x", "post:reddit", "post:linkedin"]);
+});
+
+test("runPublish: taken down while Threads was posting -> undo, X never posted", async () => {
+  const f = fakeDeps({ enabled: { bluesky: true, threads: true, x: true }, removeAfter: "threads" });
+  await runPublish(f.deps, false);
+  assert.deepEqual(f.log.filter((l) => l === "undo" || l.startsWith("post:")), ["post:bluesky", "post:threads", "undo"]);
+  assert.equal(f.rows.has("row-x"), false);
+});
+
+test("runPublish: only Threads connected -> fact-checked, posted there, published", async () => {
+  const f = fakeDeps({ enabled: { threads: true } });
+  const out = await runPublish(f.deps, false);
+  assert.equal(out.status, "published");
+  assert.ok(f.log.includes("guard"));
+  assert.deepEqual(f.log.filter((l) => l.startsWith("post:")), ["post:threads"]);
 });

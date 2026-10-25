@@ -12,15 +12,19 @@
 //          bluesky   his login (lib/logins.ts): the post as a 3-5 post thread
 //                    (lib/blueskyThread.ts); records = every post, root first; url = post 1.
 //                    A refused login marks his account invalid (reportBlueskyLoginError).
+//          threads   when he connected Threads (lib/threadsLogin.ts): a 2-5 post thread
+//                    (lib/threadsPublishing.ts); a retry looks in his profile first
+//          x         only when X_POSTING=on and he connected X (lib/xLogin.ts): a self-thread,
+//                    or one post with X_THREAD=off (lib/xPublishing.ts)
 //          reddit    only when redditLoginForElder returns a login (REDDIT_POSTING=on): a self
 //                    post on his profile (sr=u_<name>), title = the hook
 //          linkedin  only when LINKEDIN_POSTING=on, through linkedapi.startPublication
 //                    (LinkedAPI + polling); otherwise its row is "skipped"
-//        an unclear failure (timeout after the request went out, 5xx, or a Reddit / LinkedIn
-//        run that stopped mid-post) -> maybe_posted: never retried on its own; a person checks
+//        an unclear failure (timeout after the request went out, 5xx, or a Threads / X /
+//        Reddit / LinkedIn run that stopped mid-post) -> maybe_posted: never retried on its own; a person checks
 //        his profile, then retryPublication approve:true
 //     4. posts.status: published (any platform posted; linkedinUrl only from LinkedIn) |
-//        partly_posted (only part of a Bluesky thread is out) | failed (nothing went out) |
+//        partly_posted (only part of a thread is out, any platform) | failed (nothing went out) |
 //        needs_review (held)
 //   approvePost({ postId })        a person read a held post. A fact-check hold goes out as it
 //                                  is; anything else (quality / thread-fit hold, a pending post
@@ -41,7 +45,8 @@
 // Disclosure + fact-check language: posts.language, decided once when the post is saved
 // (postLanguage: the language his calls run in). Older rows: postLanguage(elder).
 // Never log tokens, passwords or post text: ids and statuses only.
-// Env: AUTO_POST, POST_GUARD_MODE, LINKEDIN_POSTING (+ the login variables in lib/logins.ts).
+// Env: AUTO_POST, POST_GUARD_MODE, LINKEDIN_POSTING, X_POSTING, X_THREAD (+ the login variables
+// in lib/logins.ts, lib/threadsLogin.ts, lib/xLogin.ts).
 // Owner: Integrations.
 
 import { v } from "convex/values";
@@ -63,6 +68,7 @@ import {
   overallPostStatus,
   publishOne,
   runPublish,
+  shouldRecover,
   shouldRunGuard,
   skipReason,
   type ClaimCheck,
@@ -72,7 +78,10 @@ import {
   type PublishDeps,
   type PublishResult,
 } from "./lib/postFlow";
-import { postBlueskyStory, redditStoryParts, submitRedditStory } from "./lib/storyPublishing";
+import { postBlueskyStory, publishThreadsStory, publishXStory, redditStoryParts, submitRedditStory } from "./lib/storyPublishing";
+import { threadsLoginForElder } from "./lib/threadsLogin";
+import { xLoginForElder } from "./lib/xLogin";
+import { xMode, xPostingOn } from "./lib/xPublishing";
 import type { Turn } from "./lib/linkedinPost";
 
 declare const process: { env: Record<string, string | undefined> };
@@ -82,7 +91,7 @@ const HTTP_TIMEOUT_MS = 20_000;
 // undo.ts (another branch) defines it with args { postId, reason? }.
 const removePost = makeFunctionReference<"action", { postId: Id<"posts">; reason?: string }>("undo:removePost");
 
-const platformValidator = v.union(v.literal("bluesky"), v.literal("reddit"), v.literal("linkedin"));
+const platformValidator = v.union(v.literal("bluesky"), v.literal("threads"), v.literal("x"), v.literal("reddit"), v.literal("linkedin"));
 const recordValidator = v.object({ uri: v.string(), cid: v.string() });
 const outcomeValidator = v.union(
   v.object({
@@ -207,8 +216,8 @@ export const ensurePublication = internalMutation({
 });
 
 /**
- * Atomic claim of one platform row (never for a post that was taken down). A stale Reddit /
- * LinkedIn claim becomes maybe_posted here (lib/postFlow.canClaimPublication).
+ * Atomic claim of one platform row (never for a post that was taken down). A stale claim on
+ * anything but Bluesky becomes maybe_posted here (lib/postFlow.canClaimPublication).
  */
 export const claimPublication = internalMutation({
   args: { publicationId: v.id("postPublications"), approve: v.boolean() },
@@ -293,14 +302,27 @@ function loadData(ctx: ActionCtx, postId: Id<"posts">) {
 }
 
 /**
- * Which platforms are on for him (lib/logins.ts decides Bluesky and Reddit). A lookup that
- * throws (an account we can't read, e.g. a missing key) counts as on, so its row ends up
- * `failed` with a clear error instead of being skipped silently.
+ * Which platforms are on for him (lib/postFlow.enabledPlatforms). A lookup that throws (an
+ * account we can't read) counts as on, so its row ends up `failed` with a clear error instead
+ * of being skipped silently. X's login is only read when X_POSTING is on.
  */
 async function platformsFor(ctx: ActionCtx, elderId: Id<"elders">): Promise<Record<Platform, boolean>> {
   const has = (p: Promise<unknown>) => p.then(Boolean, () => true);
-  const [bluesky, reddit] = await Promise.all([has(blueskyLoginForElder(ctx, elderId)), has(redditLoginForElder(ctx, elderId))]);
-  return enabledPlatforms({ blueskyLogin: bluesky, redditLogin: reddit, linkedinOn: linkedinPostingOn(process.env.LINKEDIN_POSTING) });
+  const xOn = xPostingOn(process.env);
+  const [bluesky, threads, x, reddit] = await Promise.all([
+    has(blueskyLoginForElder(ctx, elderId)),
+    has(threadsLoginForElder(ctx, elderId, { fetchFn: timedFetch })),
+    xOn ? has(xLoginForElder(ctx, elderId, { fetchFn: timedFetch })) : Promise.resolve(false),
+    has(redditLoginForElder(ctx, elderId)),
+  ]);
+  return enabledPlatforms({
+    blueskyLogin: bluesky,
+    threadsLogin: threads,
+    xOn,
+    xLogin: x,
+    redditLogin: reddit,
+    linkedinOn: linkedinPostingOn(process.env.LINKEDIN_POSTING),
+  });
 }
 
 /** A login lookup that throws -> null + a fixed error (nothing is posted). Never the error text. */
@@ -333,11 +355,25 @@ async function postTo(
       done: row?.records ?? [],
       // An earlier attempt may have posted more than we know: only posts made after this row
       // existed (its first claim came right after) can be that attempt's.
-      recover: previous === "maybe_posted" || previous === "posting" || Boolean(row?.records?.length),
+      recover: shouldRecover(previous, row?.records),
       ...(row ? { since: row._creationTime } : {}),
       // A revoked or changed app password: mark his account invalid (lib/logins.ts).
       onLoginError: (e) => reportBlueskyLoginError(ctx, post.elderId, e),
     });
+  }
+  if (platform === "threads") {
+    const { login, error } = await loginOrError(threadsLoginForElder(ctx, post.elderId, { fetchFn: timedFetch }), "Threads");
+    if (error) return { status: "failed", error };
+    const row = await ctx.runQuery(internal.publish.getPublication, { publicationId });
+    // No repo check like Bluesky's: the recovery reads his recent posts and replies instead.
+    return publishThreadsStory(timedFetch, login, { text: post.text, lang, done: row?.records ?? [], recover: shouldRecover(previous, row?.records) });
+  }
+  if (platform === "x") {
+    if (!xPostingOn(process.env)) return { status: "failed", error: skipReason("x") };
+    const { login, error } = await loginOrError(xLoginForElder(ctx, post.elderId, { fetchFn: timedFetch }), "X");
+    if (error) return { status: "failed", error };
+    const row = await ctx.runQuery(internal.publish.getPublication, { publicationId });
+    return publishXStory(timedFetch, login, { text: post.text, lang, mode: xMode(process.env), done: row?.records ?? [] });
   }
   if (platform === "reddit") {
     const { login, error } = await loginOrError(redditLoginForElder(ctx, post.elderId), "Reddit");

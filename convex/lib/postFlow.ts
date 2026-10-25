@@ -248,21 +248,31 @@ export function linkedinPostingOn(value: string | undefined): boolean {
 // ---------- publishing a story post to several platforms (publish.ts) ----------
 // One postPublications row per post per platform. posts.status stays the summary:
 //   pending -> posting (publish.ts claimed it) -> published (any platform posted)
-//   | partly_posted (only part of a Bluesky thread went out) | failed (nothing went out)
+//   | partly_posted (only part of a thread went out, on any platform) | failed (nothing went out)
 //   | needs_review (held by the fact-check, the quality check or the thread fit)
 
-export const PLATFORMS = ["bluesky", "reddit", "linkedin"] as const;
+export const PLATFORMS = ["bluesky", "threads", "x", "reddit", "linkedin"] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
 export type PublicationStatus = "pending" | "posting" | "posted" | "failed" | "maybe_posted" | "skipped" | "removing" | "removed";
 
-export const PLATFORM_LABEL: Record<Platform, string> = { bluesky: "Bluesky", reddit: "Reddit", linkedin: "LinkedIn" };
+export const PLATFORM_LABEL: Record<Platform, string> = {
+  bluesky: "Bluesky",
+  threads: "Threads",
+  x: "X",
+  reddit: "Reddit",
+  linkedin: "LinkedIn",
+};
 
-/** Why a platform is skipped: Bluesky without his login, Reddit off or without a login, LinkedIn off. */
+/** Why a platform is skipped (its switch is off, or he has no usable login there). */
 export function skipReason(platform: Platform): string {
   switch (platform) {
     case "bluesky":
       return "His Bluesky account isn't connected.";
+    case "threads":
+      return "His Threads account isn't connected.";
+    case "x":
+      return "X posting is off (X_POSTING) or his X account isn't connected.";
     case "reddit":
       return "Reddit posting is off (REDDIT_POSTING) or his Reddit login isn't set.";
     case "linkedin":
@@ -270,9 +280,31 @@ export function skipReason(platform: Platform): string {
   }
 }
 
+export type PlatformSwitches = {
+  blueskyLogin: boolean;
+  /** He has a usable Threads login (no env switch: connecting it is the opt-in). */
+  threadsLogin: boolean;
+  /** X_POSTING=on (X charges per post). */
+  xOn: boolean;
+  xLogin: boolean;
+  redditLogin: boolean;
+  linkedinOn: boolean;
+};
+
 /** Which platforms this run posts to. */
-export function enabledPlatforms(a: { blueskyLogin: boolean; redditLogin: boolean; linkedinOn: boolean }): Record<Platform, boolean> {
-  return { bluesky: a.blueskyLogin, reddit: a.redditLogin, linkedin: a.linkedinOn };
+export function enabledPlatforms(a: PlatformSwitches): Record<Platform, boolean> {
+  return {
+    bluesky: a.blueskyLogin,
+    threads: a.threadsLogin,
+    x: a.xOn && a.xLogin,
+    reddit: a.redditLogin,
+    linkedin: a.linkedinOn,
+  };
+}
+
+/** Retry with recovery: an earlier attempt may have posted more than the row knows. */
+export function shouldRecover(previous: string | undefined, records: unknown[] | undefined): boolean {
+  return previous === "maybe_posted" || previous === "posting" || Boolean(records?.length);
 }
 
 /**
@@ -314,7 +346,7 @@ export const STALE_POSTING_MESSAGE =
  * May this run take the platform row and post? One run at a time; maybe_posted only with
  * approve (a person checked first); LinkedIn `pending` with a workflow id is waiting on LinkedAPI.
  * A claim older than STALE_CLAIM_MS: Bluesky retakes it (the retry looks in his repo first);
- * Reddit and LinkedIn can't check, so the row becomes maybe_posted.
+ * every other platform (Threads, X, Reddit, LinkedIn) becomes maybe_posted: a person checks.
  */
 export function canClaimPublication(row: PublicationState, now: number, approve: boolean, postRemoved: boolean): PublicationClaim {
   if (postRemoved) return { ok: false, reason: "Taken down (removedAt is set): not posting it." };
@@ -358,14 +390,14 @@ export function mayBeOut(outcome: PlatformOutcome): boolean {
   return outcome.status !== "failed" || Boolean(outcome.records?.length);
 }
 
-/** A row that didn't finish but has posts out: a Bluesky thread that stopped partway. */
+/** A row that didn't finish but has posts out: a thread (any platform) that stopped partway. */
 export function isPartlyPosted(row: { status: string; records?: unknown[] }): boolean {
   return (row.status === "failed" || row.status === "maybe_posted") && (row.records?.length ?? 0) > 0;
 }
 
 /**
  * posts.status from its platform rows (+ a short error naming the platforms that didn't post).
- * partly_posted: nothing finished, but part of a Bluesky thread is live (a retry continues it).
+ * partly_posted: nothing finished, but part of a thread is live on some platform (a retry continues it).
  */
 export function overallPostStatus(
   rows: { platform: string; status: string; error?: string; externalId?: string; records?: unknown[] }[],
@@ -385,7 +417,7 @@ export function overallPostStatus(
   }
   if (rows.some(isPartlyPosted)) return { status: "partly_posted", error };
   if (problems.length) return { status: "failed", error };
-  return { status: "failed", error: "Nowhere to post: no platform is set up (connect his Bluesky account), then run publish:publishPost." };
+  return { status: "failed", error: "Nowhere to post: no platform is set up (connect his Bluesky or Threads account), then run publish:publishPost." };
 }
 
 export const NOT_CHECKED_MESSAGE =

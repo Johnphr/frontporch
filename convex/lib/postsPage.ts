@@ -72,7 +72,7 @@ const PUBLICATION_LABEL: Record<string, string> = {
   removed: "Taken down",
 };
 
-const PLATFORM_LABEL: Record<string, string> = { bluesky: "Bluesky", reddit: "Reddit", linkedin: "LinkedIn" };
+const PLATFORM_LABEL: Record<string, string> = { bluesky: "Bluesky", threads: "Threads", x: "X", reddit: "Reddit", linkedin: "LinkedIn" };
 
 function issuesList(issues: string[]): string {
   return issues.length ? `<ul>${issues.map((i) => `<li>${escapeHtml(i)}</li>`).join("")}</ul>` : "";
@@ -84,7 +84,7 @@ function checkBlock(check: PageCheck | undefined): string {
   return `<div class="check ${check.pass ? "good" : "bad"}"><strong>Fact-check now: ${check.pass ? "pass" : "would be held"}</strong> (${escapeHtml(check.mode)}) ${escapeHtml(check.summary)}${issuesList(check.issues)}</div>`;
 }
 
-/** A row that didn't finish but has posts out (a Bluesky thread that stopped partway). */
+/** A row that didn't finish but has posts out (a thread that stopped partway, any platform). */
 function partly(r: PagePublication): boolean {
   return (r.status === "failed" || r.status === "maybe_posted") && (r.posts ?? 0) > 0;
 }
@@ -252,7 +252,7 @@ footer{display:flex;gap:12px;font-size:13px;flex-wrap:wrap}a{color:inherit}.id{f
 .pubs{margin:0;padding-left:18px;font-size:14px}.perr{color:var(--bad)}.s-posted{color:var(--good)}.s-maybe_posted{color:var(--bad)}
 code{font-family:ui-monospace,monospace;font-size:12px;word-break:break-all}.cmd{margin:0;font-size:13px}
 </style></head><body><main>
-<h1>Generated posts</h1><p class="sub">Temporary review page. Newest first, as the Bluesky thread they become (Reddit gets the same story on his profile when it's on; LinkedIn is off). Nothing on this page posts anything: run the commands shown.</p>
+<h1>Generated posts</h1><p class="sub">Temporary review page. Newest first, as the Bluesky thread they become. Threads (when he connected it) and X (X_POSTING) get their own split of the same story; each platform row below has its status and link (Reddit and LinkedIn only when they're on). Nothing on this page posts anything: run the commands shown.</p>
 ${body}
 ${renderRepliesSection(opts.replies ?? [])}
 </main></body></html>`;
