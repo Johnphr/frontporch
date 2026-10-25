@@ -508,6 +508,8 @@ const VAGUE = [
   /\b(?:don't|do not) want (?:it|that|that one|this|the post|that post|the story|that story|today's story) (?:up|online|out there|posted|on the internet)\b/g,
   // Spanish verb + a pronoun, article or end of phrase (so English "quite a day" isn't one)
   re(String.raw`\b${VERB_ES}(?=\s+(?:la|el|esa|ese|esta|este|mi|su|eso|por favor)\b|\s*[,.!?]|\s*$)`),
+  // "¿Me borra la publicación?": the present tense, as a polite ask
+  /\b(?:quit|borr|baj|elimin|retir)a\s+(?:la|el|esa|ese|mi|su)\s+(?:publicacion|post|historia)\b/g,
   /\bdar de baja\b/g,
   /\bno (?:la|lo) (?:publique|publiquen|suba|suban)\b/g,
   /\bya no (?:la|lo) quiero\b/g,
@@ -544,8 +546,10 @@ function framed(before: string): boolean {
   return rest === "" || FRAMING_EN.test(`${rest} `) || FRAMING_ES.test(`${rest} `);
 }
 
-/** "Don't take it down", "no quiero que la quite", "never delete that post". */
+/** "Don't take it down", "no quiero que la quite", "never delete that post" (but "¿no me la borra?" is a polite ask). */
 function negated(before: string): boolean {
+  const raw = before.split(/[.!?;—–]|\s-\s/).pop() ?? "";
+  if (/¿\s*no\s+(?:(?:me|nos|le|se|la|lo|las|los)\s+){0,2}$/.test(raw)) return false;
   const clause = clauseBefore(before);
   return (
     /\b(?:don't|do not|never|wouldn't|won't|shouldn't|didn't|no need to|not)\s+(?:[\w']+\s+){0,3}$/.test(clause) ||
@@ -557,7 +561,9 @@ function negated(before: string): boolean {
 function reported(before: string, after: string): boolean {
   if ((before.match(/"/g) ?? []).length % 2 === 1) return true;
   const sentenceAfter = after.split(/[.!?]/)[0] ?? "";
-  if (/,\s*(?:[\w']+\s+){0,3}(?:said|says|told|tells|yelled|shouted|goes|dijo|dice|decia|grito)\b/.test(sentenceAfter)) return true;
+  // ", he said" / ", my boss told me" (not ", I shouldn't have told you": that's his own aside)
+  if (/,\s*(?:he|she|they|someone|somebody|(?:my|his|her|our|their|the)\s+\w+|[a-z]+)\s+(?:said|says|told (?:me|him|her|us|them)|tells (?:me|him|her|us|them)|yelled|shouted|goes)\b/.test(sentenceAfter)) return true;
+  if (/,\s*(?:\w+\s+)?(?:me\s+|le\s+|nos\s+)?(?:dijo|dice|decia|grito)\b/.test(sentenceAfter)) return true;
   return /\b(?:said|says|told (?:me|him|her|us|them)|yelled|shouted|dijo|dice|decia|grito)\s*,?\s*$/.test(clauseBefore(before));
 }
 

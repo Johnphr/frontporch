@@ -155,6 +155,21 @@ export default defineSchema({
     cartesiaConversationId: v.optional(v.string()),
     // The exact answer the lookup tool gave this call: a repeated lookup gets it back unchanged.
     inboundLookup: v.optional(v.any()),
+    // ---- undo (undo.ts) ----
+    // He asked on this call to take a post down (lib/undo.detectTakeDown). how: "line" (Pip
+    // confirmed: his latest earlier post comes down), "today" (don't post today's story),
+    // "unconfirmed" (his words only: nothing deleted, this call's post held, check with him).
+    // note: one line for family (no words from the call). postId: the earlier post removeLatest
+    // picked (picked = it already chose, maybe none), reused on any re-run.
+    takeDown: v.optional(
+      v.object({
+        how: v.union(v.literal("line"), v.literal("today"), v.literal("unconfirmed")),
+        note: v.string(),
+        at: v.number(),
+        picked: v.optional(v.boolean()),
+        postId: v.optional(v.id("posts")),
+      }),
+    ),
   })
     .index("by_sid", ["callSid"])
     .index("by_cartesia", ["cartesiaCallId"])
