@@ -33,6 +33,8 @@ import {
   dropJustUsed,
   fallbackCandidates,
   firstBankQuestion,
+  freshReaderSince,
+  isStaleRefresh,
   rankCandidates,
   toPromptVariables,
   type CallPlan,
@@ -141,7 +143,8 @@ export const getSavedFeedback = internalQuery({
 });
 
 /**
- * Swap the queued bank for a freshly ranked one. Used rows stay as history. Queued rows an
+ * Swap the queued bank for a freshly ranked one (unless a refresh that began later already
+ * did: lib/planner.isStaleRefresh). Used rows stay as history. Queued rows an
  * open call's plan points at stay too (that call marks them used later), and aren't re-added.
  */
 export const replaceQueued = internalMutation({
@@ -154,6 +157,12 @@ export const replaceQueued = internalMutation({
     startedAt: v.optional(v.number()),
   },
   handler: async (ctx, { elderId, items: ranked, feedbackLine, resonated, startedAt }) => {
+    const meta = await ctx.db
+      .query("questionBankMeta")
+      .withIndex("by_elder", (q) => q.eq("elderId", elderId))
+      .first();
+    // A newer refresh (it read newer replies) already wrote the bank: keep that one.
+    if (isStaleRefresh(startedAt, meta?.refreshStartedAt)) return { removed: 0, kept: 0, queued: 0, stale: true };
     const usedSince =
       startedAt === undefined
         ? []
@@ -180,15 +189,16 @@ export const replaceQueued = internalMutation({
       await ctx.db.insert("questionBank", { elderId, ...item, status: "queued" });
     }
     if (feedbackLine !== undefined || resonated !== undefined) {
-      const meta = await ctx.db
-        .query("questionBankMeta")
-        .withIndex("by_elder", (q) => q.eq("elderId", elderId))
-        .first();
-      const fields = { feedbackLine: feedbackLine ?? "", resonated: resonated ?? "", refreshedAt: Date.now() };
+      const fields = {
+        feedbackLine: feedbackLine ?? "",
+        resonated: resonated ?? "",
+        refreshedAt: Date.now(),
+        ...(startedAt !== undefined ? { refreshStartedAt: startedAt } : {}),
+      };
       if (meta) await ctx.db.patch(meta._id, fields);
       else await ctx.db.insert("questionBankMeta", { elderId, ...fields });
     }
-    return { removed: old.length - kept.length, kept: kept.length, queued: items.length };
+    return { removed: old.length - kept.length, kept: kept.length, queued: items.length, stale: false };
   },
 });
 
@@ -365,12 +375,16 @@ export const refreshQuestionBank = internalAction({
       topicKey: r.topicKey,
       firstSeenAt: r.firstSeenAt,
     }));
+    // A reader replied in the last 48h: his new questions go first, so the next call asks one.
+    const now = Date.now();
+    const freshSince = freshReaderSince(feedbackPosts, now);
     const ranked = rankCandidates([...candidates, ...existing], {
       avoid,
       covered,
       recentlyUsed,
-      now: Date.now(),
+      now,
       limit: 12,
+      ...(freshSince !== undefined ? { freshReaderSince: freshSince } : {}),
     });
     await ctx.runMutation(internal.conversation.replaceQueued, {
       elderId: args.elderId,

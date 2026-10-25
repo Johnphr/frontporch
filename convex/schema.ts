@@ -79,7 +79,7 @@ export default defineSchema({
     callHour: v.optional(v.number()), // 0-23, his local time
     lastPreparedSlot: v.optional(v.string()), // "YYYY-MM-DDTHH" local slot already prepared
     lastCallSlot: v.optional(v.string()), // "YYYY-MM-DDTHH" local slot already called
-    lastBankRefreshAt: v.optional(v.number()), // epoch ms, debounces question-bank refreshes
+    lastBankRefreshAt: v.optional(v.number()), // epoch ms: when the last scheduled bank refresh runs (engagement.upsert)
     characterId: v.optional(v.string()), // who calls him (lib/characters.ts); missing = default for his language
     loopRequestedAt: v.optional(v.number()), // epoch ms; when callLoop last scheduled a call (may be ahead)
     signupTokenHash: v.optional(v.string()), // SHA-256 hex of the sign-up page's token (signup.register)
@@ -384,7 +384,8 @@ export default defineSchema({
   })
     .index("by_post", ["postId"])
     .index("by_elder_platform", ["elderId", "platform"])
-    .index("by_status", ["status"]),
+    .index("by_status", ["status"])
+    .index("by_status_posted", ["status", "postedAt"]), // schedule.recentEngagement
 
   // ---- Brain: question bank (conversation.ts) ----
   // Ranked questions for his next calls, refreshed after every call, when new
@@ -412,6 +413,7 @@ export default defineSchema({
     feedbackLine: v.string(), // one warm sentence Pip reads out ("" when nothing new)
     resonated: v.string(), // what readers liked lately ("" when unknown)
     refreshedAt: v.number(), // epoch ms
+    refreshStartedAt: v.optional(v.number()), // epoch ms: when the refresh that wrote this began
   }).index("by_elder", ["elderId"]),
   // ---- end Brain block ----
 

@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import {
   bankIdsHeldByOpenCalls,
   FALLBACK_MAIN_QUESTION,
+  FRESH_READER_MS,
   SOURCE_WEIGHTS,
   buildCallPlan,
   dropJustUsed,
@@ -12,6 +13,8 @@ import {
   filterTopicsByUrls,
   formatMemoriesBrief,
   formatProfile,
+  freshReaderSince,
+  isStaleRefresh,
   normalizePlannedCandidates,
   normalizePostDraft,
   normalizeTopicKey,
@@ -55,6 +58,52 @@ test("rankCandidates orders by source and drops avoid topics", () => {
     ranked.map((r) => r.source),
     ["open_thread", "reader", "memory"],
   );
+});
+
+test("a reader question from the last 48h ranks first, above open threads", () => {
+  const since = NOW - FRESH_READER_MS;
+  const ranked = rankCandidates(
+    [
+      cand("open_thread", "Tell me how you hired Eddie."),
+      cand("memory", "What was your first bakery like?"),
+      cand("reader", "Older reader question about flour prices?", { firstSeenAt: NOW - 3 * DAY }),
+      cand("reader", "How did you price bread in the seventies?"), // new in this refresh
+    ],
+    { now: NOW, freshReaderSince: since },
+  );
+  assert.deepEqual(
+    ranked.map((r) => r.question),
+    [
+      "How did you price bread in the seventies?",
+      "Tell me how you hired Eddie.",
+      "Older reader question about flour prices?",
+      "What was your first bakery like?",
+    ],
+  );
+  // Still first when it's nearly 48h old and listed last, against a brand new open thread listed first.
+  const edge = rankCandidates(
+    [
+      cand("open_thread", "Tell me how you hired Eddie."),
+      cand("reader", "How did you price bread in the seventies?", { firstSeenAt: since }),
+    ],
+    { now: NOW, freshReaderSince: since },
+  );
+  assert.equal(edge[0].source, "reader");
+  // Without freshReaderSince the order is unchanged: open threads first.
+  const plain = rankCandidates(
+    [cand("reader", "How did you price bread in the seventies?"), cand("open_thread", "Tell me how you hired Eddie.")],
+    { now: NOW },
+  );
+  assert.deepEqual(plain.map((r) => r.source), ["open_thread", "reader"]);
+});
+
+test("freshReaderSince: only when a reader commented in the last 48h", () => {
+  const since = NOW - FRESH_READER_MS;
+  const reply = { changedAt: NOW - 60_000, comments: [{ author: "Ana", text: "How did you price bread?" }] };
+  assert.equal(freshReaderSince([reply], NOW), since);
+  assert.equal(freshReaderSince([{ changedAt: NOW - 60_000, comments: [] }], NOW), undefined, "likes only");
+  assert.equal(freshReaderSince([{ ...reply, changedAt: NOW - 3 * DAY }], NOW), undefined, "old reply");
+  assert.equal(freshReaderSince([], NOW), undefined);
 });
 
 test("covered topics are skipped unless an open thread or a reader asked", () => {
@@ -364,4 +413,12 @@ test("replaceQueued's rule: a kept row isn't inserted again", () => {
   ];
   const kept = [{ question: "How did you price bread?", topicKey: "bread price" }];
   assert.deepEqual(dropJustUsed(ranked, kept), [ranked[1]]);
+});
+
+test("isStaleRefresh: an overlapping refresh that began earlier doesn't overwrite a newer one", () => {
+  assert.equal(isStaleRefresh(NOW - 30_000, NOW), true);
+  assert.equal(isStaleRefresh(NOW, NOW - 30_000), false);
+  assert.equal(isStaleRefresh(NOW, NOW), false);
+  assert.equal(isStaleRefresh(undefined, NOW), false, "no start time: always writes");
+  assert.equal(isStaleRefresh(NOW, undefined), false, "first refresh");
 });

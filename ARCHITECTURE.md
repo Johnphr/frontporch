@@ -194,8 +194,14 @@ upsert with `platform: "threads"` / `"x"`. LinkedIn (`apify.scrapeEngagement`, A
 when `LINKEDIN_POSTING=on`, after the whole batch. Only LinkedIn links get the LinkedIn URL
 cleanup (`lib/engagementRules.canonicalEngagementUrl`).
 
+Posts from the last 2h are also read every 30 s, and posts 2 to 48h old every 5 min
+(`schedule.recentEngagement`, Bluesky + Threads only, never X), so a reply reaches the next
+call's plan in about a minute.
+
 When a row's numbers or replies changed, `upsert` schedules `conversation.refreshQuestionBank`
-(debounced). It reads `engagement.recentFeedback` (every platform; posts taken down are left
+(`lib/engagementRules.planBankRefresh`: right away for a post from the last 48h, at most one
+start per 30 s per elder; older posts 2 min later, 10 min apart; a change during the gap gets a
+trailing refresh). A reader question from the last 48h ranks first in the bank. It reads `engagement.recentFeedback` (every platform; posts taken down are left
 out); `llm.summarizeFeedback` turns replies into "what resonated" + reader questions for the
 bank + the one line Pip reads him ("A reader asked how you priced bread back then...").
 
@@ -345,7 +351,7 @@ elders:   + stage?: "onboarding" | "active"       // missing = onboarding
           + knownBackground
           + characterId? (lib/characters.ts; missing = default for his language)
           // bookkeeping: lastPreparedSlot, lastCallSlot ("YYYY-MM-DDTHH" local),
-          //              lastBankRefreshAt (debounces question-bank refreshes)
+          //              lastBankRefreshAt (run time of the last scheduled bank refresh)
 
 calls:    callSid -> optional (v1 only)
           status: queued | in_progress | ended | done | no_conversation | failed |
@@ -405,7 +411,8 @@ reactions/comments changed in the window, most recently changed first.
 **Scheduling** (`schedule.ts` + `crons.ts`): hourly `schedule.tick` →
 `conversation.prepareCall` about 1 hour before his local call time and
 `cartesia.startCall` at the call hour (each local slot once, DST-safe, `lib/schedule.ts`);
-daily `blueskyEngagement.scrapeForElder` (+ `apify.scrapeEngagement` when `LINKEDIN_POSTING=on`)
+daily `blueskyEngagement.scrapeForElder` (+ `apify.scrapeEngagement` when `LINKEDIN_POSTING=on`),
+`schedule.recentEngagement` every 30 s (posts from the last 2h) and every 5 min (2 to 48h old),
 and weekly `apify.findAudienceQuestions` for active elders.
 
 **v1 leftovers in `convex/`** (done): `questions.ts`, `answers.ts`, `replies.ts`, `calls.ts` and

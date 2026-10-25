@@ -1,17 +1,21 @@
-// Rules for engagement.upsert: did readers react since the last scrape, and is
-// it time to refresh his question bank? No Convex imports: tested with Node.
+// Rules for engagement.upsert: did readers react since the last scrape, and when should his
+// question bank refresh? Plus which scrape runs the daily and 5-min crons schedule.
+// No Convex imports: tested with Node.
 
 import { canonicalLinkedInPostUrl } from "./linkedinUrl.ts";
 
 export type Comment = { author: string; text: string };
 export type Snapshot = { reactions: number; comments: Comment[] };
 
-/** Wait this long after the first changed post before refreshing the bank, so a
- *  whole scrape run (one upsert per post) lands first. */
+/** Older posts: wait this long after a change before refreshing the bank, so the rest of
+ *  that scrape run (one upsert per post) lands first. */
 export const BANK_REFRESH_DELAY_MS = 2 * 60 * 1000;
 
-/** At most one bank refresh per elder in this window. */
-export const BANK_REFRESH_DEBOUNCE_MS = 10 * 60 * 1000;
+/** Older posts: refreshes for one elder start at least this far apart. */
+export const BANK_REFRESH_GAP_MS = 10 * 60 * 1000;
+
+/** A post from the last 48h: refresh right away, at most one start per 30 s per elder. */
+export const RECENT_REFRESH_GAP_MS = 30 * 1000;
 
 function commentKey(c: Comment): string {
   return `${c.author.trim().toLowerCase()}|${c.text.trim().toLowerCase().replace(/\s+/g, " ")}`;
@@ -44,13 +48,31 @@ export function engagementChanged(prev: Snapshot | null | undefined, next: Snaps
   return false;
 }
 
-/** True if no bank refresh was scheduled for this elder in the debounce window. */
-export function shouldRefreshBank(
-  lastBankRefreshAt: number | undefined,
+/**
+ * A reader change just landed: when should the bank refresh run? `pendingAt` is the run time of
+ * the last refresh we scheduled (elders.lastBankRefreshAt). `recent`: the post is from the last
+ * 48h (no delay, 30 s gap); else 2 min delay, 10 min gap.
+ * A pending refresh (still in the future) hasn't started and will read this change, so nothing
+ * new, unless the post is recent and that one is further off than the short gap: then one now.
+ * Otherwise one after the delay, and at least the gap after the last (a trailing refresh: a
+ * change during the gap is never dropped).
+ */
+export function planBankRefresh(
+  pendingAt: number | undefined,
   nowMs: number,
-  windowMs = BANK_REFRESH_DEBOUNCE_MS,
-): boolean {
-  return lastBankRefreshAt === undefined || nowMs - lastBankRefreshAt >= windowMs;
+  recent = false,
+): { schedule: false } | { schedule: true; runAt: number } {
+  const delay = recent ? 0 : BANK_REFRESH_DELAY_MS;
+  const gap = recent ? RECENT_REFRESH_GAP_MS : BANK_REFRESH_GAP_MS;
+  if (pendingAt !== undefined && pendingAt > nowMs) {
+    return recent && pendingAt > nowMs + gap ? { schedule: true, runAt: nowMs } : { schedule: false };
+  }
+  return { schedule: true, runAt: Math.max(nowMs + delay, (pendingAt ?? -Infinity) + gap) };
+}
+
+/** Is this post recent enough for the fast refresh? (its posts row's creation time) */
+export function isRecentPost(post: { _creationTime: number } | null | undefined, nowMs: number): boolean {
+  return !!post && post._creationTime >= nowMs - RECENT_POST_WINDOW_MS;
 }
 
 /**
@@ -125,9 +147,9 @@ export function linkedinEngagementOn(env: Record<string, string | undefined>): b
 
 export type EngagementJob = { kind: "bluesky" | "threads" | "x" | "linkedin"; elderId: string; delayMs: number };
 
-/** LinkedIn runs start this long after the last Bluesky run: past the bank-refresh debounce
- *  (plus its delay), so their comments schedule a refresh of their own instead of being dropped. */
-export const LINKEDIN_AFTER_BLUESKY_MS = BANK_REFRESH_DEBOUNCE_MS + BANK_REFRESH_DELAY_MS;
+/** LinkedIn runs start this long after the last Bluesky run, so its comments get a refresh of
+ *  their own (Apify runs are slow; the refresh would pick them up anyway). */
+export const LINKEDIN_AFTER_BLUESKY_MS = 12 * 60 * 1000;
 
 /**
  * Daily engagement runs, per active elder: Bluesky; Threads (always: cheap when he has no
@@ -151,6 +173,55 @@ export function planDailyEngagement<Id extends string>(
     active
       .filter((e) => !!e.linkedinUrl)
       .forEach((e, i) => jobs.push({ kind: "linkedin", elderId: e._id, delayMs: start + i * staggerMs }));
+  }
+  return jobs;
+}
+
+// ---------- recent posts (30-s and 5-min crons) ----------
+
+/** Posts this recent are re-read every 30 s (Bluesky + Threads only; X reads cost money). */
+export const FAST_POST_WINDOW_MS = 2 * 60 * 60 * 1000;
+/** Posts up to this old (and past the fast window) are re-read every 5 min. */
+export const RECENT_POST_WINDOW_MS = 48 * 60 * 60 * 1000;
+
+export type RecentTier = "fast" | "slow";
+
+/** The postedAt range a tier covers: fast [now - 2h, now], slow [now - 48h, now - 2h). */
+export function recentWindow(tier: RecentTier, nowMs: number): { from: number; to?: number } {
+  return tier === "fast"
+    ? { from: nowMs - FAST_POST_WINDOW_MS }
+    : { from: nowMs - RECENT_POST_WINDOW_MS, to: nowMs - FAST_POST_WINDOW_MS };
+}
+
+/** scrapeForElder's `days` for a tier: fast reads only the last 2h of threads, slow 2 days. */
+export function recentScrapeDays(tier: RecentTier): number {
+  return (tier === "fast" ? FAST_POST_WINDOW_MS : RECENT_POST_WINDOW_MS) / 86_400_000;
+}
+
+export type RecentJob<Id extends string> = { kind: "bluesky" | "threads"; elderId: Id; delayMs: number };
+
+/**
+ * From posted publications (by_status_posted, newest first): one Bluesky or Threads scrape per
+ * elder with such a post in the tier's window, not taken down. Staggered. Never X.
+ */
+export function planRecentEngagement<Id extends string>(
+  pubs: { elderId: Id; platform: string; status: string; postedAt?: number; removedAt?: number }[],
+  nowMs: number,
+  staggerMs: number,
+  tier: RecentTier,
+): RecentJob<Id>[] {
+  const { from, to } = recentWindow(tier, nowMs);
+  const seen = new Set<string>();
+  const jobs: RecentJob<Id>[] = [];
+  for (const p of pubs) {
+    const kind = p.platform === "bluesky" || p.platform === "threads" ? p.platform : null;
+    if (!kind) continue;
+    if (p.status !== "posted" || p.removedAt !== undefined) continue;
+    if (p.postedAt === undefined || p.postedAt < from || (to !== undefined && p.postedAt >= to)) continue;
+    const key = `${kind}|${p.elderId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    jobs.push({ kind, elderId: p.elderId, delayMs: jobs.length * staggerMs });
   }
   return jobs;
 }

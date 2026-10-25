@@ -1,5 +1,55 @@
 # Live test: a story post on a test Bluesky account
 
+## Demo flow (no terminal)
+
+The whole loop runs by itself once the env below is set. Nobody types a command during the demo.
+
+1. **Sign up** on the website: who → name → language + host (Daniel, Oscar, Victoria; Diana in
+   Spanish) → day + time → Review **"Looks right. Continue"** → step 6: Bluesky handle + app
+   password → **"Finish and call now"**. The host calls. This is the **onboarding** call (get
+   to know him, no post). Talk for a couple of minutes (more than 30 words from him), then hang
+   up. About a minute later he is `stage: "active"` with a profile, and his question bank is filled.
+   - If he hangs up too soon (no real conversation) or the profile comes out empty, he stays in
+     onboarding, and his next call (an inbound one too) is another onboarding call.
+2. **He calls the Front Porch number himself.** The inbound agent looks him up
+   (`/cartesia/inbound-lookup`) and runs a **story** call with today's plan: the bank's top
+   question, his memories, the latest feedback line. Wait a minute after step 1 before calling,
+   or it's still the onboarding call.
+   After he hangs up, the post is written, fact-checked and posted to his Bluesky as a thread
+   (`AUTO_POST` on). **The post appears ~3–6 min after hanging up.**
+3. **Someone replies** to the thread on Bluesky from another account. A question works best
+   ("How did you price bread when flour went up?").
+4. **The reply is noticed and the plan updated within ~1 minute.** Posts from the last 2 hours
+   are re-read every 30 s (posts 2–48 h old every 5 min; never X). The change refreshes his
+   question bank and the feedback line right away (at most one refresh start per 30 s; a reply
+   during one gets a trailing refresh). A reader question from the last 48 h goes to the top.
+5. **He calls the number again.** The host shares the feedback ("A reader asked…") and asks the
+   reader's question. That call becomes a new post.
+
+Env on the deployment (once):
+
+| Var | Value |
+|---|---|
+| `AUTO_POST` | `on`, or unset (default on) |
+| `ACCOUNTS_ENC_KEY` | set once, never changed (see "Env vars" below) |
+| `OPENAI_API_KEY` | set |
+| `PUBLIC_CALLS` + `CALL_ALLOWLIST` | `on` + the demo phone in E.164 (`+1415...`; comma-separated for more) |
+| `SIGNUP_SITE_URL` | the sign-up site URL (where Threads / X connect sends him back) |
+| `CARTESIA_API_KEY`, `CARTESIA_FROM_NUMBER_ID` | set (outbound calls) |
+| `CARTESIA_INBOUND_AGENT_ID`, `CARTESIA_LOOKUP_TOOL_ID`, `CARTESIA_TOOL_SECRET` | the inbound agent, its lookup tool, and the tool's bearer secret |
+
+The Front Porch number must route its inbound calls to the inbound agent in Cartesia (in the
+Cartesia dashboard, or once with `cartesiaAgents:syncAgent "{inbound:true,assignNumber:true}"`,
+section 9). The host agents and the inbound agent must be synced with the current prompts
+(section 9).
+
+If something looks stuck, check in the Convex dashboard (Data): `calls` (the newest row reaches
+`done`), `posts` / `postPublications` (`posted`, with the `url`), `engagement` (the reply in
+`comments`), `questionBankMeta` (`feedbackLine`, `refreshedAt`) and `questionBank` (a `queued`
+row with `source: "reader"` on top).
+
+## The step-by-step test (with commands)
+
 What this proves: a finished story call → post written (quality loop) → fact-check → a 3–5 post
 thread on **his** Bluesky account → likes and replies read back → take-down.
 No phone needed (a fixture call stands in for one). Section 9 adds a real call.
@@ -92,7 +142,7 @@ Other env vars, all optional (leave them unset unless you need them):
 | `BLUESKY_SERVICE` | `https://bsky.social` | Only for an account hosted on another PDS |
 | `DEMO_ACCOUNT_FALLBACK`, `BLUESKY_HANDLE`, `BLUESKY_APP_PASSWORD` | off | Path B only (section 3) |
 | `X_POSTING`, `REDDIT_POSTING`, `LINKEDIN_POSTING` | off | Keep off. Off platforms get a `skipped` row |
-| `PUBLIC_CALLS`, `CALL_ALLOWLIST` | off | The website's "Call me now". Not needed here |
+| `PUBLIC_CALLS`, `CALL_ALLOWLIST` | off | Let the website's "Finish and call now" ring a number. Not needed here: with it off, Finish still connects Bluesky and nothing rings |
 | `CARTESIA_*` | none | Real calls only (section 9) |
 
 Threads posts only when he connected Threads, so there's no switch for it.
@@ -116,16 +166,18 @@ Then make an app password on the elder account:
 Connect Bluesky **while he is still in onboarding**. Once `stage` is `active`, connecting is
 locked (section 10).
 
-1. Open https://onboarding-ui-delta.vercel.app in a normal tab. Keep that tab open: the sign-up
-   token only lives in its session storage.
+1. Open https://onboarding-ui-delta.vercel.app in a normal (not private) window. The sign-up
+   token is saved in this browser's localStorage (`fp-session`), so keep using the same browser.
 2. Enter a name, pick English, and use a phone number that never signed up before, in E.164 form
    (for example `+15550001111`). There's no SMS code screen. If you'll do section 9, use a real
    phone you hold.
-3. Pick Pip.
-4. Bluesky step: enter the elder handle and the app password, then Connect. You should land on
-   the done screen. **Don't click "Call me now".**
+3. Pick a host (Daniel, Oscar or Victoria; Diana for Spanish), then a day and time.
+4. On Review, click **"Looks right. Continue"** (this saves the sign-up). On step 6, enter the
+   elder handle and the app password, then **"Finish and call now"**: it connects Bluesky first.
+   With `PUBLIC_CALLS` off nothing rings; with it on (and his number allowed) the onboarding call
+   starts.
 5. Get the elderId. Pick one of:
-   - In the same tab: DevTools → Application → Session storage → `onboarding-v2` → `elderId`.
+   - In the same browser: DevTools → Application → Local storage → `fp-session` → `elderId`.
    - In the dashboard: Data → `elders` → the newest row with your phone → `_id`.
    - From the CLI (newest first):
 
@@ -305,29 +357,32 @@ Undo marks the rows `removed`, and only `posted` rows are read, so do this first
    It has `platform: "bluesky"`, `linkedinUrl` = the bsky.app link (the field name is from before
    Bluesky), `reactions` (likes + reposts on post 1), `comments: [{author, text}]`, `postId` and
    `changedAt`.
-4. Check the question bank refresh. A changed row schedules `conversation:refreshQuestionBank`
-   2 min later, at most once per elder every 10 min. You'll see `elders.lastBankRefreshAt` set.
-   After 2–4 minutes, check the bank:
+4. Check the question bank refresh. A changed row on a post from the last 48 h schedules
+   `conversation:refreshQuestionBank` right away (at most one start per 30 s per elder; a change
+   during that gap gets a trailing refresh). Older posts: 2 min later, 10 min apart.
+   `elders.lastBankRefreshAt` is when the last scheduled one runs. After a minute, check the bank:
 
    ```bash
    npx convex data questionBank --limit 12
    ```
 
-   You want fresh `queued` rows, usually one with `source: "reader"` built from the reply. Also
-   check that `questionBankMeta` has a new `refreshedAt`, `feedbackLine` and `resonated`. To skip
-   the wait (or if the 10-min debounce ate it):
+   You want fresh `queued` rows, with a `source: "reader"` row built from the reply on top (a
+   reader question from the last 48 h ranks above everything else). Also check that
+   `questionBankMeta` has a new `refreshedAt`, `feedbackLine` and `resonated`. To skip the wait:
 
    ```bash
    npx convex run conversation:refreshQuestionBank "{elderId:'$ELDER_ID'}"
    ```
 
-   See what Pip would ask next:
+   See what the host would ask next:
 
    ```bash
    npx convex run conversation:planNextCall "{elderId:'$ELDER_ID'}"
    ```
 
-The daily cron (13:15 UTC) runs the same scrape for every `active` elder.
+You don't have to run step 2 by hand: posts from the last 2 h are read every 30 s and posts up
+to 48 h old every 5 min (crons "fresh engagement" and "recent engagement"; Bluesky + Threads,
+never X). The daily cron (13:15 UTC) still reads 30 days of posts for every `active` elder.
 
 ## 7. Undo test
 
@@ -346,7 +401,7 @@ It returns `{ removed: [...], failed: [], manual: [], waiting: [] }`.
 - If `failed` isn't empty, it retries by itself (3 tries in all). Running it again is safe.
 - `/posts` shows the post as removed.
 
-On a call, Pip's take-down line runs `undo:removeLatest` for his newest post
+On a call, the host's take-down line runs `undo:removeLatest` for his newest post
 (`npx convex run undo:removeLatest "{elderId:'$ELDER_ID'}"` by hand).
 
 ## 8. Second post (optional)
@@ -356,28 +411,37 @@ set `AUTO_POST` to `on` first. Turn it back off after.
 
 ## 9. Optional: a real phone call
 
-Needs `CARTESIA_API_KEY`, `CARTESIA_FROM_NUMBER_ID`, `CARTESIA_VOICE_ID` (optional),
-`CARTESIA_VOICE_ID_ES` (needed to sync Juanito) and `CARTESIA_TOOL_SECRET` (inbound). His
-`phone` must be a phone you hold. On a trial Twilio/Cartesia number, it must be a verified one.
+Needs `CARTESIA_API_KEY`, `CARTESIA_FROM_NUMBER_ID`, the hosts' voices
+(`CARTESIA_VOICE_ID_DANIEL`, `CARTESIA_VOICE_ID_OSCAR`, `CARTESIA_VOICE_ID_VICTORIA`;
+`CARTESIA_VOICE_ID_DIANA` is required before Diana's agent is first created) and
+`CARTESIA_TOOL_SECRET` (inbound). His `phone` must be a phone you hold. On a trial
+Twilio/Cartesia number, it must be a verified one.
 
-Prompts changed, so re-sync the agents first (`cartesiaAgents:syncAgent`, internal action):
+When prompts change, re-sync the agents (`cartesiaAgents:syncAgent`, internal action). With no
+args it syncs every host (daniel, oscar, victoria, diana), and the inbound agent too once both
+of its ids are set:
 
 ```bash
-npx convex run cartesiaAgents:syncAgent "{characterId:'pip'}"
+npx convex run cartesiaAgents:syncAgent
 ```
 
-```bash
-npx convex run cartesiaAgents:syncAgent "{characterId:'juanito'}"
-```
+One host only:
 
 ```bash
-npx convex run cartesiaAgents:syncAgent "{inbound:true}"
+npx convex run cartesiaAgents:syncAgent "{characterId:'daniel'}"
+```
+
+The inbound agent + its lookup tool (created if missing), and route the number's inbound calls
+to it (`assignNumber`):
+
+```bash
+npx convex run cartesiaAgents:syncAgent "{inbound:true,assignNumber:true}"
 ```
 
 If it prints `npx convex env set CARTESIA_LOOKUP_TOOL_ID ...` / `CARTESIA_INBOUND_AGENT_ID ...`,
 it created new ones (those env vars weren't set). Run the printed lines.
 
-Then give Pip a plan, and call:
+Then give the host a plan, and call:
 
 ```bash
 npx convex run conversation:refreshQuestionBank "{elderId:'$ELDER_ID'}"
@@ -400,7 +464,7 @@ continue from section 4.3.
 | Website: "please use an app password, not your regular password" | His main password, or not the `xxxx-xxxx-xxxx-xxxx` shape | Make an app password (section 1) |
 | Website: "That app password can read your private messages" | The DM access box was checked | Make a new one without DM access |
 | Website: "Something went wrong on our side" (`failed`) | `ACCOUNTS_ENC_KEY` missing or malformed (logs: `connectBluesky: ACCOUNTS_ENC_KEY ...`) | Set it (section 1), then connect again |
-| Website jumps to done, but `accounts:status` is `[]` | He was already `active`: connect is **locked** and the page treats that as done | On his `elders` row set `stage` to `"onboarding"`, connect again in the **same tab**, then section 4.1. Tab closed (token lost)? Sign up again with a new phone |
+| Website jumps to done, but `accounts:status` is `[]` | He was already `active`: connect is **locked** and the page treats that as done | On his `elders` row set `stage` to `"onboarding"`, connect again in the **same browser** (the token is in localStorage `fp-session`), then section 4.1. Another browser, or site data cleared (token lost)? Sign up again with a new phone |
 | Website: too many tries | 5 tries an hour per sign-up and per handle, 5 s apart | Wait |
 | Website: "already signed up" | That phone is in `elders` | Use a new number |
 | `seedEndedCall`: "This fixture could post publicly…" | `AUTO_POST` isn't `off` | `npx convex env set AUTO_POST off` (or add `allowPost:true`) |
@@ -418,6 +482,8 @@ continue from section 4.3.
 | Real call is an onboarding call (no post) | Elder not `active`, or no `industry`/`specialty` | Section 4.1 |
 | `startCall`: "No Cartesia agent for character…" / "… is not set" | Agents not synced, or missing Cartesia env | Section 9 |
 | `scrapeForElder` returns `threads: 0` | No `posted` Bluesky row in the last 30 days (removed rows aren't read) | Post again (section 8) |
+| He called in, but it was an onboarding call | His onboarding call wasn't processed yet, was too short, or left no `industry`/`specialty` | Wait a minute after the first call; check `stage` and `profile` on his `elders` row |
+| The next call didn't mention the reply | He called before the refresh finished (about a minute after the reply), or `engagement` has no new comment | Check `questionBankMeta.refreshedAt` and `feedbackLine`, then call again |
 
 ## 11. Cleanup
 

@@ -1,7 +1,8 @@
 // How readers reacted to his Threads threads (like blueskyEngagement.ts).
 //
-//   scrapeForElder       daily (schedule.dailyEngagement): for each Threads thread he
-//                        posted in the last 30 days -> likes + reposts on the root, replies by
+//   scrapeForElder       daily (schedule.dailyEngagement), and every 5 min with days: 2 for posts
+//                        from the last 48h (schedule.recentEngagement): for each Threads thread
+//                        he posted in the window (default 30 days) -> likes + reposts on the root, replies by
 //                        others -> engagement:upsert (platform "threads"). A thread he deleted
 //                        -> engagement:markGone. One failing thread doesn't stop the rest.
 //                        Needs his Threads login (lib/threadsLogin.ts).
@@ -14,6 +15,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalAction, internalQuery } from "./_generated/server";
 import type { FetchFn } from "./lib/blueskyClient";
+import { scrapeDays } from "./lib/blueskyEngagement";
 import { isThreadsAuthError, isThreadsGone } from "./lib/threadsClient";
 import {
   readThreadsEngagement,
@@ -68,10 +70,11 @@ type ScrapeResult = { threads: number; upserted: number; likes: number; reposts:
 const short = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 200);
 
 export const scrapeForElder = internalAction({
-  args: { elderId: v.id("elders") },
-  handler: async (ctx, { elderId }): Promise<ScrapeResult> => {
+  // days: only threads posted in the last `days` (the 5-min recent cron passes 2). Default 30.
+  args: { elderId: v.id("elders"), days: v.optional(v.number()) },
+  handler: async (ctx, { elderId, days }): Promise<ScrapeResult> => {
     const rows = await ctx.runQuery(internal.threadsEngagement.publicationsForElder, { elderId });
-    const pubs = threadsPublicationsToScrape(rows, Date.now());
+    const pubs = threadsPublicationsToScrape(rows, Date.now(), scrapeDays(days));
     const result: ScrapeResult = { threads: pubs.length, upserted: 0, likes: 0, reposts: 0, replies: 0, gone: 0, errors: [] };
     if (pubs.length === 0) return result;
     const login = await threadsLoginForElder(ctx, elderId, { fetchFn: timedFetch });

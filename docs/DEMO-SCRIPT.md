@@ -12,6 +12,60 @@ carry the middle of the video.
 
 ---
 
+## Demo flow (no terminal)
+
+The whole loop runs by itself once the env below is set. Nobody types a command during the demo.
+
+1. **Sign up** on the website: who → name → language + host (Daniel, Oscar, Victoria; Diana in
+   Spanish) → day + time → Review **"Looks right. Continue"** → step 6: Bluesky handle + app
+   password → **"Finish and call now"**. The host calls. This is the **onboarding** call (get
+   to know him, no post). Talk for a couple of minutes (more than 30 words from him), then hang
+   up. About a minute later he is `stage: "active"` with a profile, and his question bank is filled.
+   - If he hangs up too soon (no real conversation) or the profile comes out empty, he stays in
+     onboarding, and his next call (an inbound one too) is another onboarding call.
+2. **He calls the Front Porch number himself.** The inbound agent looks him up
+   (`/cartesia/inbound-lookup`) and runs a **story** call with today's plan: the bank's top
+   question, his memories, the latest feedback line. Wait a minute after step 1 before calling,
+   or it's still the onboarding call.
+   After he hangs up, the post is written, fact-checked and posted to his Bluesky as a thread
+   (`AUTO_POST` on). **The post appears ~3–6 min after hanging up.**
+3. **Someone replies** to the thread on Bluesky from another account. A question works best
+   ("How did you price bread when flour went up?").
+4. **The reply is noticed and the plan updated within ~1 minute.** Posts from the last 2 hours
+   are re-read every 30 s (posts 2–48 h old every 5 min; never X). The change refreshes his
+   question bank and the feedback line right away (at most one refresh start per 30 s; a reply
+   during one gets a trailing refresh). A reader question from the last 48 h goes to the top.
+5. **He calls the number again.** The host shares the feedback ("A reader asked…") and asks the
+   reader's question. That call becomes a new post.
+
+Env on the deployment (once):
+
+| Var | Value |
+|---|---|
+| `AUTO_POST` | `on`, or unset (default on) |
+| `ACCOUNTS_ENC_KEY` | set once, never changed (docs/LIVE-TEST-BLUESKY.md, section 1) |
+| `OPENAI_API_KEY` | set |
+| `PUBLIC_CALLS` + `CALL_ALLOWLIST` | `on` + the demo phone in E.164 (`+1415...`; comma-separated for more) |
+| `SIGNUP_SITE_URL` | the sign-up site URL (where Threads / X connect sends him back) |
+| `CARTESIA_API_KEY`, `CARTESIA_FROM_NUMBER_ID` | set (outbound calls) |
+| `CARTESIA_INBOUND_AGENT_ID`, `CARTESIA_LOOKUP_TOOL_ID`, `CARTESIA_TOOL_SECRET` | the inbound agent, its lookup tool, and the tool's bearer secret |
+
+The Front Porch number must route its inbound calls to the inbound agent in Cartesia (in the
+Cartesia dashboard, or once with `cartesiaAgents:syncAgent "{inbound:true,assignNumber:true}"`;
+see docs/LIVE-TEST-BLUESKY.md, section 9). The host agents and the inbound agent must be synced
+with the current prompts (same section).
+
+If something looks stuck, check in the Convex dashboard (Data): `calls` (the newest row reaches
+`done`), `posts` / `postPublications` (`posted`, with the `url`), `engagement` (the reply in
+`comments`), `questionBankMeta` (`feedbackLine`, `refreshedAt`) and `questionBank` (a `queued`
+row with `source: "reader"` on top).
+
+The script below predates the current hosts and timing: "Pip" is now one of Daniel, Oscar or
+Victoria (English) and "Juanito" is Diana (Spanish); "Call me now" is "Finish and call now";
+and replies are read within a minute, not once a day.
+
+---
+
 ## 2-minute version
 
 | Time | On screen | Voice-over / audio |

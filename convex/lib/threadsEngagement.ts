@@ -98,9 +98,9 @@ export async function readThreadsEngagement(
 
 export type ThreadsPublication = BlueskyPublication; // same postPublications fields
 
-/** Posted, not taken down, has a root id, posted in the last 30 days. Newest first. */
-export function threadsPublicationsToScrape<T extends ThreadsPublication>(rows: T[], nowMs: number): T[] {
-  return publicationsToScrape(rows, nowMs);
+/** Posted, not taken down, has a root id, posted in the last `days` (30 by default). Newest first. */
+export function threadsPublicationsToScrape<T extends ThreadsPublication>(rows: T[], nowMs: number, days?: number): T[] {
+  return publicationsToScrape(rows, nowMs, days);
 }
 
 export type ThreadsUpsertArgs = {
