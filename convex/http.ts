@@ -3,7 +3,17 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { httpAction } from "./_generated/server";
 import type { FetchFn } from "./lib/blueskyClient";
-import { LOOKUP_PATH, lookupErrorResponse, parseLookupRequest, verifyBearer } from "./lib/inbound";
+import {
+  LOOKUP_PATH,
+  inboundHost,
+  lookupErrorResponse,
+  lookupLogLine,
+  lookupOutcome,
+  parseLookupRequest,
+  unknownCallerResponse,
+  verifyBearer,
+  type LookupOutcome,
+} from "./lib/inbound";
 import { finishOAuthConnect, signupRedirect } from "./lib/oauthFlow";
 import { callbackPath, type OAuthPlatform } from "./lib/oauthPlatforms";
 import { servePostsPage } from "./postsPage";
@@ -26,25 +36,43 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
-// POST /cartesia/inbound-lookup  { caller_id, conversation_id }  (Authorization: Bearer <secret>)
-// -> who is calling and what to talk about (lib/inbound.ts response shapes). Never logs
-// numbers or bodies.
+// POST /cartesia/inbound-lookup  { caller_id, conversation_id? }  (Authorization: Bearer <secret>)
+// -> who is calling and what to talk about (lib/inbound.ts response shapes). Exactly ONE log
+// line per request, `inbound-lookup: known|unknown|error <reason>` (401 and 400 included), and
+// one inboundLookups row (inbound.lastLookups). Never logs numbers, bodies or the secret.
 http.route({
   path: LOOKUP_PATH,
   method: "POST",
   handler: httpAction(async (ctx, request) => {
+    const seen = async (outcome: LookupOutcome, reason: string, elderId?: Id<"elders">) => {
+      console.log(lookupLogLine(outcome, reason));
+      await ctx.runMutation(internal.inbound.recordLookup, { outcome, reason, ...(elderId ? { elderId } : {}) }).catch(() => {});
+    };
     if (!verifyBearer(request.headers.get("Authorization"), process.env.CARTESIA_TOOL_SECRET)) {
+      await seen("error", process.env.CARTESIA_TOOL_SECRET ? "unauthorized" : "unauthorized:no_secret_configured");
       return json({ error: "unauthorized" }, 401);
     }
+    const host = inboundHost(process.env);
     const body = await request.json().catch(() => null);
     const parsed = parseLookupRequest(body);
-    if (!parsed) return json({ error: "caller_id or conversation_id missing or invalid" }, 400);
+    if (!parsed.ok) {
+      if (parsed.reason === "bad_body") {
+        await seen("error", "bad_body");
+        return json({ error: "caller_id missing or not a string" }, 400);
+      }
+      await seen("unknown", parsed.reason); // withheld / unusable number: a polite goodbye
+      return json(unknownCallerResponse(host));
+    }
     try {
-      const result = await ctx.runAction(internal.inbound.handleLookup, parsed);
-      return json(result);
+      const { response, reason, elderId } = await ctx.runAction(internal.inbound.handleLookup, {
+        callerId: parsed.callerId,
+        ...(parsed.conversationId ? { conversationId: parsed.conversationId } : {}),
+      });
+      await seen(lookupOutcome(response), reason, elderId);
+      return json(response);
     } catch {
-      console.warn("http: inbound lookup failed");
-      return json(lookupErrorResponse());
+      await seen("error", "exception");
+      return json(lookupErrorResponse(host));
     }
   }),
 });

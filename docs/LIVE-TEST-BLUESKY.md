@@ -11,10 +11,14 @@ The whole loop runs by itself once the env below is set. Nobody types a command 
    up. About a minute later he is `stage: "active"` with a profile, and his question bank is filled.
    - If he hangs up too soon (no real conversation) or the profile comes out empty, he stays in
      onboarding, and his next call (an inbound one too) is another onboarding call.
-2. **He calls the Front Porch number himself.** The inbound agent looks him up
-   (`/cartesia/inbound-lookup`) and runs a **story** call with today's plan: the bank's top
-   question, his memories, the latest feedback line. Wait a minute after step 1 before calling,
-   or it's still the onboarding call.
+2. **He calls the Front Porch number himself.** The call-in line answers as
+   `CARTESIA_INBOUND_HOST` (one voice per Cartesia agent): **pick that host for the demo elder
+   in step 1**, so he hears the same voice that calls him. The agent looks him up
+   (`/cartesia/inbound-lookup`), greets him by name and runs a **story** call with today's
+   plan: the bank's top question, his memories, the latest feedback line. Wait a minute after
+   step 1 before calling, or it's still the onboarding call. If the greeting had no name, run
+   `npx convex run inbound:lastLookups '{"limit":3}'` (or look for `inbound-lookup:` in the
+   Convex logs): it says `known`, `unknown` or `error` and why.
    After he hangs up, the post is written, fact-checked and posted to his Bluesky as a thread
    (`AUTO_POST` on). **The post appears ~3–6 min after hanging up.**
 3. **Someone replies** to the thread on Bluesky from another account. A question works best
@@ -37,11 +41,14 @@ Env on the deployment (once):
 | `SIGNUP_SITE_URL` | the sign-up site URL (where Threads / X connect sends him back) |
 | `CARTESIA_API_KEY`, `CARTESIA_FROM_NUMBER_ID` | set (outbound calls) |
 | `CARTESIA_INBOUND_AGENT_ID`, `CARTESIA_LOOKUP_TOOL_ID`, `CARTESIA_TOOL_SECRET` | the inbound agent, its lookup tool, and the tool's bearer secret |
+| `CARTESIA_INBOUND_HOST` | the host the demo elder picks (`daniel`, `oscar`, `victoria`, `diana`): the call-in line's voice. Its `CARTESIA_VOICE_ID_<HOST>` must be set. Re-sync `{inbound:true}` after changing it |
 
 The Front Porch number must route its inbound calls to the inbound agent in Cartesia (in the
 Cartesia dashboard, or once with `cartesiaAgents:syncAgent "{inbound:true,assignNumber:true}"`,
 section 9). The host agents and the inbound agent must be synced with the current prompts
-(section 9).
+(section 9). **For the demo, set `CARTESIA_INBOUND_HOST` to the host the demo elder picks, then
+re-sync `cartesiaAgents:syncAgent "{inbound:true}"`.** A caller whose host is a different one
+still gets his name, notes and question, from the line's host speaking as his host's colleague.
 
 If something looks stuck, check in the Convex dashboard (Data): `calls` (the newest row reaches
 `done`), `posts` / `postPublications` (`posted`, with the `url`), `engagement` (the reply in
@@ -448,14 +455,30 @@ npx convex run cartesiaAgents:syncAgent "{characterId:'daniel'}"
 ```
 
 The inbound agent + its lookup tool (created if missing), and route the number's inbound calls
-to it (`assignNumber`):
+to it (`assignNumber`). The agent speaks as `CARTESIA_INBOUND_HOST` (default `daniel`): set it
+to the demo elder's host first, with that host's `CARTESIA_VOICE_ID_<HOST>` set.
 
 ```bash
+npx convex env set CARTESIA_INBOUND_HOST oscar
 npx convex run cartesiaAgents:syncAgent "{inbound:true,assignNumber:true}"
 ```
 
 If it prints `npx convex env set CARTESIA_LOOKUP_TOOL_ID ...` / `CARTESIA_INBOUND_AGENT_ID ...`,
-it created new ones (those env vars weren't set). Run the printed lines.
+it created new ones (those env vars weren't set). Run the printed lines. Changing the host
+later: set the env var, re-sync `"{inbound:true}"` (no `assignNumber` needed).
+
+After a test call-in, what the lookup tool got (no numbers; newest first):
+
+```bash
+npx convex run inbound:lastLookups "{limit:3}"
+```
+
+`known story` is the happy path. `unknown no_elder` = the caller's number isn't an elder's
+(check `elders.phone`); `unknown no_caller_id` = the number was withheld; `error unauthorized` =
+the tool's bearer secret doesn't match `CARTESIA_TOOL_SECRET` (re-sync `{inbound:true}`);
+`error not_verified:...` = Cartesia didn't show a live call from that number on
+`CARTESIA_INBOUND_AGENT_ID`. No row at all = the tool was never called (check the agent's
+tools in the Cartesia dashboard, and re-sync).
 
 Then give the host a plan, and call:
 

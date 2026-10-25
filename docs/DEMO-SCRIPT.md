@@ -23,10 +23,12 @@ The whole loop runs by itself once the env below is set. Nobody types a command 
    up. About a minute later he is `stage: "active"` with a profile, and his question bank is filled.
    - If he hangs up too soon (no real conversation) or the profile comes out empty, he stays in
      onboarding, and his next call (an inbound one too) is another onboarding call.
-2. **He calls the Front Porch number himself.** The inbound agent looks him up
-   (`/cartesia/inbound-lookup`) and runs a **story** call with today's plan: the bank's top
-   question, his memories, the latest feedback line. Wait a minute after step 1 before calling,
-   or it's still the onboarding call.
+2. **He calls the Front Porch number himself.** The call-in line answers as
+   `CARTESIA_INBOUND_HOST` (one voice per Cartesia agent): pick that host for the demo elder in
+   step 1, so it's the same voice. The agent looks him up (`/cartesia/inbound-lookup`), greets
+   him by name and runs a **story** call with today's plan: the bank's top question, his
+   memories, the latest feedback line. Wait a minute after step 1 before calling, or it's still
+   the onboarding call.
    After he hangs up, the post is written, fact-checked and posted to his Bluesky as a thread
    (`AUTO_POST` on). **The post appears ~3–6 min after hanging up.**
 3. **Someone replies** to the thread on Bluesky from another account. A question works best

@@ -11,21 +11,25 @@
 // Agent ids live in the characterAgents table (written here, read by cartesia.startCall), so
 // a new agent needs no env change. Non-English characters need their voice env var set (a
 // voice in their language; never an English one).
+// The inbound agent is ONE host for every caller (a Cartesia agent has one voice, and there is
+// no mid-call voice change or agent hand-off): CARTESIA_INBOUND_HOST (a character id, default
+// daniel; diana implies Spanish) sets its voice, language and persona. For the demo, set it to
+// the host the demo elder picks, then re-sync '{"inbound":true}'.
 // Env: CARTESIA_API_KEY, CARTESIA_MODEL (optional), each character's voiceEnv; inbound:
 //      CARTESIA_TOOL_SECRET, CARTESIA_INBOUND_AGENT_ID + CARTESIA_LOOKUP_TOOL_ID (printed on create),
-//      CARTESIA_INBOUND_LANGUAGE (optional, en|es), CARTESIA_FROM_NUMBER_ID (assignNumber),
-//      INBOUND_SITE_URL (only if CONVEX_SITE_URL is unavailable). Owner: Voice + Brain.
+//      CARTESIA_INBOUND_HOST (optional, character id), CARTESIA_INBOUND_LANGUAGE (optional, en|es;
+//      only picks the default host when CARTESIA_INBOUND_HOST is unset), CARTESIA_FROM_NUMBER_ID
+//      (assignNumber), INBOUND_SITE_URL (only if CONVEX_SITE_URL is unavailable). Owner: Voice + Brain.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { buildAgentConfig, classifyHttp } from "./lib/cartesia";
 import { cartesiaFetch, httpError, requireEnv } from "./lib/cartesiaHttp";
-import { CHARACTERS, characterFor, getCharacter, type CharacterConfig } from "./lib/characters";
-import { buildLookupTool, inboundSyncMode, lookupUrl } from "./lib/inbound";
+import { CHARACTERS, getCharacter, type CharacterConfig } from "./lib/characters";
+import { buildLookupTool, inboundHost, inboundHostProblem, inboundSyncMode, lookupUrl } from "./lib/inbound";
 import { characterAgent } from "./lib/prompts/agent";
 import { inboundAgent } from "./lib/prompts/inbound";
-import type { CallLanguage } from "./lib/prompts/principles";
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -119,10 +123,18 @@ async function syncInbound(mayCreate: boolean, assignNumber: boolean): Promise<I
   if (!toolId) throw new Error("Cartesia created the lookup tool but returned no id; copy it from the dashboard");
   if (!existingTool) created.push(`npx convex env set ${toolEnv} ${toolId}`);
 
-  // 2. The agent, with the tool attached. Its language/voice: CARTESIA_INBOUND_LANGUAGE
-  //    (default en; Cartesia agents have one primary language for speech recognition + voice).
-  const lang: CallLanguage = process.env.CARTESIA_INBOUND_LANGUAGE === "es" ? "es" : "en";
-  const prompt = inboundAgent();
+  // 2. The agent, with the tool attached. It IS one host (CARTESIA_INBOUND_HOST): that host's
+  //    voice, language (one primary language per Cartesia agent) and persona.
+  const hostProblem = inboundHostProblem(process.env);
+  if (hostProblem) throw new Error(hostProblem);
+  const host = inboundHost(process.env);
+  const voiceId = process.env[host.voiceEnv];
+  if (!voiceId) {
+    // The whole point of the host setting is the voice: refuse rather than sync a mismatched one.
+    if (process.env.CARTESIA_INBOUND_HOST) throw new Error(`${host.voiceEnv} is not set (needed so the call-in line sounds like ${host.name})`);
+    console.warn(`cartesiaAgents.syncAgent: ${host.voiceEnv} is not set; the inbound agent keeps its current voice`);
+  }
+  const prompt = inboundAgent(host);
   const agentRes = await cartesiaFetch(existingAgent ? `/v1/agents/${existingAgent}` : "/v1/agents", {
     method: existingAgent ? "PATCH" : "POST",
     body: buildAgentConfig({
@@ -130,12 +142,13 @@ async function syncInbound(mayCreate: boolean, assignNumber: boolean): Promise<I
       instructions: prompt.instructions,
       initialMessage: prompt.greeting,
       placeholders: prompt.placeholders,
-      language: lang,
+      language: host.language,
       model: process.env.CARTESIA_MODEL,
-      voiceId: process.env[characterFor(undefined, lang).voiceEnv],
+      voiceId,
       tools: [toolId],
     }),
   });
+  console.log(`cartesiaAgents.syncAgent: inbound agent speaks as ${host.id} (${host.language})`);
   if (classifyHttp(agentRes.status) !== "ok") throw new Error(`inbound agent: ${httpError(agentRes, true)}`);
   const agentId = existingAgent ?? agentRes.json?.id ?? agentRes.json?.agent_id;
   if (!agentId) throw new Error("Cartesia created the inbound agent but returned no id; copy it from the dashboard");

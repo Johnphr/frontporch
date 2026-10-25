@@ -130,6 +130,17 @@ export default defineSchema({
     times: v.array(v.number()), // epoch ms
   }).index("by_key", ["key"]),
 
+  // One row per call-in lookup request (inbound.recordLookup), 401s and 400s included, so the
+  // team can see from the dashboard what the lookup_caller tool got (inbound.lastLookups).
+  // Never a phone number. reason: a short code-chosen word (e.g. "story", "no_elder",
+  // "not_verified:not_found", "unauthorized", "bad_body").
+  inboundLookups: defineTable({
+    at: v.number(), // epoch ms
+    outcome: v.union(v.literal("known"), v.literal("unknown"), v.literal("error")),
+    reason: v.optional(v.string()),
+    elderId: v.optional(v.id("elders")),
+  }),
+
   // One Cartesia agent per character (lib/characters.ts), written by cartesiaAgents.syncAgent.
   characterAgents: defineTable({
     characterId: v.string(),

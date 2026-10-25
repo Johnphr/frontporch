@@ -189,12 +189,15 @@ For an elder who already did the onboarding call (his row has `stage: "active"` 
 
 ## Test an inbound call (he calls the Front Porch number; `inbound.ts`)
 
-One number routes to one Cartesia agent, so a single bilingual inbound agent answers every
-call. It greets generically, then calls the `lookup_caller` tool → `POST /cartesia/inbound-lookup`
+One number routes to one Cartesia agent, and an agent has one voice for the whole call (no
+mid-call voice change, no hand-off to another agent), so a single bilingual inbound agent
+answers every call **as one host**: `CARTESIA_INBOUND_HOST` (character id, default `daniel`).
+It greets generically, then calls the `lookup_caller` tool → `POST /cartesia/inbound-lookup`
 (`http.ts`) → `inbound.handleLookup`: his number → elder → the same plan an outbound call would
 use (onboarding or story, his language), a `calls` row with `direction: "inbound"`, and the usual
-poll → `pipeline.processCall`. Unknown numbers get a polite goodbye and no row. A 10-minute cron
-(`inbound.syncInboundCalls`) records any finished inbound call the lookup missed.
+poll → `pipeline.processCall`. If his host is a different one, the line's host says it's his
+colleague; it never claims to be him. Unknown numbers get a polite goodbye and no row. A
+10-minute cron (`inbound.syncInboundCalls`) records any finished inbound call the lookup missed.
 
 1. Once (needs the HTTPS site URL; Convex gives functions `CONVEX_SITE_URL`, else set
    `INBOUND_SITE_URL=https://<deployment>.convex.site`):
@@ -206,13 +209,18 @@ poll → `pipeline.processCall`. Unknown numbers get a polite goodbye and no row
    npx convex env set CARTESIA_INBOUND_AGENT_ID <id>
    ```
 
-   Optional: `CARTESIA_INBOUND_LANGUAGE=es` makes Spanish the agent's primary language (Cartesia
-   agents have one primary language for speech recognition + voice; the prompt itself is bilingual).
+   `CARTESIA_INBOUND_HOST=<daniel|oscar|victoria|diana>` picks the host whose voice, language
+   and persona the line uses (its `CARTESIA_VOICE_ID_<HOST>` must be set; re-sync `{inbound:true}`
+   after changing it). For the demo: the host the demo elder picks. Without it, the default host
+   for `CARTESIA_INBOUND_LANGUAGE` (`en` → Daniel, `es` → Diana).
 
-2. From the elder's phone (his `phone` field, E.164), call the Front Porch number. Pip (or
-   Juanito) greets, looks him up, and continues his onboarding or story call.
+2. From the elder's phone (his `phone` field, E.164), call the Front Porch number. The host
+   greets, looks him up, greets him by name and continues his onboarding or story call.
 3. Watch: a `calls` row with `direction: "inbound"`, `queued` is skipped (`in_progress` →
    `ended` → `done`), then memories, a `pending` post (with `AUTO_POST=off`) and a used bank row.
+   What the tool got: `npx convex run inbound:lastLookups '{"limit":3}'` (`known story`,
+   `unknown no_elder`, `error unauthorized`, ...; the same text is one `inbound-lookup:` log line
+   per request, never with a number).
 4. From a number that isn't an elder: polite goodbye, no row.
 5. Backstop by hand: `npx convex run inbound:syncInboundCalls`.
 

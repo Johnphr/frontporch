@@ -4,13 +4,17 @@
 //   handleLookup      1. a repeated lookup for the same call gets the exact same answer back
 //                        (cached on the calls row): the plan never changes mid-call
 //                     2. verify with Cartesia that this is a LIVE call on our inbound agent from
-//                        this caller (GET /agents/calls/{id}; fallback: list the agent's calls).
-//                        A leaked tool secret alone gets nothing.
+//                        this caller (GET /agents/calls/{id} when the tool sent a conversation
+//                        id; else, or on 404, list the agent's calls and take the single live one
+//                        from this caller). A leaked tool secret alone gets nothing.
 //                     3. caller number -> elder (by_phone, then normalized-phone scan) -> same
 //                        plan as an outbound call (onboarding: known background; story:
 //                        conversation.planNextCall) -> calls row (direction "inbound",
 //                        in_progress, the verified Cartesia call id) + cartesia.pollCall.
 //                     Unknown number -> { caller_known: "no" }: no row, nothing revealed.
+//                     Returns { response, reason, elderId? }; http.ts logs ONE line per lookup
+//                     (`inbound-lookup: known|unknown|error <reason>`) and keeps the outcome in
+//                     inboundLookups (recordLookup; read with lastLookups from the dashboard).
 //   syncInboundCalls  every 10 min (crons.ts): lists recent calls on the inbound agent and
 //                     records any finished one from an elder that has no row (the tool was
 //                     skipped or our endpoint was down), or attaches the real call id to a
@@ -37,6 +41,7 @@ import {
   backstopDecision,
   callPath,
   callerCandidates,
+  inboundHost,
   knownCallerResponse,
   lookupErrorResponse,
   lookupReuseDecision,
@@ -46,6 +51,7 @@ import {
   unknownCallerResponse,
   verifyLiveCall,
   type BackstopCall,
+  type LookupOutcome,
   type LookupResponse,
 } from "./lib/inbound";
 import { buildOnboardingVariables, callCharacter, firstName, planNextCall, type CallKind } from "./lib/onboarding";
@@ -211,19 +217,21 @@ type Verification =
 
 /**
  * Is the caller really on a live call with our inbound agent right now? GET the call by the
- * lookup's conversation id; if Cartesia doesn't know that id (the docs don't say it equals the
- * call id), list the inbound agent's recent calls and take the single live one from this caller.
+ * lookup's conversation id when the tool sent one; if it didn't, or Cartesia doesn't know that
+ * id, list the inbound agent's recent calls and take the single live one from this caller.
  */
-async function verifyCall(callerId: string, conversationId: string): Promise<Verification> {
+async function verifyCall(callerId: string, conversationId: string | undefined): Promise<Verification> {
   const agentId = process.env.CARTESIA_INBOUND_AGENT_ID;
   if (!agentId || !process.env.CARTESIA_API_KEY) return { ok: false, reason: "not_configured" };
   const want = { agentId, callerId };
-  const res = await cartesiaFetch(callPath(conversationId), { method: "GET", timeoutMs: VERIFY_TIMEOUT_MS });
-  if (classifyHttp(res.status) === "ok") {
-    const r = verifyLiveCall(res.json, want);
-    return r.ok ? r : { ok: false, reason: r.reason };
+  if (conversationId) {
+    const res = await cartesiaFetch(callPath(conversationId), { method: "GET", timeoutMs: VERIFY_TIMEOUT_MS });
+    if (classifyHttp(res.status) === "ok") {
+      const r = verifyLiveCall(res.json, want);
+      return r.ok ? r : { ok: false, reason: r.reason };
+    }
+    if (res.status !== 404) return { ok: false, reason: "unreachable" };
   }
-  if (res.status !== 404) return { ok: false, reason: "unreachable" };
   const since = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
   const qs = new URLSearchParams({ agent_id: agentId, start_time_gte: since, limit: "50" });
   const list = await cartesiaFetch(`/agents/calls?${qs.toString()}`, { method: "GET", timeoutMs: VERIFY_TIMEOUT_MS });
@@ -232,34 +240,40 @@ async function verifyCall(callerId: string, conversationId: string): Promise<Ver
   return callId ? { ok: true, callId } : { ok: false, reason: "not_found" };
 }
 
+/** What the tool gets, plus why (a code-chosen word for the log line and the inboundLookups row). */
+export type LookupResult = { response: LookupResponse; reason: string; elderId?: Id<"elders"> };
+
 /** The lookup_caller tool, called by the inbound agent right after its greeting. */
 export const handleLookup = internalAction({
-  args: { callerId: v.string(), conversationId: v.string() },
-  handler: async (ctx, { callerId, conversationId }): Promise<LookupResponse> => {
+  args: { callerId: v.string(), conversationId: v.optional(v.string()) },
+  handler: async (ctx, { callerId, conversationId }): Promise<LookupResult> => {
+    const host = inboundHost(process.env); // whose voice is on the line
+
     // 1. Same call asked before: same answer (only to the same caller).
-    const prior = await ctx.runQuery(internal.inbound.getLookupRow, { ids: [conversationId] });
-    if (prior) {
-      const decision = lookupReuseDecision(prior);
-      const elder = await ctx.runQuery(internal.inbound.findElderByPhone, { phones: [callerId] });
-      if (decision.action === "cached" && elder && elder._id === prior.elderId) return decision.response;
+    if (conversationId) {
+      const prior = await ctx.runQuery(internal.inbound.getLookupRow, { ids: [conversationId] });
+      if (prior) {
+        const decision = lookupReuseDecision(prior);
+        const elder = await ctx.runQuery(internal.inbound.findElderByPhone, { phones: [callerId] });
+        if (decision.action === "cached" && elder && elder._id === prior.elderId) {
+          return { response: decision.response, reason: "cached", elderId: elder._id };
+        }
+      }
     }
 
     // 2. Verify the call with Cartesia before any elder data goes out (fail closed).
     const verified = await verifyCall(callerId, conversationId);
     if (!verified.ok) {
-      console.warn(`inbound.handleLookup: call not verified (${verified.reason})`);
-      return verified.reason === "caller_mismatch" ? unknownCallerResponse() : lookupErrorResponse();
+      if (verified.reason === "caller_mismatch") return { response: unknownCallerResponse(host), reason: "caller_mismatch" };
+      return { response: lookupErrorResponse(host), reason: `not_verified:${verified.reason}` };
     }
 
     // 3. Who is it?
     const elder = await ctx.runQuery(internal.inbound.findElderByPhone, { phones: [callerId] });
-    if (!elder) {
-      console.log("inbound.handleLookup: unknown caller"); // no number in logs
-      return unknownCallerResponse();
-    }
+    if (!elder) return { response: unknownCallerResponse(host), reason: "no_elder" };
     const normalized = asElderV2(elder) ?? { _id: String(elder._id), name: elder.name };
     const kind: CallKind = planNextCall(normalized).kind;
-    const character = callCharacter(elder); // the same character an outbound call would use
+    const character = callCharacter(elder); // the host who calls him (his voice is NOT on this line unless it's `host`)
     const lang = character.language;
 
     let callId: Id<"calls"> | undefined;
@@ -270,7 +284,7 @@ export const handleLookup = internalAction({
         conversationId,
         kind,
       });
-      if (rec.cached) return rec.cached; // a concurrent lookup of this call already answered
+      if (rec.cached) return { response: rec.cached, reason: "cached", elderId: elder._id }; // a concurrent lookup already answered
       callId = rec.callId;
     } catch {
       // Still answer him; the backstop records the call after it ends.
@@ -280,26 +294,56 @@ export const handleLookup = internalAction({
     try {
       let variables: Record<string, string>;
       let plan: unknown;
+      let reason: string = kind;
       if (kind === "story") {
         try {
           const planned = await ctx.runAction(internal.conversation.planNextCall, { elderId: elder._id });
           variables = planned.dynamicVariables;
           plan = planned.plan; // its bankId is marked used after the call, if it was a real conversation
         } catch {
-          console.warn(`inbound.handleLookup: elder ${elder._id} story planning failed; open chat instead`);
           variables = fallbackStoryVariables(elder.name, lang);
+          reason = "story:open_chat"; // planning failed; a warm open chat instead
         }
       } else {
         variables = buildOnboardingVariables(elder, elder.knownBackground, lang);
       }
-      const response = knownCallerResponse({ kind, lang, character, variables });
+      const response = knownCallerResponse({ kind, lang, character, host, variables });
       if (callId) await ctx.runMutation(internal.inbound.saveLookup, { callId, plan, response });
-      console.log(`inbound.handleLookup: elder ${elder._id} ${kind} (${lang})${callId ? ` call ${callId}` : ""}`);
-      return response;
+      return { response, reason: `${reason}${callId ? "" : ":no_row"}`, elderId: elder._id };
     } catch {
-      console.warn(`inbound.handleLookup: elder ${elder._id} lookup failed`);
-      return lookupErrorResponse();
+      return { response: lookupErrorResponse(host), reason: "build_failed", elderId: elder._id };
     }
+  },
+});
+
+/** One row per lookup request (any outcome, 401/400 included): what the team checks after a test call. */
+export const recordLookup = internalMutation({
+  args: {
+    outcome: v.union(v.literal("known"), v.literal("unknown"), v.literal("error")),
+    reason: v.optional(v.string()),
+    elderId: v.optional(v.id("elders")),
+  },
+  handler: async (ctx, { outcome, reason, elderId }) => {
+    await ctx.db.insert("inboundLookups", {
+      at: Date.now(),
+      outcome,
+      ...(reason ? { reason: reason.slice(0, 80) } : {}),
+      ...(elderId ? { elderId } : {}),
+    });
+  },
+});
+
+/** The last N lookup outcomes, newest first: `npx convex run inbound:lastLookups '{"limit":5}'`. */
+export const lastLookups = internalQuery({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, { limit }): Promise<{ at: string; outcome: LookupOutcome; reason?: string; elderId?: Id<"elders"> }[]> => {
+    const rows = await ctx.db.query("inboundLookups").order("desc").take(Math.min(Math.max(limit ?? 10, 1), 100));
+    return rows.map((r) => ({
+      at: new Date(r.at).toISOString(),
+      outcome: r.outcome,
+      ...(r.reason ? { reason: r.reason } : {}),
+      ...(r.elderId ? { elderId: r.elderId } : {}),
+    }));
   },
 });
 
