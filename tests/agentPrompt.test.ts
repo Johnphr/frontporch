@@ -107,6 +107,7 @@ test("posting: every host knows posts go to <accounts>, needn't be a story, and 
     assert.match(text, /Not every post has to be a story/);
     assert.match(text, /Never say you can't post/);
     assert.match(text, /isn't connected yet/);
+    assert.match(text, /<accounts> is only for you to know: never read it out/); // aware of it, never announces it
     assert.match(text, /posts only say what they told you/);
     assert.match(text, /So is posting what they want to share/); // the guardrail doesn't contradict it
   }
