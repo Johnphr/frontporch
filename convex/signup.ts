@@ -69,9 +69,11 @@ export const register = mutation({
 export const setCharacter = mutation({
   args: { elderId: v.id("elders"), characterId: v.string() },
   handler: async (ctx, { elderId, characterId }): Promise<null> => {
-    if (!getCharacter(characterId)) throw new ConvexError("Unknown character.");
+    const character = getCharacter(characterId);
+    if (!character) throw new ConvexError("Unknown character.");
     if (!(await ctx.db.get(elderId))) throw new ConvexError("Sign-up not found.");
-    await ctx.db.patch(elderId, { characterId });
+    // One language per character: switching host switches his call language too.
+    await ctx.db.patch(elderId, { characterId, language: languageTag(character.language) });
     return null;
   },
 });

@@ -7,68 +7,51 @@
     -webkit-text-size-adjust: 100%;
   }
   body {
-    @apply bg-lino-100 font-sans text-base text-tinta-900 antialiased;
+    @apply bg-paper font-sans text-base text-ink antialiased;
+  }
+  /* Editorial serif at regular weight: size, not boldness, carries the hierarchy. */
+  h1,
+  h2,
+  h3 {
+    @apply font-display font-normal;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+  }
+  a {
+    @apply text-rose underline underline-offset-4 hover:decoration-2;
+  }
+  ::selection {
+    @apply bg-pink text-ink;
   }
   /* A strong, consistent focus ring for every interactive element. */
   :focus-visible {
-    outline: 4px solid theme('colors.talavera.700');
-    outline-offset: 3px;
+    outline: 4px solid theme('colors.ink');
+    outline-offset: 4px;
   }
-  h1:focus {
+  /* On the dark ink band the ring flips to paper so it stays visible. */
+  .on-ink :focus-visible {
+    outline-color: theme('colors.paper');
+  }
+  /* Headings get focus on each new screen (for screen readers); they aren't controls, so no ring. */
+  [tabindex='-1']:focus {
     outline: none;
   }
 }
 
 @layer components {
-  /* Talavera tile band: a quatrefoil tile in cobalt at low opacity, decorative only. */
-  .talavera-band {
-    height: 40px;
-    background-color: theme('colors.lino.50');
-    background-repeat: repeat-x;
-    background-position: center;
-    background-size: 40px 40px;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48'%3E%3Cg fill='none' stroke='%231F4E8C' stroke-opacity='.45' stroke-width='1.8'%3E%3Cpath d='M24 4C30 12 30 12 38 10C36 18 36 18 44 24C36 30 36 30 38 38C30 36 30 36 24 44C18 36 18 36 10 38C12 30 12 30 4 24C12 18 12 18 10 10C18 12 18 12 24 4Z'/%3E%3Ccircle cx='24' cy='24' r='5'/%3E%3Cpath d='M0 0L6 6M48 0L42 6M0 48L6 42M48 48L42 42'/%3E%3C/g%3E%3C/svg%3E");
+  /* Quiet uppercase label ("Example", "Demo", "Current host"). */
+  .tag {
+    @apply inline-block self-start rounded-full border border-rose/50 bg-blush px-3.5 py-1 text-eyebrow font-bold uppercase text-rose;
   }
-  .talavera-band-top {
-    border-bottom: 2px solid theme('colors.talavera.700');
-  }
-  .talavera-band-bottom {
-    border-top: 2px solid theme('colors.talavera.700');
-  }
-  .talavera-band-side {
-    height: auto;
-    width: 40px;
-    flex: 0 0 40px;
-    background-repeat: repeat-y;
-    border-left: 2px solid theme('colors.talavera.700');
-    border-right: 2px solid theme('colors.talavera.700');
-  }
-}
-
-/* Marigold petals drifting down, very slowly. */
-.petal {
-  position: absolute;
-  top: -30px;
-  width: 14px;
-  height: 20px;
-  background: #f6b73c;
-  border-radius: 60% 40% 60% 40% / 70% 70% 30% 30%;
-  opacity: 0.7;
-  animation: drift linear infinite;
-}
-@keyframes drift {
-  0% { transform: translate3d(0, -30px, 0) rotate(0deg); opacity: 0; }
-  10% { opacity: 0.7; }
-  50% { transform: translate3d(36px, 52vh, 0) rotate(160deg); }
-  100% { transform: translate3d(-12px, 108vh, 0) rotate(320deg); opacity: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .petals {
-    display: none;
-  }
-  * {
+  *,
+  *::before,
+  *::after {
     animation: none !important;
     transition: none !important;
+    scroll-behavior: auto !important;
   }
 }

@@ -12,6 +12,7 @@ import {
   languageTag,
   normalizeName,
   normalizePhone,
+  normalizeSchedule,
   publicCallAllowed,
 } from "../convex/lib/signupRules.ts";
 import { NOW } from "./helpers.ts";
@@ -95,4 +96,24 @@ test("publicCallAllowed: off by default, 'on' = allowlist only, 'all' = anyone",
   assert.equal(publicCallAllowed("on", " +1 (415) 555-0123 , +5215512345678", me), true);
   assert.equal(publicCallAllowed("on", "+5215512345678", me), false);
   assert.equal(publicCallAllowed("all", undefined, me), true);
+});
+
+test("normalizeSchedule: weekday + whole hour 0-23 + IANA timezone", () => {
+  assert.deepEqual(normalizeSchedule("Tuesday", 11, "America/Chicago"), {
+    callDay: "tuesday",
+    callHour: 11,
+    timezone: "America/Chicago",
+  });
+  assert.deepEqual(normalizeSchedule("sun", 0, " Europe/Madrid "), { callDay: "sunday", callHour: 0, timezone: "Europe/Madrid" });
+  assert.equal(normalizeSchedule("tuesday", 23, "America/Mexico_City")?.callHour, 23);
+});
+
+test("normalizeSchedule: rejects bad day, hour or timezone", () => {
+  assert.equal(normalizeSchedule("someday", 11, "America/Chicago"), undefined);
+  assert.equal(normalizeSchedule("", 11, "America/Chicago"), undefined);
+  for (const hour of [-1, 24, 10.5, Number.NaN]) {
+    assert.equal(normalizeSchedule("monday", hour, "America/Chicago"), undefined, String(hour));
+  }
+  assert.equal(normalizeSchedule("monday", 9, "Mars/Olympus"), undefined);
+  assert.equal(normalizeSchedule("monday", 9, ""), undefined);
 });
