@@ -25,7 +25,7 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(s);
 }
 
-function fromBase64(text: string): Uint8Array | undefined {
+function fromBase64(text: string): Uint8Array<ArrayBuffer> | undefined {
   const clean = text.trim();
   if (!clean || !/^[A-Za-z0-9+/]+={0,2}$/.test(clean)) return undefined;
   try {
@@ -39,7 +39,7 @@ function fromBase64(text: string): Uint8Array | undefined {
 }
 
 /** The additional data for one secret: ties it to this elder and platform. */
-export function secretAad(elderId: string, platform: Platform): Uint8Array {
+export function secretAad(elderId: string, platform: Platform): Uint8Array<ArrayBuffer> {
   return new TextEncoder().encode(`frontporch/elderAccounts/v1/${elderId}/${platform}`);
 }
 
