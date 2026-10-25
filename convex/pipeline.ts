@@ -261,17 +261,17 @@ async function runStoryCall(
         if (post.skip) return `no post: ${post.reason}`;
         // insertPost holds it (below the quality bar, or too long for a Bluesky thread: shown on
         // /posts, never auto-posted) or schedules publish.publishPost, in one mutation.
-        const saved = await ctx.runMutation(internal.pipeline.insertPost, {
+        const inserted = await ctx.runMutation(internal.pipeline.insertPost, {
           elderId: elder._id,
           callId,
           text: post.text,
           quality: post.quality,
         });
-        const { postId } = saved;
-        if (!saved.created) return `post ${postId} already exists`;
-        if (saved.held === "thread_fit") return `post ${postId} held: too long for a Bluesky thread; shorten it, then publish:approvePost`;
-        if (saved.held) return `post ${postId} held for review (quality ${post.quality.score}/100); post it with publish:approvePost`;
-        if (!saved.scheduled) {
+        const { postId } = inserted;
+        if (!inserted.created) return `post ${postId} already exists`;
+        if (inserted.held === "thread_fit") return `post ${postId} held: too long for a Bluesky thread; shorten it, then publish:approvePost`;
+        if (inserted.held) return `post ${postId} held for review (quality ${post.quality.score}/100); post it with publish:approvePost`;
+        if (!inserted.scheduled) {
           return `post ${postId} saved, not posted (AUTO_POST=off); post it with: npx convex run publish:publishPost '{"postId":"${postId}"}'`;
         }
         return `post ${postId} scheduled`;
