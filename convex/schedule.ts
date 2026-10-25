@@ -5,9 +5,11 @@
 //                             started -> cartesia.startCall. Each call slot is handled once.
 //                             Website sign-ups still in onboarding only when PUBLIC_CALLS
 //                             allows the number (lib/signupRules.cronMayCall).
-//   dailyEngagement           daily: blueskyEngagement.scrapeForElder for every active
-//                             elder; apify.scrapeEngagement (LinkedIn) too for those with a
-//                             linkedinUrl, only when LINKEDIN_POSTING=on (staggered)
+//   dailyEngagement           daily, per active elder: blueskyEngagement.scrapeForElder,
+//                             threadsEngagement.scrapeForElder (always; a no-op without
+//                             Threads posts), xEngagement.scrapeForElder (X_READ_FEEDBACK=on
+//                             only); then apify.scrapeEngagement (LinkedIn) for those with a
+//                             linkedinUrl, only when LINKEDIN_POSTING=on (all staggered)
 //   weeklyAudienceQuestions   weekly: apify.findAudienceQuestions for every active elder
 //
 // Time math (timezones, DST) lives in lib/schedule.ts.
@@ -19,7 +21,8 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation } from "./_generated/server";
 import { loopCovers, type LoopEnv } from "./lib/callLoop";
-import { linkedinEngagementOn, planDailyEngagement } from "./lib/engagementRules";
+import { linkedinEngagementOn, planDailyEngagement, type EngagementJob } from "./lib/engagementRules";
+import { xFeedbackOn } from "./lib/xEngagement";
 import { PREPARE_CALL_FN, START_CALL_FN, dueActions } from "./lib/schedule";
 import { cronMayCall } from "./lib/signupRules";
 
@@ -100,20 +103,27 @@ export const tick = internalAction({
   },
 });
 
+// One scrape action per job kind (lib/engagementRules.planDailyEngagement).
+const SCRAPERS = {
+  bluesky: internal.blueskyEngagement.scrapeForElder,
+  threads: internal.threadsEngagement.scrapeForElder,
+  x: internal.xEngagement.scrapeForElder,
+  linkedin: internal.apify.scrapeEngagement,
+} as const;
+
+type EngagementCounts = Record<EngagementJob["kind"], number> & { scheduled: number };
+
 export const dailyEngagement = internalMutation({
   args: {},
-  handler: async (ctx): Promise<{ scheduled: number; bluesky: number; linkedin: number }> => {
+  handler: async (ctx): Promise<EngagementCounts> => {
     const elders = await ctx.db.query("elders").collect();
-    const jobs = planDailyEngagement(elders, linkedinEngagementOn(process.env), STAGGER_MS);
+    const jobs = planDailyEngagement(elders, linkedinEngagementOn(process.env), STAGGER_MS, xFeedbackOn(process.env));
+    const counts: EngagementCounts = { scheduled: jobs.length, bluesky: 0, threads: 0, x: 0, linkedin: 0 };
     for (const job of jobs) {
-      if (job.kind === "bluesky") {
-        await ctx.scheduler.runAfter(job.delayMs, internal.blueskyEngagement.scrapeForElder, { elderId: job.elderId });
-      } else {
-        await ctx.scheduler.runAfter(job.delayMs, internal.apify.scrapeEngagement, { elderId: job.elderId });
-      }
+      await ctx.scheduler.runAfter(job.delayMs, SCRAPERS[job.kind], { elderId: job.elderId });
+      counts[job.kind] += 1;
     }
-    const bluesky = jobs.filter((j) => j.kind === "bluesky").length;
-    return { scheduled: jobs.length, bluesky, linkedin: jobs.length - bluesky };
+    return counts;
   },
 });
 

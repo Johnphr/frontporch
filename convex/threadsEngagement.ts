@@ -1,6 +1,6 @@
 // How readers reacted to his Threads threads (like blueskyEngagement.ts).
 //
-//   scrapeForElder       daily (schedule.dailyEngagement, once wired): for each Threads thread he
+//   scrapeForElder       daily (schedule.dailyEngagement): for each Threads thread he
 //                        posted in the last 30 days -> likes + reposts on the root, replies by
 //                        others -> engagement:upsert (platform "threads"). One failing thread
 //                        doesn't stop the rest. Needs his Threads login (lib/threadsLogin.ts).
@@ -26,7 +26,7 @@ import { reportThreadsLoginError, threadsLoginForElder } from "./lib/threadsLogi
 
 const MAX_PUBLICATIONS = 100;
 
-// engagement.upsert takes platform "threads" once its validator is widened (see the wiring notes).
+// engagement.upsert (platform "threads"), referenced by name with this file's arg type.
 const upsertEngagement = makeFunctionReference<"mutation", Omit<ThreadsUpsertArgs, "elderId" | "postId"> & { elderId: Id<"elders">; postId: Id<"posts"> }>(
   "engagement:upsert",
 );

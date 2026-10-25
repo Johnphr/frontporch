@@ -1,5 +1,7 @@
 // Rules for engagement.upsert: did readers react since the last scrape, and is
-// it time to refresh his question bank? No runtime imports: tested with Node.
+// it time to refresh his question bank? No Convex imports: tested with Node.
+
+import { canonicalLinkedInPostUrl } from "./linkedinUrl.ts";
 
 export type Comment = { author: string; text: string };
 export type Snapshot = { reactions: number; comments: Comment[] };
@@ -106,6 +108,14 @@ export function canonicalBlueskyPostUrl(input?: string | null): string {
   }
 }
 
+/**
+ * The key engagement rows are stored under. Only LinkedIn links get the LinkedIn cleanup (it
+ * rewrites hosts to linkedin.com); Bluesky, Threads and X get the light cleanup above.
+ */
+export function canonicalEngagementUrl(platform: EngagementPlatform, input: string | null | undefined): string {
+  return platform === "linkedin" ? canonicalLinkedInPostUrl(input) : canonicalBlueskyPostUrl(input);
+}
+
 // ---------- daily schedule ----------
 
 /** LinkedIn scraping (Apify) runs only when LINKEDIN_POSTING is on. Off by default. */
@@ -113,23 +123,29 @@ export function linkedinEngagementOn(env: Record<string, string | undefined>): b
   return ["on", "true", "1", "yes"].includes((env.LINKEDIN_POSTING ?? "").trim().toLowerCase());
 }
 
-export type EngagementJob = { kind: "bluesky" | "linkedin"; elderId: string; delayMs: number };
+export type EngagementJob = { kind: "bluesky" | "threads" | "x" | "linkedin"; elderId: string; delayMs: number };
 
 /** LinkedIn runs start this long after the last Bluesky run: past the bank-refresh debounce
  *  (plus its delay), so their comments schedule a refresh of their own instead of being dropped. */
 export const LINKEDIN_AFTER_BLUESKY_MS = BANK_REFRESH_DEBOUNCE_MS + BANK_REFRESH_DELAY_MS;
 
 /**
- * Daily engagement runs: Bluesky for every active elder, LinkedIn (when on) for active
- * elders with a LinkedIn profile, after the whole Bluesky batch. Each kind is staggered.
+ * Daily engagement runs, per active elder: Bluesky; Threads (always: cheap when he has no
+ * Threads posts) a third of a stagger later; X (only when xOn: X_READ_FEEDBACK, see
+ * lib/xEngagement.xFeedbackOn) two thirds later. LinkedIn
+ * (when on) for active elders with a LinkedIn profile, after the whole batch.
  */
 export function planDailyEngagement<Id extends string>(
   elders: { _id: Id; stage?: string; linkedinUrl?: string }[],
   linkedinOn: boolean,
   staggerMs: number,
+  xOn = false,
 ): (EngagementJob & { elderId: Id })[] {
   const active = elders.filter((e) => e.stage === "active");
   const jobs: (EngagementJob & { elderId: Id })[] = active.map((e, i) => ({ kind: "bluesky", elderId: e._id, delayMs: i * staggerMs }));
+  const third = Math.round(staggerMs / 3);
+  active.forEach((e, i) => jobs.push({ kind: "threads", elderId: e._id, delayMs: i * staggerMs + third }));
+  if (xOn) active.forEach((e, i) => jobs.push({ kind: "x", elderId: e._id, delayMs: i * staggerMs + 2 * third }));
   if (linkedinOn) {
     const start = active.length * staggerMs + LINKEDIN_AFTER_BLUESKY_MS;
     active

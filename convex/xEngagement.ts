@@ -23,7 +23,7 @@ declare const process: { env: Record<string, string | undefined> };
 const MAX_PUBLICATIONS = 100;
 const HTTP_TIMEOUT_MS = 20_000;
 
-// engagement.upsert takes platform "x" once its validator lists it (see the X wiring notes).
+// engagement.upsert (platform "x"), referenced by name with this file's arg type.
 const upsertEngagement = makeFunctionReference<
   "mutation",
   {

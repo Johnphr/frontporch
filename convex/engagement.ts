@@ -1,9 +1,10 @@
-// How readers reacted to his posts (Bluesky threads; LinkedIn when LINKEDIN_POSTING=on).
+// How readers reacted to his posts (Bluesky and Threads threads; X when X_READ_FEEDBACK=on;
+// LinkedIn when LINKEDIN_POSTING=on).
 //
-//   upsert          called once per post by blueskyEngagement.scrapeForElder (Bluesky:
-//                   likes + reposts, replies by others) and apify.scrapeEngagement
-//                   (LinkedIn): keeps the latest snapshot, links it to our posts row
-//                   (Bluesky: the postId passed in; LinkedIn: by canonical URL), and when
+//   upsert          called once per post by blueskyEngagement / threadsEngagement /
+//                   xEngagement .scrapeForElder (likes + reposts, replies by others) and
+//                   apify.scrapeEngagement (LinkedIn): keeps the latest snapshot, links it to
+//                   our posts row (the postId passed in; LinkedIn: by canonical URL), and when
 //                   something changed schedules conversation.refreshQuestionBank
 //                   (debounced: at most once per elder every 10 minutes, 2 minutes
 //                   after the first change so the whole scrape run lands first)
@@ -19,7 +20,7 @@ import type { Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery } from "./_generated/server";
 import {
   BANK_REFRESH_DELAY_MS,
-  canonicalBlueskyPostUrl,
+  canonicalEngagementUrl,
   cleanComments,
   feedbackVisible,
   feedbackWindowStart,
@@ -28,14 +29,13 @@ import {
   shouldRefreshBank,
   type EngagementPlatform,
 } from "./lib/engagementRules";
-import { canonicalLinkedInPostUrl } from "./lib/linkedinUrl";
 
 // Implemented by Core: Brain in conversation.ts. Referenced by name so this file
 // doesn't depend on their generated types while both are in flight.
 const refreshQuestionBank = makeFunctionReference<"action">("conversation:refreshQuestionBank");
 
 const commentValidator = v.object({ author: v.string(), text: v.string() });
-const platformValidator = v.union(v.literal("linkedin"), v.literal("bluesky"));
+const platformValidator = v.union(v.literal("linkedin"), v.literal("bluesky"), v.literal("threads"), v.literal("x"));
 
 export const upsert = internalMutation({
   args: {
@@ -43,7 +43,7 @@ export const upsert = internalMutation({
     // The post's link on its platform (name predates Bluesky). Missing platform = linkedin.
     linkedinUrl: v.string(),
     platform: v.optional(platformValidator),
-    // Bluesky: our posts row, from postPublications (Bluesky links never match posts.linkedinUrl).
+    // Bluesky / Threads / X: our posts row, from postPublications (their links never match posts.linkedinUrl).
     postId: v.optional(v.id("posts")),
     reactions: v.number(),
     comments: v.array(commentValidator),
@@ -56,8 +56,7 @@ export const upsert = internalMutation({
   ): Promise<{ engagementId: Id<"engagement">; changed: boolean; refreshScheduled: boolean }> => {
     const platform = args.platform ?? "linkedin";
     // LinkedIn canonicalization only for LinkedIn: it would rewrite other links' hosts.
-    const linkedinUrl =
-      platform === "bluesky" ? canonicalBlueskyPostUrl(args.linkedinUrl) : canonicalLinkedInPostUrl(args.linkedinUrl);
+    const linkedinUrl = canonicalEngagementUrl(platform, args.linkedinUrl);
     if (!linkedinUrl) throw new Error("engagement.upsert: empty linkedinUrl");
     const now = Date.now();
     const reactions = Number.isFinite(args.reactions) ? Math.max(0, args.reactions) : 0;
@@ -100,7 +99,7 @@ export const upsert = internalMutation({
       engagementId = await ctx.db.insert("engagement", {
         elderId: args.elderId,
         ...(post ? { postId: post._id } : {}),
-        ...(platform === "bluesky" ? { platform } : {}),
+        ...(platform !== "linkedin" ? { platform } : {}), // missing = linkedin (older rows)
         linkedinUrl,
         reactions,
         comments,
@@ -133,8 +132,7 @@ export const markGone = internalMutation({
   args: { elderId: v.id("elders"), linkedinUrl: v.string(), platform: v.optional(platformValidator) },
   handler: async (ctx, args): Promise<{ marked: boolean }> => {
     const platform = args.platform ?? "linkedin";
-    const linkedinUrl =
-      platform === "bluesky" ? canonicalBlueskyPostUrl(args.linkedinUrl) : canonicalLinkedInPostUrl(args.linkedinUrl);
+    const linkedinUrl = canonicalEngagementUrl(platform, args.linkedinUrl);
     if (!linkedinUrl) return { marked: false };
     const row = (
       await ctx.db
