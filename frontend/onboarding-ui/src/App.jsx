@@ -1,16 +1,30 @@
 // Four screens on hash routes: landing (#/), sign in (#/signin), first-time setup (#/setup),
-// and his page (#/home, #/posts). His page needs a signed-in elderId; without one it sends
-// them to sign in.
+// and his page (#/home, #/posts). His page needs a signed-in elderId + sign-up token; without
+// them it sends them to sign in.
 import { useEffect } from 'react'
 import { isConfigured } from './api'
 import { SETUP_NEEDED } from './copy'
 import { go, useRoute } from './lib/route'
-import { loadSession } from './lib/session'
+import { readOAuthReturn } from './lib/oauthReturn'
+import { SETUP_KEY, loadSession } from './lib/session'
 import Landing from './pages/Landing'
 import SignIn from './pages/SignIn'
 import Onboarding from './pages/setup/Onboarding'
 import Account from './pages/account/Account'
 import { Header } from './ui/Header'
+
+// Back from Threads / X (?connected= / ?connect_error=): reopen setup where he left it (its
+// accounts step shows the result), else his page. Runs once, before the first render.
+if (readOAuthReturn()) {
+  let inSetup = false
+  try {
+    inSetup = Boolean(sessionStorage.getItem(SETUP_KEY))
+  } catch {
+    /* storage unavailable */
+  }
+  const hash = inSetup ? '#/setup' : loadSession().elderId ? '#/home' : ''
+  if (hash) window.history.replaceState(null, '', window.location.pathname + window.location.search + hash)
+}
 
 export default function App() {
   const route = useRoute()

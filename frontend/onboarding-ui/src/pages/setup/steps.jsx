@@ -1,13 +1,11 @@
-// Setup steps 1-5 (design-mockups/onboarding-c.html). Each is a form card: art, h1 (focused by
+// Setup steps 1-4 (design-mockups/onboarding-c.html); 5 is Review.jsx, 6 Accounts.jsx. Each is a form card: art, h1 (focused by
 // Onboarding when the step opens), fields, then Continue. Props: data + set (the shared answers),
 // words (setupCopy), headingRef, onNext, nextLabel.
 import { useRef, useState } from 'react'
-import { looksLikeLinkedInProfile } from '../../api'
 import { DAYS, HOSTS, TIME_PRESETS, dayName, formatHour, hostForLanguage } from '../../copy'
 import { SETUP } from '../../copy/setup'
 import {
   CalendarArt,
-  CheckMark,
   ClockIcon,
   HelperAvatar,
   JuanitoHost,
@@ -15,7 +13,6 @@ import {
   NameArt,
   PipHost,
   PorchArt,
-  ProfileArt,
   SelfAvatar,
 } from '../../art/setup'
 import { Button, Card, ChoiceCard, ErrorText, PillChoices, SelectField, TextField } from '../../ui/controls'
@@ -201,68 +198,6 @@ export function WhenStep({ data, set, words, onNext, ...frame }) {
         <ClockIcon />
         <span>{words.whenSummary(dayName(data.callDay), formatHour(data.callHour))}</span>
       </p>
-    </StepCard>
-  )
-}
-
-/** Step 5: optional LinkedIn profile. */
-export function LinkedinStep({ data, set, words, onNext, ...frame }) {
-  const [error, setError] = useState('')
-  function submit() {
-    const value = data.linkedin.trim()
-    if (value && !looksLikeLinkedInProfile(value)) {
-      setError(SETUP.linkedin.invalid)
-      document.getElementById('linkedin')?.focus()
-      return
-    }
-    set({ liStatus: value ? 'url' : 'later' })
-    onNext()
-  }
-  const skip = (liStatus) => {
-    set({ liStatus, linkedin: '' })
-    setError('')
-    onNext()
-  }
-  return (
-    <StepCard
-      {...frame}
-      step={5}
-      art={<ProfileArt className={ART} />}
-      title={words.liTitle}
-      onSubmit={submit}
-      actions={
-        <>
-          <Button variant="link" small onClick={() => skip('none')}>
-            {words.liNone}
-          </Button>
-          <Button variant="link" small onClick={() => skip('later')}>
-            {SETUP.linkedin.later}
-          </Button>
-        </>
-      }
-    >
-      <p>{SETUP.linkedin.lead}</p>
-      <TextField
-        id="linkedin"
-        label={words.liLabel}
-        hint={SETUP.linkedin.hint}
-        error={error}
-        type="text"
-        inputMode="url"
-        autoComplete="url"
-        spellCheck={false}
-        value={data.linkedin}
-        onChange={(e) => {
-          set({ linkedin: e.target.value })
-          setError('')
-        }}
-      />
-      <div className="flex w-full items-start gap-4 rounded-inset bg-sage-tint px-6 py-5 text-sm">
-        <CheckMark />
-        <p>
-          <strong className="block text-[1.25rem]">{SETUP.linkedin.reassureTitle}</strong> {words.liReassure}
-        </p>
-      </div>
     </StepCard>
   )
 }

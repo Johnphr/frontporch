@@ -43,6 +43,7 @@ export const POSTS = {
   posted: (date) => `Posted ${date}`,
   reactions: (n) => `${n} ${n === 1 ? 'reaction' : 'reactions'}`,
   comments: (n) => `${n} ${n === 1 ? 'comment' : 'comments'}`,
-  view: 'View on LinkedIn',
+  view: (platform) => `View on ${platform}`,
+  platforms: { bluesky: 'Bluesky', threads: 'Threads', x: 'X', linkedin: 'LinkedIn', reddit: 'Reddit' },
   newTab: '(opens in a new tab)',
 }

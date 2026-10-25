@@ -18,7 +18,7 @@ function convex() {
   return client
 }
 
-function coded(code, message) {
+export function coded(code, message) {
   const e = new Error(message || code)
   e.code = code
   return e
@@ -90,14 +90,14 @@ export const signupApi = {
   callStatus: (callId) => call('query', 'callStatus', { callId }),
 }
 
-/** His page (convex/account.ts). Host changes use signupApi.setCharacter. */
+/** His page (convex/account.ts). All need the sign-up token. Host changes use signupApi.setCharacter. */
 export const accountApi = {
-  /** { name, characterId, callDay?, callHour?, timezone? } | null */
-  getProfile: (elderId) => call('query', 'getProfile', { elderId }, 'account'),
-  setSchedule: (elderId, callDay, callHour, timezone) =>
-    call('mutation', 'setSchedule', { elderId, callDay, callHour, timezone }, 'account'),
-  /** [{ id, text, linkedinUrl?, postedAt, reactions, comments }] newest first */
-  listPosts: (elderId) => call('query', 'listPosts', { elderId }, 'account'),
+  /** { name, characterId, callDay?, callHour?, timezone? } | null (unknown elder or wrong token) */
+  getProfile: (elderId, token) => call('action', 'getProfile', { elderId, token }, 'account'),
+  setSchedule: (elderId, token, callDay, callHour, timezone) =>
+    call('action', 'setSchedule', { elderId, token, callDay, callHour, timezone }, 'account'),
+  /** [{ id, text, postedAt, reactions, comments, links: [{ platform, url }], linkedinUrl? }] newest first */
+  listPosts: (elderId, token) => call('action', 'listPosts', { elderId, token }, 'account'),
 }
 
 // Sign-in: the backend has no SMS codes or email links yet, so both are mocks (pages/SignIn.jsx).

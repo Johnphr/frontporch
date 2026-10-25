@@ -59,7 +59,7 @@ function useCallPanel(callId, reason) {
   }
 }
 
-export default function Done({ words, elderId, phone, callDay, callHour, headingRef, ...first }) {
+export default function Done({ words, elderId, token, phone, callDay, callHour, headingRef, ...first }) {
   const [callId, setCallId] = useState(first.callId || null)
   const [reason, setReason] = useState(first.reason || null)
   const [busy, setBusy] = useState(false)
@@ -72,7 +72,7 @@ export default function Done({ words, elderId, phone, callDay, callHour, heading
   async function tryAgain() {
     setBusy(true)
     setReason(null)
-    const res = await placeCall(elderId) // never throws
+    const res = await placeCall(elderId, token) // never throws
     if (res.callId) setCallId(res.callId)
     else setReason(res.reason)
     setBusy(false)

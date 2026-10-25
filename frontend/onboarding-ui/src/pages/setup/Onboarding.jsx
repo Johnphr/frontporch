@@ -1,22 +1,55 @@
 // First-time setup (#/setup, design-mockups/onboarding-c.html): six steps, then Done.
-//   1 who  2 name  3 language + host  4 day + time  5 LinkedIn  6 review -> Finish (finish.js)  7 done
+//   1 who  2 name  3 language + host  4 day + time  5 review -> save (finish.js saveSetup: register,
+//   host, weekly slot)  6 accounts (Bluesky, Threads, X; optional) -> Finish rings him  7 done
 // "Change" on Review opens that step, and its button then goes straight back to Review.
 // The phone comes from sign-in (session); after an email sign-in Review asks for it.
+// Progress is kept in sessionStorage (SETUP_KEY), so a refresh or the Threads / X round trip
+// doesn't lose it. The app password and the sign-up token are never in it (the token lives in
+// the session, lib/session.js).
 import { useEffect, useRef, useState } from 'react'
 import { HOSTS, hostForLanguage } from '../../copy'
 import { SETUP, TOTAL_STEPS, setupCopy } from '../../copy/setup'
 import { go } from '../../lib/route'
-import { loadSession } from '../../lib/session'
+import { SETUP_KEY, loadSession } from '../../lib/session'
 import { BackChevron } from '../../art/setup'
 import { Header } from '../../ui/Header'
 import { Button } from '../../ui/controls'
+import AccountsStep from './Accounts'
 import Done from './Done'
 import Review from './Review'
-import { LanguageStep, LinkedinStep, NameStep, WhenStep, WhoStep } from './steps'
+import { placeCall } from './finish'
+import { LanguageStep, NameStep, WhenStep, WhoStep } from './steps'
 
-const STEPS = { 1: WhoStep, 2: NameStep, 3: LanguageStep, 4: WhenStep, 5: LinkedinStep }
+const STEPS = { 1: WhoStep, 2: NameStep, 3: LanguageStep, 4: WhenStep }
+const REVIEW = 5
+const ACCOUNTS = 6
+
+/** Saved progress for this sign-in, or null. A saved step 6 needs the sign-up it was saved with. */
+function loadProgress() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(SETUP_KEY))
+    if (!saved || typeof saved !== 'object' || !saved.data) return null
+    const session = loadSession()
+    if (saved.elderId && (saved.elderId !== session.elderId || !session.token)) return null
+    const step = Number(saved.step)
+    if (!(step >= 1 && step <= TOTAL_STEPS)) return null
+    return { data: saved.data, step: step === ACCOUNTS && !saved.elderId ? REVIEW : step, elderId: saved.elderId }
+  } catch {
+    return null
+  }
+}
+
+function saveProgress(value) {
+  try {
+    if (value) sessionStorage.setItem(SETUP_KEY, JSON.stringify(value))
+    else sessionStorage.removeItem(SETUP_KEY)
+  } catch {
+    /* storage unavailable: progress just won't survive a refresh */
+  }
+}
 
 export default function Onboarding() {
+  const saved = useRef(loadProgress()).current
   const [signedInPhone] = useState(() => loadSession().phone || '')
   const [data, setData] = useState(() => ({
     who: null, // 'self' | 'helper'
@@ -24,15 +57,25 @@ export default function Onboarding() {
     language: 'en',
     callDay: 'tuesday',
     callHour: 11,
-    linkedin: '', // as typed
-    liStatus: 'later', // 'url' | 'none' | 'later'
     phone: signedInPhone, // E.164, '' until they add one
+    bluesky: undefined, // { status: 'saved', handle } | { status: 'locked' } once step 6 connects it
+    ...saved?.data,
   }))
-  const [step, setStep] = useState(1)
+  const [step, setStep] = useState(saved?.step || 1)
+  const [signup, setSignup] = useState(() => {
+    if (!saved?.elderId) return null
+    const { elderId, token } = loadSession()
+    return { elderId, token }
+  }) // { elderId, token } once Review saved it
   const [toReview, setToReview] = useState(false)
-  const [result, setResult] = useState(null) // finishSetup() + phone, for Done
+  const [result, setResult] = useState(null) // placeCall() + phone, for Done
   const heading = useRef(null)
   const shown = useRef(step)
+
+  // Keep progress until Done (the sign-up itself is saved by then).
+  useEffect(() => {
+    saveProgress(step <= TOTAL_STEPS ? { data, step, elderId: signup?.elderId } : null)
+  }, [data, step, signup])
 
   // A new step: back to the top, focus its h1 (not on first load).
   useEffect(() => {
@@ -48,7 +91,7 @@ export default function Onboarding() {
 
   function next() {
     setToReview(false)
-    setStep((s) => (toReview ? 6 : s + 1))
+    setStep((s) => (toReview ? REVIEW : s + 1))
   }
   function back() {
     if (toReview) return next()
@@ -59,13 +102,23 @@ export default function Onboarding() {
     setToReview(true)
     setStep(n)
   }
-  function finished(res) {
-    setResult(res)
-    setStep(7)
+  function onSaved(res) {
+    setSignup({ elderId: res.elderId, token: res.token })
+    set({ phone: res.phone })
+    setStep(ACCOUNTS)
   }
+  async function finish() {
+    const res = await placeCall(signup.elderId, signup.token)
+    setResult({ ...res, phone: data.phone })
+    setStep(TOTAL_STEPS + 1)
+  }
+  // The browser is about to leave for Threads / X: write progress now, not after the next render.
+  const beforeLeave = () => saveProgress({ data, step, elderId: signup?.elderId })
 
   const Step = STEPS[step]
   const backLabel = toReview ? SETUP.backReview : step === 1 ? SETUP.backHome : SETUP.back
+  // Once saved, name and phone can't change from here (his page has host and call time).
+  const canGoBack = step !== ACCOUNTS
 
   return (
     <>
@@ -73,11 +126,15 @@ export default function Onboarding() {
       <main id="main" className="mx-auto w-full max-w-[40rem] px-4 pb-16 pt-6 sm:px-6">
         {step <= TOTAL_STEPS && (
           <>
-            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-              <Button variant="link" small onClick={back}>
-                <BackChevron />
-                {backLabel}
-              </Button>
+            <div className="flex min-h-touch-sm flex-wrap items-center justify-between gap-x-4 gap-y-1">
+              {canGoBack ? (
+                <Button variant="link" small onClick={back}>
+                  <BackChevron />
+                  {backLabel}
+                </Button>
+              ) : (
+                <span />
+              )}
               <p className="text-sm font-bold">{SETUP.stepOf(step)}</p>
             </div>
             <div aria-hidden="true" className="mb-6 mt-2 h-3 overflow-hidden rounded-full border border-line bg-white">
@@ -96,14 +153,27 @@ export default function Onboarding() {
               nextLabel={toReview ? SETUP.nextReview : SETUP.next}
             />
           )}
-          {step === 6 && (
-            <Review data={data} set={set} words={words} headingRef={heading} signedInPhone={signedInPhone} onGoto={change} onDone={finished} />
+          {step === REVIEW && (
+            <Review data={data} set={set} words={words} headingRef={heading} signedInPhone={signedInPhone} onGoto={change} onDone={onSaved} />
           )}
-          {step === 7 && result && (
+          {step === ACCOUNTS && signup && (
+            <AccountsStep
+              data={data}
+              set={set}
+              words={words}
+              headingRef={heading}
+              elderId={signup.elderId}
+              token={signup.token}
+              onFinish={finish}
+              beforeLeave={beforeLeave}
+            />
+          )}
+          {step === TOTAL_STEPS + 1 && result && (
             <Done
               words={words}
               headingRef={heading}
-              elderId={result.elderId}
+              elderId={signup?.elderId}
+              token={signup?.token}
               phone={result.phone}
               callId={result.callId}
               reason={result.reason}

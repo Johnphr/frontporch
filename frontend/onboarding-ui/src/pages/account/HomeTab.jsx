@@ -12,7 +12,7 @@ const DAY_OPTIONS = DAYS.map((d) => ({ value: d.id, label: d.short, aria: d.name
 const hostName = (id) => (HOSTS[id] || HOSTS.pip).name
 
 /** Host cards + an in-page "Switch to …?" confirm before saving. */
-function HostCard({ elderId, current, onSaved }) {
+function HostCard({ elderId, token, current, onSaved }) {
   const [picked, setPicked] = useState(current)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -27,10 +27,10 @@ function HostCard({ elderId, current, onSaved }) {
     setBusy(true)
     setError('')
     try {
-      await signupApi.setCharacter(elderId, picked)
+      await signupApi.setCharacter(elderId, token, picked)
       onSaved(picked)
     } catch (e) {
-      console.error('setCharacter failed', e)
+      console.error('setCharacter failed', e.code || 'error')
       setError(errorText(e)) // keep their choice so they can try again
     } finally {
       setBusy(false)
@@ -90,7 +90,7 @@ function HostCard({ elderId, current, onSaved }) {
 }
 
 /** Day and time pills, a live summary, and Save. */
-function ScheduleCard({ elderId, profile, host, onSaved }) {
+function ScheduleCard({ elderId, token, profile, host, onSaved }) {
   const [day, setDay] = useState(profile.callDay || 'tuesday')
   const [hour, setHour] = useState(profile.callHour ?? 11)
   const [busy, setBusy] = useState(false)
@@ -107,10 +107,10 @@ function ScheduleCard({ elderId, profile, host, onSaved }) {
     setError('')
     const timezone = profile.timezone || browserTimezone()
     try {
-      await accountApi.setSchedule(elderId, day, hour, timezone)
+      await accountApi.setSchedule(elderId, token, day, hour, timezone)
       onSaved({ callDay: day, callHour: hour, timezone })
     } catch (err) {
-      console.error('setSchedule failed', err)
+      console.error('setSchedule failed', err.code || 'error')
       setError(errorText(err))
     } finally {
       setBusy(false)
@@ -137,7 +137,7 @@ function ScheduleCard({ elderId, profile, host, onSaved }) {
   )
 }
 
-export default function HomeTab({ elderId, profile, onChange }) {
+export default function HomeTab({ elderId, token, profile, onChange }) {
   const [toast, setToast] = useState(null)
   const say = (text) => setToast({ text, id: Date.now() })
   const host = hostName(profile.characterId)
@@ -153,6 +153,7 @@ export default function HomeTab({ elderId, profile, onChange }) {
       </div>
       <HostCard
         elderId={elderId}
+        token={token}
         current={profile.characterId}
         onSaved={(characterId) => {
           onChange({ characterId })
@@ -161,6 +162,7 @@ export default function HomeTab({ elderId, profile, onChange }) {
       />
       <ScheduleCard
         elderId={elderId}
+        token={token}
         profile={profile}
         host={host}
         onSaved={(patch) => {
