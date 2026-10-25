@@ -5,8 +5,9 @@
 //                                     posts.removedAt first (publish.ts never sends a post with
 //                                     it set), then every postPublications row: never-posted
 //                                     rows -> removed; anything that went out (a half-posted
-//                                     thread too) deleted on Bluesky / Reddit; LinkedIn, Threads,
-//                                     X -> "manual". An in-flight `posting` row is left: publish.ts
+//                                     thread too) deleted on Bluesky / Threads / X / Reddit;
+//                                     LinkedIn (and a Threads / X row with no post ids) ->
+//                                     "manual". An in-flight `posting` row is left: publish.ts
 //                                     calls us again after. Then the thread replies from the
 //                                     post's call. Something failed or waiting: runs again later
 //                                     (3 tries in all). -> { removed, failed, manual, waiting }
@@ -22,22 +23,28 @@
 //
 // Family / admin:  npx convex run undo:removePost '{"postId":"..."}'   (any post)
 //                  npx convex run undo:removeLatest '{"elderId":"..."}'
-// Safe to run twice. His logins come ONLY from lib/logins.ts. Never log tokens, passwords,
+// Safe to run twice. His logins come ONLY from lib/logins.ts, lib/threadsLogin.ts and
+// lib/xLogin.ts (those two save refreshed tokens, so they get the action ctx). Never log tokens, passwords,
 // post text or reply text; ids, platforms and statuses only.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { internalAction, internalMutation, internalQuery, type ActionCtx } from "./_generated/server";
 import { findOwnReply, sharedSessionCache, withSession, type FetchFn } from "./lib/blueskyClient";
 import { deleteBlueskyThread, type DeleteOutcome } from "./lib/blueskyDelete";
 import { blueskyLoginForElder, redditLoginForElder } from "./lib/logins";
+import { threadsLoginForElder } from "./lib/threadsLogin";
+import { deleteThreadsPosts } from "./lib/threadsPublishing";
+import { xLoginForElder } from "./lib/xLogin";
+import { deleteXPosts } from "./lib/xPublishing";
 import {
   EMPTY_RESULT,
   LATEST_WINDOW_MS,
   MANUAL_REPLY_NOTE,
   claimPatch,
   cleanReason,
+  deleteCopy,
   deleteRedditThing,
   finishPatch,
   holdReason,
@@ -125,17 +132,18 @@ export const finishPublication = internalMutation({
   },
 });
 
-/** Delete one platform copy (Bluesky thread or Reddit post) with his login. */
-async function deleteOnPlatform(
-  ctx: Parameters<typeof blueskyLoginForElder>[0],
+/** Delete one platform copy (a Bluesky / Threads / X thread, or a Reddit post) with his login. */
+function deleteOnPlatform(
+  ctx: ActionCtx,
   elderId: Id<"elders">,
   e: { platform: Platform; uris?: string[]; externalId?: string },
 ): Promise<DeleteOutcome> {
-  if (e.platform === "bluesky") {
-    return deleteBlueskyThread(timedFetch, sharedSessionCache(), await blueskyLoginForElder(ctx, elderId), e.uris ?? []);
-  }
-  if (e.platform === "reddit") return deleteRedditThing(timedFetch, await redditLoginForElder(ctx, elderId), e.externalId);
-  return { ok: false, error: `No delete for ${e.platform}.` };
+  return deleteCopy(e, {
+    bluesky: async (uris) => deleteBlueskyThread(timedFetch, sharedSessionCache(), await blueskyLoginForElder(ctx, elderId), uris),
+    threads: async (ids) => deleteThreadsPosts(timedFetch, await threadsLoginForElder(ctx, elderId, { fetchFn: timedFetch }), ids),
+    x: async (ids) => deleteXPosts(timedFetch, await xLoginForElder(ctx, elderId, { fetchFn: timedFetch }), ids),
+    reddit: async (fullname) => deleteRedditThing(timedFetch, await redditLoginForElder(ctx, elderId), fullname),
+  });
 }
 
 /**

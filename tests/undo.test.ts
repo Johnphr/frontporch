@@ -30,6 +30,9 @@ import {
   type Entry,
   type LatestCandidate,
   type PubRow,
+  deleteCopy,
+  noIdsNote,
+  pubHasCopy,
 } from "../convex/lib/undo.ts";
 import { NOW } from "./helpers.ts";
 
@@ -389,13 +392,53 @@ test("a stale posting row (> 15 min) is deleted when it has records, else listed
   assert.deepEqual(claimPatch({ kind: "manual", note: STUCK_NOTE }, NOW), { error: STUCK_NOTE });
 });
 
-test("platforms without a delete here (threads, x) are always manual, never marked removed", () => {
+test("Threads / X rows with records are deleted; without ids they're manual or simply removed", () => {
+  const records = [{ uri: "p1", cid: "" }, { uri: "p2", cid: "" }];
+  const old = NOW - STALE_REMOVE_MS - 1;
   for (const platform of ["threads", "x"]) {
-    for (const status of ["pending", "failed", "skipped", "posted", "maybe_posted", "posting"]) {
-      assert.equal(publicationStep({ platform, status, claimedAt: NOW }, NOW).kind, "manual", `${platform} ${status}`);
+    // something went out: delete it by its ids, whatever the status
+    for (const status of ["posted", "maybe_posted", "failed"]) {
+      assert.deepEqual(publicationStep({ platform, status, records }, NOW), { kind: "delete", previous: status }, `${platform} ${status}`);
     }
+    assert.deepEqual(publicationStep({ platform, status: "posting", claimedAt: old, records }, NOW), { kind: "delete", previous: "maybe_posted" });
+    assert.equal(publicationStep({ platform, status: "posting", claimedAt: NOW - 1000, records }, NOW).kind, "wait");
+    // never went out
+    for (const status of ["pending", "failed", "skipped"]) {
+      assert.equal(publicationStep({ platform, status }, NOW).kind, "mark_removed", `${platform} ${status}`);
+    }
+    // went out (or may have) with no ids: a person checks
+    for (const status of ["posted", "maybe_posted"]) {
+      const step = publicationStep({ platform, status }, NOW);
+      assert.equal(step.kind, "manual");
+      assert.equal(step.kind === "manual" && step.note, noIdsNote(platform));
+    }
+    assert.equal(publicationStep({ platform, status: "posting", claimedAt: old }, NOW).kind, "manual");
     assert.equal(publicationStep({ platform, status: "removed" }, NOW).kind, "already_removed");
+    assert.equal(pubHasCopy({ platform, records }), true);
   }
+  assert.match(noIdsNote("x"), /X profile/);
+  const plan = planPostRemoval({}, [{ _id: "th", platform: "threads", status: "posted", records }], undefined, NOW);
+  assert.deepEqual(plan.entries[0].uris, ["p1", "p2"]);
+  assert.equal(plan.entries[0].claimedAt, NOW);
+});
+
+test("deleteCopy: each platform gets its own delete, with the row's ids", async () => {
+  const calls: string[] = [];
+  const ok = { ok: true as const, deleted: 1, alreadyGone: 0 };
+  const deletes = {
+    bluesky: async (uris: string[]) => (calls.push(`bluesky:${uris.join(",")}`), ok),
+    threads: async (ids: string[]) => (calls.push(`threads:${ids.join(",")}`), ok),
+    x: async (ids: string[]) => (calls.push(`x:${ids.join(",")}`), ok),
+    reddit: async (fullname: string | undefined) => (calls.push(`reddit:${fullname}`), ok),
+  };
+  await deleteCopy({ platform: "bluesky", uris: [ROOT] }, deletes);
+  await deleteCopy({ platform: "threads", uris: ["p1", "p2"] }, deletes);
+  await deleteCopy({ platform: "x", uris: ["100", "101"], externalId: "100" }, deletes);
+  await deleteCopy({ platform: "reddit", externalId: "t3_abc" }, deletes);
+  assert.deepEqual(calls, [`bluesky:${ROOT}`, "threads:p1,p2", "x:100,101", "reddit:t3_abc"]);
+  const linkedin = await deleteCopy({ platform: "linkedin" }, deletes);
+  assert.equal(linkedin.ok, false);
+  assert.equal(calls.length, 4);
 });
 
 test("finish applies only to this run's claim", () => {

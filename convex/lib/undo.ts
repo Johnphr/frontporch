@@ -4,7 +4,7 @@
 // Order of work for one post:
 //   1. posts.removedAt (+ reason, status "removed") first, so publishing never sends it again.
 //   2. each postPublications row:
-//        has a live copy (Bluesky records, Reddit fullname), whatever its status ("failed"
+//        has a live copy (Bluesky / Threads / X records, Reddit fullname), whatever its status ("failed"
 //        included: a thread that stopped halfway)
 //                                    -> claim as `removing`, delete on the platform, then removed
 //                                       (on failure: back to its status + short error)
@@ -15,8 +15,8 @@
 //        removing (another run)      -> left alone, unless that claim is stale (crashed run)
 //        removed                     -> nothing to do (running twice is safe)
 //        linkedin                    -> no delete through LinkedAPI: "manual" once it went out
-//        threads, x (any other)      -> no delete here yet: always "manual" (never marked
-//                                       removed without a delete)
+//        threads, x                  -> deleted by the ids in records; went out (or may have)
+//                                       with no ids saved -> "manual"
 //   After a manual removal: undo:markRemovedByHand.
 // Never log post text, reply text, tokens or passwords.
 
@@ -86,23 +86,61 @@ function stepFor(
   return { kind: "wait", reason: `unknown status ${s}` };
 }
 
+/** Platforms whose rows keep every post id in records (and that we can delete by them). */
+const RECORD_PLATFORMS = new Set(["bluesky", "threads", "x"]);
+
 /** Does this row hold ids of something that went out? */
 export function pubHasCopy(row: { platform: string; records?: unknown[]; externalId?: string }): boolean {
-  if (row.platform === "bluesky") return Boolean(row.records?.length);
+  if (RECORD_PLATFORMS.has(row.platform)) return Boolean(row.records?.length);
   if (row.platform === "reddit") return isRedditFullname(row.externalId);
   return false;
 }
 
+/** One delete per platform (undo.ts fills these in with his logins). */
+export type PlatformDeletes = {
+  bluesky(uris: string[]): Promise<DeleteOutcome>;
+  threads(ids: string[]): Promise<DeleteOutcome>;
+  x(ids: string[]): Promise<DeleteOutcome>;
+  reddit(fullname: string | undefined): Promise<DeleteOutcome>;
+};
+
+/** Route one copy to its platform's delete: records' ids for Bluesky / Threads / X, the fullname for Reddit. */
+export function deleteCopy(e: { platform: Platform; uris?: string[]; externalId?: string }, d: PlatformDeletes): Promise<DeleteOutcome> {
+  switch (e.platform) {
+    case "bluesky":
+      return d.bluesky(e.uris ?? []);
+    case "threads":
+      return d.threads(e.uris ?? []);
+    case "x":
+      return d.x(e.uris ?? []);
+    case "reddit":
+      return d.reddit(e.externalId);
+    default:
+      return Promise.resolve({ ok: false, error: `No delete for ${e.platform}.` });
+  }
+}
+
+/** Threads / X: it went out (or may have) but the row has no post ids to delete by. */
+export function noIdsNote(platform: string): string {
+  const name = platform === "x" ? "X" : platform === "threads" ? "Threads" : platform;
+  return `No ${name} post ids saved: check his ${name} profile, remove it by hand, then run undo:markRemovedByHand.`;
+}
+
 /**
- * One postPublications row. Only Bluesky and Reddit have a delete here. LinkedIn: a row that
- * never went out is removed, else manual. Any other platform (Threads, X): manual unless it's
- * already removed.
+ * One postPublications row. Bluesky and Reddit: deleted by their ids. Threads and X: deleted
+ * by the ids in records; without them it's manual (we can't tell what went out). LinkedIn: a
+ * row that never went out is removed, else manual. Unknown platforms: manual.
  */
 export function publicationStep(
   row: { platform: string; status: string; claimedAt?: number; records?: unknown[]; externalId?: string },
   now: number,
 ): Step {
   if (row.platform === "linkedin") return stepFor(row, now, NEVER_POSTED_PUB, false, false);
+  if (row.platform === "threads" || row.platform === "x") {
+    const hasCopy = pubHasCopy(row);
+    const step = stepFor(row, now, NEVER_POSTED_PUB, hasCopy, hasCopy);
+    return step.kind === "manual" && !step.note ? { kind: "manual", note: noIdsNote(row.platform) } : step;
+  }
   if (row.platform !== "bluesky" && row.platform !== "reddit") {
     if (row.status === "removed") return { kind: "already_removed" };
     return { kind: "manual", note: `No delete for ${row.platform} yet: remove it by hand, then run undo:markRemovedByHand.` };
@@ -192,7 +230,7 @@ export type Entry = {
   platform: Platform;
   url?: string;
   step: Step;
-  uris?: string[]; // Bluesky: every post of the thread, root first
+  uris?: string[]; // Bluesky / Threads / X: every post of the thread, root first
   externalId?: string; // Reddit fullname
   claimedAt?: number; // delete steps: the claim this run made
 };
