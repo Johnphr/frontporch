@@ -195,6 +195,7 @@ test("planDailyEngagement: Bluesky for every active elder; LinkedIn only behind 
     { _id: "c", stage: "active" },
     { _id: "d" },
     { _id: "e", stage: "active", linkedinUrl: "https://www.linkedin.com/in/e" },
+    { _id: "f", stage: "archived", linkedinUrl: "https://www.linkedin.com/in/f" }, // started over: skipped
   ];
   assert.deepEqual(planDailyEngagement(elders, false, 30_000).filter((j) => j.kind === "bluesky"), [
     { kind: "bluesky", elderId: "a", delayMs: 0 },

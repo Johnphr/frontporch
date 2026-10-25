@@ -1,8 +1,9 @@
 // Setup's two saves. Review's button: saveSetup (register once, then host + weekly slot). The
-// accounts step's Finish: placeCall. register gives a sign-up token that every later call needs;
-// a number that's already signed up gets no token (ALREADY_SIGNED_UP), so a retry after a later
-// step failed (or a sign-in again after signing out) reuses the elderId + token saved on this
-// device instead of registering again.
+// accounts step's Finish: placeCall. register gives a sign-up token that every later call needs
+// and a family code (kept in the session for Done and Home; it signs him in elsewhere); a number
+// that's already signed up gets neither (ALREADY_SIGNED_UP: Review points to sign-in), so a retry
+// after a later step failed (or a sign-in again after signing out) reuses the elderId + token
+// saved on this device instead of registering again.
 import { accountApi, coded, signupApi } from '../../api'
 import { browserTimezone } from '../../copy'
 import { forgetDevice, knownSignup, loadSession, saveSession } from '../../lib/session'
@@ -57,7 +58,7 @@ export async function saveSetup({ name, phone, language, hostId, callDay, callHo
   const res = await signupApi.register(name.trim(), phone, language)
   if (!res?.ok) throw coded('ALREADY_SIGNED_UP')
   const signup = { elderId: res.elderId, token: res.token }
-  saveSession({ phone, ...signup })
+  saveSession({ phone, ...signup, ...(res.familyCode ? { familyCode: res.familyCode } : {}) })
   saveCallId(null) // forget a call from an earlier visit
   await saveChoices(signup, choices)
   return signup

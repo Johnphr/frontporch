@@ -451,7 +451,12 @@ npx convex run schedule:tick '{"now": 1792944000000}'   # Sunday 2026-10-25 09:0
   way. After `register`, every public function needs his sign-up token (hashed in an action,
   checked in an internal query or mutation). `signup.*` return ids and ok/reason only;
   `account.*` return only his name, host, call slot and posts that went out, never elder rows,
-  his phone, transcripts or held drafts.
+  his phone, transcripts or held drafts. `signup:signIn({ phone, code })` (phone + 6-digit
+  family code → a new token) and `signup:startOver` (archive that number's setup) are rate
+  limited (5 wrong codes / 15 min per phone) and never say whether a number is signed up.
+- Give a test elder a family code (rows from before codes, or a lost one):
+  `npx convex run signup:setFamilyCode '{"elderId":"<id>"}'` prints `{ familyCode }` once
+  (pass `"code":"123456"` to pick it). Only the hash is stored.
 - v1 leftovers are deleted (`questions.ts`, `answers.ts`, `replies.ts`, `calls.ts`,
   `lib/auth.ts`); `elders.ts` keeps only `seed`. The v1 `questions`, `answers` and `replies`
   tables stay in `schema.ts` until they're empty.

@@ -3,7 +3,7 @@
 // phone yet (email sign-in), or when a helper would otherwise have their own sign-in number called, the
 // phone editor starts open and empty, and the button needs a valid number.
 import { useEffect, useRef, useState } from 'react'
-import { HOSTS, dayName, errorText, formatHour } from '../../copy'
+import { HOSTS, NAV, dayName, errorText, formatHour } from '../../copy'
 import { SETUP, zoneName } from '../../copy/setup'
 import { showPhone } from '../../copy/signin'
 import { COUNTRIES, digitsOf, formatNational, splitE164, toE164 } from '../../phone'
@@ -202,6 +202,12 @@ export default function Review({ data, set, words, lang = 'en', headingRef, sign
         </Row>
       </dl>
       <ErrorText id="finish-error">{errorText(error, lang)}</ErrorText>
+      {error?.code === 'ALREADY_SIGNED_UP' && (
+        // The number has an account already: the way in is phone + family code, not setup.
+        <Button variant="secondary" href="#/signin" className="motion-safe:animate-enter">
+          {NAV.signIn}
+        </Button>
+      )}
     </StepCard>
   )
 }

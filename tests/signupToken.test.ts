@@ -1,17 +1,28 @@
 // Run: npm test
-// register: sign-up token + weekly-call defaults (lib/signupRules.ts).
+// register: sign-up token, family code (signIn / startOver) + weekly-call defaults (lib/signupRules.ts).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { dueActions } from "../convex/lib/schedule.ts";
 import {
   DEFAULT_CALL_HOUR,
+  SIGNIN_TRIES,
+  SIGNIN_WINDOW_MS,
+  archiveFields,
+  archivedPhone,
   cronMayCall,
   defaultCallSlot,
+  familyCodeHash,
   isIanaZone,
   newElderFields,
+  newFamilyCode,
   newSignupToken,
+  normalizeFamilyCode,
+  normalizePhone,
+  recordSignInAttempt,
   sameTokenHash,
+  signInDecision,
+  signInRateLimit,
   signupTimezone,
   signupTokenHash,
   tokenMatches,
@@ -112,4 +123,84 @@ test("sameTokenHash: equal only for the same non-empty value", () => {
   assert.equal(sameTokenHash(h, h.slice(1)), false);
   assert.equal(sameTokenHash(undefined, h), false);
   assert.equal(sameTokenHash("", ""), false);
+});
+
+// ---------- family code (signup.signIn / startOver) ----------
+
+test("family code: 6 digits as a string (leading zeros kept), different every time", () => {
+  const codes = new Set<string>();
+  for (let i = 0; i < 200; i++) {
+    const code = newFamilyCode();
+    assert.match(code, /^\d{6}$/);
+    codes.add(code);
+  }
+  assert.ok(codes.size > 190, "200 codes should be nearly all different");
+  assert.equal(normalizeFamilyCode(" 482 917 "), "482917");
+  assert.equal(normalizeFamilyCode("482-917"), "482917");
+  assert.equal(normalizeFamilyCode("048213"), "048213");
+  for (const bad of ["", "48291", "4829177", "48291a", "482917\n7"]) assert.equal(normalizeFamilyCode(bad), undefined, JSON.stringify(bad));
+});
+
+test("family code: stored as SHA-256 hex; only the same code matches, in any spacing", async () => {
+  const code = newFamilyCode();
+  const hash = await familyCodeHash(code);
+  assert.match(hash ?? "", /^[0-9a-f]{64}$/);
+  assert.ok(!hash!.includes(code));
+  assert.notEqual(hash, await signupTokenHash(code), "codes and tokens never share a hash space");
+  assert.equal(await familyCodeHash(`${code.slice(0, 3)} ${code.slice(3)}`), hash);
+  assert.equal(await familyCodeHash(""), undefined);
+  assert.equal(await familyCodeHash("12345"), undefined);
+  assert.equal(sameTokenHash(hash, await familyCodeHash(code)), true);
+  const other = code === "000000" ? "000001" : "000000";
+  assert.equal(sameTokenHash(hash, await familyCodeHash(other)), false);
+});
+
+test("newElderFields: the code hash is stored next to the token hash, and only when given", () => {
+  const input = { name: "W", phone: "+14155550123", language: "en" as const };
+  assert.equal(newElderFields(input, NOW, "ab".repeat(32)).familyCodeHash, undefined);
+  assert.equal(newElderFields(input, NOW, "ab".repeat(32), "cd".repeat(32)).familyCodeHash, "cd".repeat(32));
+});
+
+test("signInRateLimit: 5 wrong codes in 15 minutes lock the phone; old ones fall off", () => {
+  const MIN = 60_000;
+  const four = [1, 2, 3, 4].map((m) => NOW - m * MIN);
+  assert.deepEqual(signInRateLimit([], NOW), { ok: true });
+  assert.deepEqual(signInRateLimit(four, NOW), { ok: true });
+  assert.deepEqual(signInRateLimit([...four, NOW - 14 * MIN], NOW), { ok: false, reason: "too_many_tries" });
+  assert.deepEqual(signInRateLimit([...four, NOW - SIGNIN_WINDOW_MS], NOW), { ok: true }, "exactly 15 min ago has dropped off");
+  assert.equal(SIGNIN_TRIES, 5);
+  // recordSignInAttempt keeps only what the limit looks at, newest last, at most 5
+  const kept = recordSignInAttempt([NOW - 20 * MIN, ...four], NOW);
+  assert.deepEqual(kept, [...four, NOW]);
+  assert.equal(recordSignInAttempt([...four, NOW - 5 * MIN, NOW - 6 * MIN], NOW).length, 5);
+});
+
+test("signInDecision: right code on a live row only; unknown phone, wrong code and archived read the same", async () => {
+  const code = "482917";
+  const hash = await familyCodeHash(code);
+  const live = { stage: "onboarding", familyCodeHash: hash };
+  assert.deepEqual(signInDecision(live, hash, [], NOW), { ok: true });
+  assert.deepEqual(signInDecision({ stage: "active", familyCodeHash: hash }, hash, [], NOW), { ok: true });
+  const wrong = { ok: false, reason: "wrong_code" };
+  assert.deepEqual(signInDecision(null, hash, [], NOW), wrong, "unknown phone");
+  assert.deepEqual(signInDecision(live, await familyCodeHash("482918"), [], NOW), wrong, "wrong code");
+  assert.deepEqual(signInDecision(live, undefined, [], NOW), wrong, "malformed code");
+  assert.deepEqual(signInDecision(live, "", [], NOW), wrong);
+  assert.deepEqual(signInDecision({ stage: "onboarding" }, hash, [], NOW), wrong, "a row from before codes never matches");
+  assert.deepEqual(signInDecision({ stage: "archived", familyCodeHash: hash }, hash, [], NOW), wrong, "archived");
+  // the limit wins over everything, right code included, and says nothing about the row
+  const five = [1, 2, 3, 4, 5].map((m) => NOW - m * 60_000);
+  assert.deepEqual(signInDecision(live, hash, five, NOW), { ok: false, reason: "too_many_tries" });
+  assert.deepEqual(signInDecision(null, hash, five, NOW), { ok: false, reason: "too_many_tries" });
+});
+
+test("archiveFields: archived, the phone freed but readable, token and code gone", () => {
+  const fields = archiveFields("+14155550123", NOW);
+  assert.deepEqual(fields, { stage: "archived", phone: `archived:${NOW}:+14155550123`, signupTokenHash: undefined, familyCodeHash: undefined });
+  assert.equal(archivedPhone("+14155550123", NOW).endsWith("+14155550123"), true);
+  assert.notEqual(archivedPhone("+14155550123", NOW), "+14155550123", "register's by_phone lookup won't find it");
+  assert.equal(normalizePhone(archivedPhone("+14155550123", NOW)), undefined, "inbound's normalized scan won't match it either");
+  // the schedule and the call loop skip him
+  assert.match(dueActions({ stage: "archived", timezone: "America/Los_Angeles", callDay: "sunday", callHour: 10 }, NOW).skipReason ?? "", /not onboarding or active/);
+  assert.equal(cronMayCall({ stage: "archived", phone: "+14155550123" }, { PUBLIC_CALLS: "all" }), true, "cronMayCall isn't the gate: runTick skips by stage first");
 });

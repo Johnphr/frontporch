@@ -184,8 +184,9 @@ crons, and the actions that talk to other services. There is no other backend.
   per-person Reddit connect yet).
 - **Threads keyword search and quote-post answers** to strangers' questions, built and
   switched off until Meta's app review. Until then, only invited Threads testers can connect.
-- **A real sign-in** for the account page (switch host, change call time, see his posts),
-  which uses a placeholder sign-in today.
+- **Verifying the phone number** at sign-in. Today his page opens on any device with his
+  phone number + the 6-digit family code setup gave him (rate limited); an SMS code would
+  prove the number is his.
 - **Calling Mexico from a Mexican number**, by bringing our own number into Cartesia through
   Twilio or SIP.
 

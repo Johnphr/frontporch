@@ -1,17 +1,20 @@
-// Home tab: greeting, who calls him (his host), the weekly call day and time, and where his
-// stories go (connect, or reconnect an account that stopped working).
+// Home tab: greeting, who calls him (his host), the weekly call day and time, where his
+// stories go (connect, or reconnect an account that stopped working), and his family code
+// behind a button (only when this device knows it: it came from setup or from signing in).
 import { useState } from 'react'
 import { CallUsLine } from '../../ui/CallUsLine'
 import { accountApi } from '../../api'
-import { DAYS, HOSTS, TIME_PRESETS, browserTimezone, dayName, errorText, formatHour, hostForLanguage } from '../../copy'
+import { DAYS, FAMILY_CODE_BY_LANG, HOSTS, TIME_PRESETS, browserTimezone, dayName, errorText, formatHour, hostForLanguage } from '../../copy'
 import { HOME } from '../../copy/account'
 import { accountsCopy } from '../../copy/accounts'
 import { CheckMark } from '../../art/setup'
 import { BlueskyConnect } from '../setup/BlueskyConnect'
+import { FamilyCodeCard } from '../setup/Done'
 import { OAuthConnect } from '../setup/OAuthConnect'
 import { Button, Card, ErrorText, PillChoices, Toast, cx } from '../../ui/controls'
 import HostCard from './HostCard'
 import { go } from '../../lib/route'
+import { loadSession } from '../../lib/session'
 import { unfinishedSetup } from '../../lib/setupProgress'
 
 const H2 = 'text-subhead'
@@ -133,7 +136,27 @@ function AccountsCard({ elderId, token, accounts, onSaved }) {
   )
 }
 
+/** "Show my family code": hidden until pressed, so a glance at his page over his shoulder doesn't give it away. */
+function FamilyCodeSection({ code }) {
+  const F = FAMILY_CODE_BY_LANG.en
+  const [shown, setShown] = useState(false)
+  if (!code) return null
+  return (
+    <Card aria-labelledby="family-code-section-title">
+      <h2 id="family-code-section-title" className={H2}>
+        {HOME.familyCodeTitle}
+      </h2>
+      <p>{HOME.familyCodeLead}</p>
+      {shown && <FamilyCodeCard code={code} id="family-code-shown" />}
+      <Button variant="secondary" aria-expanded={shown} aria-controls={shown ? 'family-code-shown' : undefined} onClick={() => setShown((s) => !s)}>
+        {shown ? F.hide : F.show}
+      </Button>
+    </Card>
+  )
+}
+
 export default function HomeTab({ elderId, token, profile, onChange }) {
+  const [familyCode] = useState(() => loadSession().familyCode || '')
   const [toast, setToast] = useState(null)
   const say = (text) => setToast({ text, id: Date.now() })
   const hostId = knownHost(profile)
@@ -190,6 +213,7 @@ export default function HomeTab({ elderId, token, profile, onChange }) {
           }}
         />
       )}
+      <FamilyCodeSection code={familyCode} />
       <Toast message={toast} />
     </>
   )

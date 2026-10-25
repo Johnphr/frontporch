@@ -68,6 +68,17 @@ reconnect. Website sign-ups are called (by the button or the weekly cron) only w
 `PUBLIC_CALLS` allows their number. Details:
 [ARCHITECTURE.md → Accounts](ARCHITECTURE.md#accounts-his-own-bluesky-from-sign-up).
 
+## Signing in
+
+No passwords. Setup ends with a **6-digit family code**, shown once ("write it down"). On any
+other phone or computer he (or a family member) signs in with his phone number + that code
+(`signup:signIn`), which signs the old device out. The device that did the setup stays signed in
+without the code. Five wrong codes lock the number for 15 minutes; an unknown number answers like
+a wrong code. "Start over with this number" (`signup:startOver`, behind the code) archives the
+old setup so the number can sign up again; posts already published stay up. Test rows made before
+codes existed get one with `npx convex run signup:setFamilyCode '{"elderId":"<id>"}'` (prints the
+code once). Details: [ARCHITECTURE.md → Family code](ARCHITECTURE.md#accounts-his-own-bluesky-from-sign-up).
+
 ## X (Twitter)
 
 Posting is off by default (`X_POSTING`): X charges for every post and every read. Code: `convex/xAuth.ts` (connect),

@@ -67,10 +67,18 @@ export const signupApi = {
   /** [{ id, name, language: 'en' | 'es', description }] */
   listCharacters: () => call('query', 'listCharacters', {}),
   /**
-   * New elder -> { ok: true, elderId, token } | { ok: false, reason: 'already_signed_up' }.
-   * The token proves this browser made the sign-up: every later call needs it.
+   * New elder -> { ok: true, elderId, token, familyCode } | { ok: false, reason: 'already_signed_up' }.
+   * The token proves this browser made the sign-up: every later call needs it. The 6-digit family
+   * code is shown once and signs him in on any other device (signIn).
    */
   register: (name, phone, language) => call('action', 'register', { name, phone, language, timeZone: browserTimeZone() }),
+  /**
+   * Phone + family code -> { ok: true, elderId, token } (a new token: other devices are signed out)
+   * | { ok: false, reason: 'wrong_code' | 'too_many_tries' }. An unknown phone is 'wrong_code' too.
+   */
+  signIn: (phone, code) => call('action', 'signIn', { phone, code }),
+  /** Archive the sign-up for this phone (behind the code) so it can sign up again: { ok: true } | { ok: false, reason } as signIn. */
+  startOver: (phone, code) => call('action', 'startOver', { phone, code }),
   setCharacter: (elderId, token, characterId) => call('action', 'setCharacter', { elderId, token, characterId }),
   /**
    * { ok: true, handle } | { ok: false, error } with error one of: invalid_handle, not_app_password,

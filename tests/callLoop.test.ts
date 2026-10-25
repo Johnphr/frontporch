@@ -21,6 +21,7 @@ test("loop: off without an interval; never calls someone who never had a call", 
   assert.deepEqual(loopDecision(active, [done(60)], NOW, null), { action: "off" });
   assert.deepEqual(loopDecision(active, [], NOW, 5), { action: "skip", reason: "never_called" });
   assert.deepEqual(loopDecision({}, [done(60)], NOW, 5), { action: "skip", reason: "not_signed_up" });
+  assert.deepEqual(loopDecision({ stage: "archived" }, [done(60)], NOW, 5), { action: "skip", reason: "not_signed_up" }, "started over");
 });
 
 test("loop: the interval starts when the call ENDS; an open call makes it wait", () => {
