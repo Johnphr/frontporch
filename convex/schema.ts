@@ -238,6 +238,8 @@ export default defineSchema({
     keywords: v.array(v.string()), // the keywords it was found with
     usedAt: v.optional(v.number()),
     usedInCallId: v.optional(v.id("calls")),
+    // ---- thread replies: Bluesky post at:// uri, so a reply threads under it ----
+    atUri: v.optional(v.string()),
   })
     .index("by_elder_priority", ["elderId", "priority"])
     .index("by_elder_fingerprint", ["elderId", "fingerprint"]),
@@ -304,4 +306,33 @@ export default defineSchema({
     refreshedAt: v.number(), // epoch ms
   }).index("by_elder", ["elderId"]),
   // ---- end Brain block ----
+
+  // ---- Integrations: thread replies (threadReplies.ts) ----
+  // His answer, posted back on the online thread a story call's question came from (an
+  // audienceQuestions row). One reply per thread (by_audience).
+  // Only Bluesky (auto) and Reddit (once REDDIT_POSTING=on); no row for any other source.
+  // status: draft (ready to post) | needs_review (held by the fact-check) | posting
+  //       | posted | failed (nothing went out) | maybe_posted (unclear: check the thread)
+  threadReplies: defineTable({
+    elderId: v.id("elders"),
+    callId: v.id("calls"),
+    audienceQuestionId: v.id("audienceQuestions"),
+    platform: v.string(), // bluesky | reddit
+    threadUrl: v.string(),
+    threadRef: v.optional(v.string()), // Bluesky: the question post's at:// uri
+    text: v.string(), // as posted: body + disclosure line
+    language: v.optional(v.string()), // en | es
+    status: v.string(),
+    guardIssues: v.optional(v.array(v.string())),
+    guardSummary: v.optional(v.string()),
+    postedUrl: v.optional(v.string()),
+    error: v.optional(v.string()),
+    claimedAt: v.optional(v.number()), // epoch ms; stale claims (>15 min) can be retaken
+    approvedAt: v.optional(v.number()), // epoch ms; a held reply posted on purpose
+    postedAt: v.optional(v.number()), // epoch ms
+  })
+    .index("by_audience", ["audienceQuestionId"])
+    .index("by_call", ["callId"])
+    .index("by_status", ["status"]),
+  // ---- end thread replies block ----
 });

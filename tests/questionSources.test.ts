@@ -39,7 +39,8 @@ test("source list: names unique, Quora + Discourse start disabled", () => {
   assert.equal(source("discourse-search").enabled, false);
   assert.deepEqual(
     enabledSources().map((s) => s.name),
-    ["reddit-search", "reddit-communities", "stackexchange-search"],
+    // bluesky-search is on in the list; apify.findAudienceQuestions skips it without his login
+    ["reddit-search", "reddit-communities", "stackexchange-search", "bluesky-search"],
   );
   assert.deepEqual(enabledSources(["quora-search"]).map((s) => s.name), ["quora-search"], "explicit names win");
 });

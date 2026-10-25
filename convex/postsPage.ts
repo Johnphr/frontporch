@@ -72,7 +72,8 @@ export const servePostsPage = httpAction(async (ctx, request) => {
     }
   }
   const posts = await ctx.runQuery(internal.postsPage.listForPage, {});
-  return new Response(renderPostsPage(posts, { key, check }), {
+  const replies = await ctx.runQuery(internal.threadReplies.listForPage, {});
+  return new Response(renderPostsPage(posts, { key, check, replies }), {
     headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Robots-Tag": "noindex" },
   });
 });

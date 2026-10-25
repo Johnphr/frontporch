@@ -17,6 +17,9 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { errorMessage, runActor, sleep } from "./lib/apifyClient";
+import { blueskySearchPlan } from "./lib/bluesky";
+import { searchPosts, sharedSessionCache, withSession, type FetchFn } from "./lib/blueskyClient";
+import { blueskyLoginForElder, type BlueskyLogin } from "./lib/logins";
 import {
   type AudienceQuestion,
   type SourceConfig,
@@ -195,7 +198,7 @@ type SourceReport = {
 
 type Fetched = { items: unknown[]; errors: string[] };
 
-async function fetchSource(source: SourceConfig, keywords: string[]): Promise<Fetched> {
+async function fetchSource(source: SourceConfig, keywords: string[], bluesky: BlueskyLogin | null): Promise<Fetched> {
   if (source.kind === "apify") {
     if (!source.actor) throw new Error(`source ${source.name} has no actor`);
     const items = await runActor(source.actor, buildApifyInput(source, keywords), {
@@ -214,6 +217,29 @@ async function fetchSource(source: SourceConfig, keywords: string[]): Promise<Fe
       fetchFn: (url) => fetch(url),
       sleepFn: sleep,
     });
+  }
+
+  if (source.kind === "bluesky_search") {
+    // His session (the public AppView refuses unauthenticated search), reused across keywords
+    // and runs (lib/blueskyClient.ts). Every keyword, a few posts each. One failing keyword
+    // doesn't lose the others. Never logs the password or the token.
+    if (!bluesky) return { items: [], errors: ["His Bluesky account isn't connected (see lib/logins.ts)"] };
+    const fetchFn = fetch as unknown as FetchFn;
+    const since = source.maxAgeDays ? new Date(Date.now() - source.maxAgeDays * 86_400_000).toISOString() : undefined;
+    const { queries, limit } = blueskySearchPlan(keywords);
+    const items: unknown[] = [];
+    const errors: string[] = [];
+    for (const query of queries) {
+      try {
+        const found = await withSession(fetchFn, sharedSessionCache(), bluesky, (session) =>
+          searchPosts(fetchFn, session, query, { limit, ...(since ? { since } : {}) }),
+        );
+        items.push(...found);
+      } catch (error) {
+        errors.push(`Bluesky "${query}": ${errorMessage(error)}`);
+      }
+    }
+    return { items, errors };
   }
 
   // discourse_json: one failing forum/query doesn't lose the others
@@ -257,7 +283,11 @@ export const findAudienceQuestions = internalAction({
     const keywords = given.length ? given.slice(0, 5) : (elder?.keywords ?? deriveKeywords(null));
     const now = Date.now();
 
-    const sources = enabledSources(args.sources);
+    // Bluesky needs his login: skip it unless it's configured (or asked for by name).
+    const bluesky = await blueskyLoginForElder(args.elderId);
+    const sources = enabledSources(args.sources).filter(
+      (s) => s.kind !== "bluesky_search" || bluesky !== null || Boolean(args.sources?.includes(s.name)),
+    );
     if (sources.length === 0) throw new Error("No audience-question sources enabled or matched");
 
     const reports: Record<string, SourceReport> = {};
@@ -266,7 +296,7 @@ export const findAudienceQuestions = internalAction({
     await Promise.all(
       sources.map(async (source) => {
         try {
-          const { items, errors } = await fetchSource(source, keywords);
+          const { items, errors } = await fetchSource(source, keywords, bluesky);
           const result = processItems(items, source, keywords, now);
           reports[source.name] = {
             fetched: items.length,
@@ -312,6 +342,7 @@ const audienceQuestionInput = v.object({
   fingerprint: v.string(),
   priority: v.number(),
   keywords: v.array(v.string()),
+  atUri: v.optional(v.string()), // Bluesky post uri (for threaded replies)
 });
 
 /** Insert new questions; for ones we already have (same fingerprint), refresh the ranking if unused. */

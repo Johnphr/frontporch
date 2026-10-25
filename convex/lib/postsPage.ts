@@ -19,7 +19,22 @@ export type PagePost = {
   heldFor?: "quality" | "guard";
 };
 
-export type PageCheck = { postId: string; pass: boolean; summary: string; issues: string[]; mode: string } | { postId: string; error: string };
+/** A thread reply (threadReplies.ts) as the review page shows it. */
+export type PageReply = {
+  id: string;
+  createdAt: number;
+  platform: string;
+  status: string;
+  threadUrl: string;
+  threadTitle: string;
+  text: string;
+  guardSummary?: string;
+  guardIssues?: string[];
+  postedUrl?: string;
+  error?: string;
+};
+
+export type PageCheck ={ postId: string; pass: boolean; summary: string; issues: string[]; mode: string } | { postId: string; error: string };
 
 const ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 
@@ -76,7 +91,58 @@ function card(p: PagePost, key: string, check: PageCheck | undefined): string {
 </article>`;
 }
 
-export function renderPostsPage(posts: PagePost[], opts: { key: string; check?: PageCheck }): string {
+// ---------- thread replies ----------
+
+const REPLY_STATUS_LABEL: Record<string, string> = {
+  draft: "Ready to post",
+  needs_review: "Held by fact-check",
+  posting: "Posting",
+  posted: "Posted",
+  failed: "Failed",
+  maybe_posted: "Maybe posted: check the thread",
+};
+
+const REPLY_PLATFORM_LABEL: Record<string, string> = {
+  bluesky: "Bluesky",
+  reddit: "Reddit",
+};
+
+/** Only http(s) links are rendered as links (the data came from scraped pages). */
+function safeHref(url: string | undefined): string | undefined {
+  return url && /^https?:\/\//i.test(url) ? escapeHtml(url) : undefined;
+}
+
+function replyCard(r: PageReply): string {
+  const date = new Date(r.createdAt).toISOString().slice(0, 16).replace("T", " ");
+  const thread = safeHref(r.threadUrl);
+  const posted = safeHref(r.postedUrl);
+  // Copy text / Open thread only matter for a reply a person has to look at.
+  const canCopy = Boolean(r.text) && (r.status === "needs_review" || r.status === "maybe_posted");
+  const unclear = r.status === "maybe_posted"
+    ? `<p class="err">It may already be on the thread. Open the thread first; only if his reply isn't there, run <code>npx convex run threadReplies:postReply '{"replyId":"${escapeHtml(r.id)}","approve":true}'</code></p>`
+    : "";
+  const held = r.guardSummary || r.guardIssues?.length
+    ? `<div class="check bad"><strong>Held:</strong> ${escapeHtml(r.guardSummary ?? "")}${issuesList(r.guardIssues ?? [])}</div>`
+    : "";
+  return `<article id="reply-${escapeHtml(r.id)}">
+  <header><span class="who">${escapeHtml(REPLY_PLATFORM_LABEL[r.platform] ?? r.platform)}</span><span class="badge s-${escapeHtml(r.status)}">${escapeHtml(REPLY_STATUS_LABEL[r.status] ?? r.status)}</span><time>${date} UTC</time></header>
+  <p class="q">Thread: ${escapeHtml(r.threadTitle)}</p>
+  ${r.text ? `<div class="post" id="reply-text-${escapeHtml(r.id)}">${escapeHtml(r.text)}</div>` : ""}
+  ${r.error ? `<p class="err">${escapeHtml(r.error)}</p>` : ""}
+  ${unclear}${held}
+  <footer>${thread && canCopy ? `<a href="${thread}" target="_blank" rel="noopener noreferrer">Open thread</a>` : ""}${canCopy ? ` <button type="button" data-copy="reply-text-${escapeHtml(r.id)}">Copy text</button>` : ""}${posted ? ` <a href="${posted}" target="_blank" rel="noopener noreferrer">See the reply</a>` : ""} <span class="id">${escapeHtml(r.id)}</span></footer>
+</article>`;
+}
+
+/** The "Thread replies" section ("" when there are none). Copy buttons use a tiny inline script. */
+export function renderRepliesSection(replies: PageReply[]): string {
+  if (!replies.length) return "";
+  return `<h1>Thread replies</h1><p class="sub">His answers on the Bluesky and Reddit threads his call questions came from, posted from his account. "Held by fact-check": review it, then approve with threadReplies:postReply (approve: true). "Ready to post" (written while AUTO_POST was off): send them with <code>npx convex run threadReplies:postDrafts</code>.</p>
+${replies.map(replyCard).join("\n")}
+<script>document.addEventListener("click",function(e){var b=e.target.closest&&e.target.closest("button[data-copy]");if(!b)return;var t=document.getElementById(b.getAttribute("data-copy"));if(!t||!navigator.clipboard)return;navigator.clipboard.writeText(t.textContent||"").then(function(){b.textContent="Copied";setTimeout(function(){b.textContent="Copy text"},1500)})});</script>`;
+}
+
+export function renderPostsPage(posts: PagePost[], opts: { key: string; check?: PageCheck; replies?: PageReply[] }): string {
   const body = posts.length
     ? posts.map((p) => card(p, opts.key, opts.check)).join("\n")
     : `<p class="empty">No posts yet. Finish a story call (or run pipeline:seedEndedCall with tests/fixtures/story_call.json).</p>`;
@@ -101,5 +167,6 @@ footer{display:flex;gap:12px;font-size:13px;flex-wrap:wrap}a{color:inherit}.id{f
 </style></head><body><main>
 <h1>Generated posts</h1><p class="sub">Temporary review page. Newest first, as they would be published. Nothing here posts to LinkedIn.</p>
 ${body}
+${renderRepliesSection(opts.replies ?? [])}
 </main></body></html>`;
 }
