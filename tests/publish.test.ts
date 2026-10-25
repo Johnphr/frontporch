@@ -624,3 +624,26 @@ test("runPublish: only Threads connected -> fact-checked, posted there, publishe
   assert.ok(f.log.includes("guard"));
   assert.deepEqual(f.log.filter((l) => l.startsWith("post:")), ["post:threads"]);
 });
+
+test("blueskyLoginState: an account whose login can't be read says so (not 'not connected')", async () => {
+  const { blueskyLoginState, blueskyProblemReason } = await import("../convex/lib/logins.ts");
+  const { encryptSecret, loadAccountKey } = await import("../convex/lib/accountCrypto.ts");
+  const key = Buffer.alloc(32, 7).toString("base64");
+  const secret = await encryptSecret(await loadAccountKey(key), "app-pass", "e1", "bluesky");
+  const row = { status: "connected", handle: "walter.bsky.social", did: "did:plc:him", secret, connectedAt: 1 };
+  const ctx = { runQuery: async () => row };
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    assert.equal((await blueskyLoginState(ctx, "e1", { ACCOUNTS_ENC_KEY: key })).login?.identifier, "walter.bsky.social");
+    assert.deepEqual(await blueskyLoginState(ctx, "e1", {}), { login: null, problem: "unreadable" }, "key missing");
+    const rotated = Buffer.alloc(32, 9).toString("base64");
+    assert.deepEqual(await blueskyLoginState(ctx, "e1", { ACCOUNTS_ENC_KEY: rotated }), { login: null, problem: "unreadable" }, "key rotated");
+    const broken = { runQuery: async () => Promise.reject(new Error("db")) };
+    assert.deepEqual(await blueskyLoginState(broken, "e1", {}), { login: null, problem: "lookup_failed" });
+    assert.deepEqual(await blueskyLoginState({ runQuery: async () => null }, "e1", {}), { login: null });
+  } finally {
+    console.warn = warn;
+  }
+  assert.equal(blueskyProblemReason("unreadable"), "His Bluesky login couldn't be read (check ACCOUNTS_ENC_KEY).");
+});

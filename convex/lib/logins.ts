@@ -77,28 +77,47 @@ function everConnected(row: AccountForLogin): boolean {
  * someone else's account. Never throws.
  */
 export async function blueskyLoginForElder(ctx: LoginCtx, elderId: string | null, env: Env = process.env): Promise<BlueskyLogin | null> {
+  return (await blueskyLoginState(ctx, elderId, env)).login;
+}
+
+/**
+ * Same lookup, plus why there's no login when he has an account we couldn't use:
+ * "unreadable" (ACCOUNTS_ENC_KEY missing or rotated) or "lookup_failed". Never throws.
+ */
+export async function blueskyLoginState(
+  ctx: LoginCtx,
+  elderId: string | null,
+  env: Env = process.env,
+): Promise<{ login: BlueskyLogin | null; problem?: "unreadable" | "lookup_failed" }> {
   if (ctx && elderId) {
     let row: AccountForLogin;
     try {
       row = await ctx.runQuery(GET_FOR_LOGIN, { elderId, platform: "bluesky" });
     } catch {
       console.warn(`logins: elder ${elderId} Bluesky account lookup failed`);
-      return null;
+      return { login: null, problem: "lookup_failed" };
     }
     if (everConnected(row)) {
-      if (!row || row.status !== "connected" || !row.secret || !row.handle) return null; // revoked or disconnected
+      if (!row || row.status !== "connected" || !row.secret || !row.handle) return { login: null }; // revoked or disconnected
       try {
         const key = await loadAccountKey(env.ACCOUNTS_ENC_KEY);
         const password = await decryptSecret(key, row.secret, elderId, "bluesky");
-        return { service: blueskyService(env.BLUESKY_SERVICE), identifier: row.handle, password };
+        return { login: { service: blueskyService(env.BLUESKY_SERVICE), identifier: row.handle, password } };
       } catch {
         // Fixed text: the error can name env vars.
         console.warn(`logins: elder ${elderId} Bluesky secret could not be read (check ACCOUNTS_ENC_KEY)`);
-        return null;
+        return { login: null, problem: "unreadable" };
       }
     }
   }
-  return demoAllowed(ctx, elderId, env) ? envBlueskyLogin(env) : null;
+  return { login: demoAllowed(ctx, elderId, env) ? envBlueskyLogin(env) : null };
+}
+
+/** The skip reason for a Bluesky account we couldn't use (blueskyLoginState's problem). */
+export function blueskyProblemReason(problem: "unreadable" | "lookup_failed"): string {
+  return problem === "unreadable"
+    ? "His Bluesky login couldn't be read (check ACCOUNTS_ENC_KEY)."
+    : "His Bluesky account couldn't be looked up; nothing was posted.";
 }
 
 /**

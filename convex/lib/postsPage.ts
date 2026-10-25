@@ -3,6 +3,8 @@
 // platform stands, to iterate fast on the content. Pure HTML rendering, no Convex imports
 // (unit-tested). Remove with postsPage.ts.
 
+import { isHoldReason, postUndoInfo } from "./undo.ts";
+
 export type PagePost = {
   id: string;
   createdAt: number;
@@ -24,6 +26,9 @@ export type PagePost = {
   quality?: { score: number; passed: boolean; rounds: number; notes: string[] };
   /** Why a needs_review post is held (posts.heldFor; missing = the fact-check). */
   heldFor?: "quality" | "thread_fit" | "guard";
+  /** Taken down (posts.removedAt / removedReason; "held: ..." = held by him on the call). */
+  removedAt?: number;
+  removedReason?: string;
 };
 
 export type PagePublication = { id: string; platform: string; status: string; url?: string; error?: string; posts?: number };
@@ -59,6 +64,7 @@ const STATUS_LABEL: Record<string, string> = {
   partly_posted: "Partly posted",
   failed: "Failed",
   needs_attention: "Needs attention",
+  removed: "Removed",
 };
 
 const PUBLICATION_LABEL: Record<string, string> = {
@@ -90,7 +96,8 @@ function partly(r: PagePublication): boolean {
 }
 
 /** The post's label, from its real state: a platform row that went out (or may have) wins over "pending". */
-export function statusLabel(p: Pick<PagePost, "status" | "heldFor" | "publications">): string {
+export function statusLabel(p: Pick<PagePost, "status" | "heldFor" | "publications" | "removedAt" | "removedReason">): string {
+  if (p.removedAt !== undefined || p.status === "removed") return isHoldReason(p.removedReason) ? "Held by him on the call" : STATUS_LABEL.removed;
   if (p.status === "needs_review" && p.heldFor === "quality") return "Held: below the quality bar";
   if (p.status === "needs_review" && p.heldFor === "thread_fit") return "Held: too long for a Bluesky thread";
   const rows = p.publications ?? [];
@@ -147,6 +154,20 @@ function publicationsBlock(p: PagePost): string {
   return `<ul class="pubs">${items.join("")}</ul>`;
 }
 
+const WENT_OUT = new Set(["posted", "maybe_posted", "posting", "removing"]);
+
+/** Take-down status + the undo command (lib/undo.postUndoInfo), for a post that went out or was taken down. */
+export function undoBlock(p: Pick<PagePost, "id" | "removedAt" | "removedReason" | "publications">): string {
+  const rows = p.publications ?? [];
+  const wentOut = rows.some((r) => WENT_OUT.has(r.status) || partly(r));
+  if (p.removedAt === undefined && !wentOut) return "";
+  const info = postUndoInfo(
+    { _id: p.id, ...(p.removedAt !== undefined ? { removedAt: p.removedAt } : {}), ...(p.removedReason ? { removedReason: p.removedReason } : {}) },
+    rows,
+  );
+  return `<p class="cmd">${escapeHtml(info.status)}${info.command ? ` <code>${escapeHtml(info.command)}</code>` : ""}</p>`;
+}
+
 function qualityBlock(q: PagePost["quality"]): string {
   if (!q) return "";
   const rewrites = `${q.rounds} rewrite${q.rounds === 1 ? "" : "s"}`;
@@ -170,7 +191,8 @@ function card(p: PagePost, key: string, check: PageCheck | undefined): string {
   ${publicationsBlock(p)}
   ${p.error ? `<p class="err">${escapeHtml(p.error)}</p>` : ""}
   ${qualityBlock(p.quality)}${stored}${checkBlock(check?.postId === p.id ? check : undefined)}
-  ${cmd ? `<p class="cmd">${p.status === "needs_review" ? "Approve and post" : "Post it"}: <code>${escapeHtml(cmd)}</code></p>` : ""}
+  ${cmd && p.removedAt === undefined ? `<p class="cmd">${p.status === "needs_review" ? "Approve and post" : "Post it"}: <code>${escapeHtml(cmd)}</code></p>` : ""}
+  ${undoBlock(p)}
   <footer><a href="${href}">Fact-check now</a> <span class="id">${escapeHtml(p.id)}</span></footer>
 </article>`;
 }
@@ -243,7 +265,7 @@ article{background:var(--card);border:1px solid var(--line);border-radius:10px;p
 header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:14px}
 .who{font-weight:600}time,.id,.q{color:var(--muted)}.q{margin:0;font-size:14px}
 .badge{border:1px solid var(--line);border-radius:999px;padding:2px 8px;font-size:12px}
-.s-needs_review,.s-failed,.s-partly_posted,.s-needs_attention{color:var(--bad);border-color:var(--bad)}.s-published{color:var(--good);border-color:var(--good)}
+.s-needs_review,.s-failed,.s-partly_posted,.s-needs_attention{color:var(--bad);border-color:var(--bad)}.s-published{color:var(--good);border-color:var(--good)}.s-removed{color:var(--muted)}
 .post{white-space:pre-wrap;font-size:15.5px}
 .check{font-size:14px;border-left:3px solid var(--line);padding:4px 10px}.check.good{border-color:var(--good)}.check.bad{border-color:var(--bad)}
 .check ul{margin:4px 0 0;padding-left:18px}.err{color:var(--bad);margin:0;font-size:14px}
