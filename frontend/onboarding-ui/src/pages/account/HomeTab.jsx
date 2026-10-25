@@ -1,9 +1,14 @@
-// Home tab: greeting, who calls him (Pip or Juanito), and the weekly call day and time.
+// Home tab: greeting, who calls him (Pip or Juanito), the weekly call day and time, and where
+// his stories go (connect, or reconnect an account that stopped working).
 import { useState } from 'react'
 import { accountApi, signupApi } from '../../api'
 import { HostAvatar } from '../../art/hosts'
 import { DAYS, HOSTS, TIME_PRESETS, browserTimezone, dayName, errorText, formatHour } from '../../copy'
 import { HOME } from '../../copy/account'
+import { accountsCopy } from '../../copy/accounts'
+import { CheckMark } from '../../art/setup'
+import { BlueskyConnect } from '../setup/BlueskyConnect'
+import { OAuthConnect } from '../setup/OAuthConnect'
 import { Button, Card, ErrorText, PillChoices, Toast, cx } from '../../ui/controls'
 
 const H2 = 'text-subhead'
@@ -137,6 +142,71 @@ function ScheduleCard({ elderId, token, profile, host, onSaved }) {
   )
 }
 
+const NAMES = { bluesky: 'Bluesky', threads: 'Threads', x: 'X' }
+
+/**
+ * His Bluesky / Threads / X accounts. One that's missing or stopped working (invalid) can be
+ * (re)connected with his sign-up token; a working one stays as it is (the backend locks it).
+ */
+function AccountsCard({ elderId, token, accounts, onSaved }) {
+  const A = accountsCopy()
+  const P = A.page
+  const [open, setOpen] = useState(false)
+  const state = (id) => accounts.find((a) => a.platform === id) || { platform: id, status: 'none' }
+  const bluesky = state('bluesky')
+  const oauthOpen = ['threads', 'x'].filter((id) => state(id).status !== 'connected')
+  const line = (a) =>
+    a.status === 'connected' ? P.connected(NAMES[a.platform], a.handle) : a.status === 'invalid' ? P.invalid(NAMES[a.platform]) : P.none(NAMES[a.platform])
+
+  return (
+    <Card aria-labelledby="accounts-title">
+      <h2 id="accounts-title" className={H2}>
+        {P.title}
+      </h2>
+      <ul className="m-0 flex w-full list-none flex-col gap-3 p-0">
+        {accounts.map((a) => (
+          <li key={a.platform} className={cx('flex items-start gap-3', a.status === 'invalid' && 'font-bold text-alert')}>
+            {a.status === 'connected' && <CheckMark className="h-7 w-7 flex-none" fill="#8FAE9B" />}
+            <span>{line(a)}</span>
+          </li>
+        ))}
+      </ul>
+      {bluesky.status !== 'connected' &&
+        (open ? (
+          <div className="flex w-full flex-col gap-4 rounded-inset border border-line p-5 sm:p-6">
+            <BlueskyConnect
+              idPrefix="home-bsky"
+              words={A.bluesky}
+              elderId={elderId}
+              token={token}
+              connectLabel={bluesky.status === 'invalid' ? P.reconnect('Bluesky') : P.connect('Bluesky')}
+              onDone={(res) => {
+                setOpen(false)
+                onSaved('bluesky', res.status === 'saved' ? res.handle : bluesky.handle)
+              }}
+            />
+            <Button variant="link" small onClick={() => setOpen(false)}>
+              {P.cancel}
+            </Button>
+          </div>
+        ) : (
+          <Button variant="secondary" onClick={() => setOpen(true)}>
+            {bluesky.status === 'invalid' ? P.reconnect('Bluesky') : P.connect('Bluesky')}
+          </Button>
+        ))}
+      {oauthOpen.length > 0 && (
+        <OAuthConnect
+          words={A.oauth}
+          elderId={elderId}
+          token={token}
+          only={oauthOpen}
+          labels={Object.fromEntries(oauthOpen.filter((id) => state(id).status === 'invalid').map((id) => [id, P.reconnect(NAMES[id])]))}
+        />
+      )}
+    </Card>
+  )
+}
+
 export default function HomeTab({ elderId, token, profile, onChange }) {
   const [toast, setToast] = useState(null)
   const say = (text) => setToast({ text, id: Date.now() })
@@ -170,6 +240,19 @@ export default function HomeTab({ elderId, token, profile, onChange }) {
           say(HOME.scheduleSaved(host, dayName(patch.callDay), formatHour(patch.callHour)))
         }}
       />
+      {profile.accounts && (
+        <AccountsCard
+          elderId={elderId}
+          token={token}
+          accounts={profile.accounts}
+          onSaved={(platform, handle) => {
+            onChange({
+              accounts: profile.accounts.map((a) => (a.platform === platform ? { platform, status: 'connected', ...(handle ? { handle } : {}) } : a)),
+            })
+            say(accountsCopy().page.saved(NAMES[platform]))
+          }}
+        />
+      )}
       <Toast message={toast} />
     </>
   )

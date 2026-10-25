@@ -37,7 +37,7 @@ const EN = {
     connect: 'Connect Bluesky',
     connecting: 'Checking with Bluesky…',
     connected: (handle) => `Bluesky connected: @${handle}. Stories will be posted there.`,
-    locked: 'Your accounts are already set up.',
+    locked: 'Bluesky is already connected and working. Nothing to change.',
     errors: {
       invalid_handle: 'Please check the username. It should look like walter.bsky.social.',
       not_app_password: 'For safety, please use an app password, not the regular password. You can make one with the link above.',
@@ -48,7 +48,7 @@ const EN = {
       rate_limited: 'You have tried a few times already. Please wait a few minutes and try again.',
       busy: 'Many people are connecting right now. Please try again in a few minutes.',
       bluesky_busy: 'Bluesky is not answering right now. Please try again in a few minutes.',
-      locked: 'Your accounts are already set up.',
+      locked: 'Bluesky is already connected and working. Nothing to change.',
       not_found: "We couldn't find your sign-up. Please sign in again.",
       failed: 'Something went wrong on our side. Please try again in a moment.',
     },
@@ -74,10 +74,22 @@ const EN = {
       missing_scope: 'The permission to post is missing. Tap the button again and allow every permission.',
       not_configured: 'This network is not available yet. You can skip it for now.',
       rate_limited: 'You have tried several times. Please wait a few minutes and try again.',
-      locked: 'Your accounts are already set up.',
+      locked: 'That account is already connected and working. Nothing to change.',
       not_found: "We couldn't find your sign-up. Please sign in again.",
       failed: 'Something went wrong on our side. Please try again in a moment.',
     },
+  },
+
+  // His page (Home tab): where his stories go, and reconnecting one that stopped working.
+  page: {
+    title: 'Where your stories go',
+    connected: (name, handle) => (handle ? `${name}: connected as @${handle}.` : `${name}: connected.`),
+    invalid: (name) => `${name} stopped working (the permission was removed). Please reconnect it.`,
+    none: (name) => `${name}: not connected.`,
+    connect: (name) => `Connect ${name}`,
+    reconnect: (name) => `Reconnect ${name}`,
+    cancel: 'Cancel',
+    saved: (name) => `Saved. Stories will be posted on ${name}.`,
   },
 }
 
@@ -114,7 +126,7 @@ const ES = {
     connect: 'Conectar Bluesky',
     connecting: 'Revisando con Bluesky…',
     connected: (handle) => `Bluesky conectado: @${handle}. Ahí se publicarán las historias.`,
-    locked: 'Sus cuentas ya están configuradas.',
+    locked: 'Bluesky ya está conectado y funciona. No hay nada que cambiar.',
     errors: {
       invalid_handle: 'Revise el usuario. Debe verse como javier.bsky.social.',
       not_app_password: 'Por seguridad, use una contraseña de aplicación, no la contraseña normal. Puede crear una con el enlace de arriba.',
@@ -125,7 +137,7 @@ const ES = {
       rate_limited: 'Ya lo intentó varias veces. Espere unos minutos y vuelva a intentarlo.',
       busy: 'Mucha gente se está conectando ahora mismo. Intente otra vez en unos minutos.',
       bluesky_busy: 'Bluesky no responde en este momento. Intente otra vez en unos minutos.',
-      locked: 'Sus cuentas ya están configuradas.',
+      locked: 'Bluesky ya está conectado y funciona. No hay nada que cambiar.',
       not_found: 'No encontramos su registro. Inicie sesión otra vez, por favor.',
       failed: 'Algo salió mal de nuestro lado. Intente otra vez en un momento.',
     },
@@ -151,10 +163,21 @@ const ES = {
       missing_scope: 'Falta el permiso para publicar. Toque el botón otra vez y acepte todos los permisos.',
       not_configured: 'Esta red todavía no está disponible. Puede omitirla por ahora.',
       rate_limited: 'Ya lo intentó varias veces. Espere unos minutos y vuelva a intentarlo.',
-      locked: 'Sus cuentas ya están configuradas.',
+      locked: 'Esa cuenta ya está conectada y funciona. No hay nada que cambiar.',
       not_found: 'No encontramos su registro. Inicie sesión otra vez, por favor.',
       failed: 'Algo salió mal de nuestro lado. Intente otra vez en un momento.',
     },
+  },
+
+  page: {
+    title: 'Dónde se publican sus historias',
+    connected: (name, handle) => (handle ? `${name}: conectado como @${handle}.` : `${name}: conectado.`),
+    invalid: (name) => `${name} dejó de funcionar (se quitó el permiso). Vuelva a conectarlo, por favor.`,
+    none: (name) => `${name}: sin conectar.`,
+    connect: (name) => `Conectar ${name}`,
+    reconnect: (name) => `Volver a conectar ${name}`,
+    cancel: 'Cancelar',
+    saved: (name) => `Listo. Las historias se publicarán en ${name}.`,
   },
 }
 

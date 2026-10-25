@@ -13,7 +13,7 @@ A / A+ / A++ text size. English page (error and connect copy also in Spanish). T
 | `#/` | Landing | none |
 | `#/signin` | Phone + 6-digit code, or email link | none yet (both mocked in `src/api.js`) |
 | `#/setup` | 1 who sets up, 2 name, 3 language + host, 4 weekly day + time, 5 review → save, 6 connect accounts (optional) → Finish rings him, then call status | 5: `signup:register({ name, phone, language, timeZone })` → `{ elderId, token }` (an existing number gets `already_signed_up`: no id, no token, a kind message), `signup:setCharacter`, `account:setSchedule`. 6: `signup:connectBluesky({ elderId, token, handle, appPassword })`, `signup:startOAuthConnect({ elderId, token, platform })` for Threads and X, then `signup:requestCall`, `signup:callStatus` |
-| `#/home` | Switch host, change call day/time | `account:getProfile`, `signup:setCharacter`, `account:setSchedule` |
+| `#/home` | Switch host, change call day/time, where stories go (connect or reconnect Bluesky / Threads / X when one is missing or stopped working) | `account:getProfile` (includes account states), `signup:setCharacter`, `account:setSchedule`, `signup:connectBluesky`, `signup:startOAuthConnect` |
 | `#/posts` | Posts that went out, a link per platform, reaction/comment counts | `account:listPosts` |
 
 **No real sign-in yet.** Any code works, except `000000`, which shows the "wrong code" error. The device

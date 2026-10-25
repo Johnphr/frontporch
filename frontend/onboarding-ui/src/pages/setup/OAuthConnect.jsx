@@ -31,9 +31,15 @@ const saveConnected = (value) => {
   }
 }
 
-/** words = accountsCopy().oauth. beforeLeave() saves setup progress before the browser leaves. */
-export function OAuthConnect({ words, elderId, token, beforeLeave }) {
-  const [connected, setConnected] = useState(loadConnected)
+/**
+ * words = accountsCopy().oauth. beforeLeave() saves setup progress before the browser leaves.
+ * `only`: platform ids to offer (his page offers the ones not connected); `labels` overrides
+ * the button text per platform (e.g. "Reconnect Threads").
+ */
+export function OAuthConnect({ words, elderId, token, beforeLeave, only, labels = {} }) {
+  const shown = only ? OAUTH_PLATFORMS.filter((p) => only.includes(p.id)) : OAUTH_PLATFORMS
+  // His page knows the real states (getProfile), so it doesn't read setup's saved list.
+  const [connected, setConnected] = useState(() => (only ? {} : loadConnected()))
   const [notice, setNotice] = useState(null) // { platform, ok, code? }
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -82,7 +88,7 @@ export function OAuthConnect({ words, elderId, token, beforeLeave }) {
         {notice && !notice.ok && <ErrorText>{words.errors[notice.code] || words.errors.failed}</ErrorText>}
         <ErrorText>{error}</ErrorText>
       </div>
-      {OAUTH_PLATFORMS.map(({ id, name, Icon }) =>
+      {shown.map(({ id, name, Icon }) =>
         connected[id] ? (
           <p key={id} className="flex items-center gap-3 font-bold">
             <CheckMark />
@@ -91,19 +97,19 @@ export function OAuthConnect({ words, elderId, token, beforeLeave }) {
         ) : (
           <Button key={id} variant="secondary" busy={busy === id} busyLabel={words.opening(name)} disabled={Boolean(busy)} onClick={() => connect(id)}>
             <Icon />
-            {words.connect(name)}
+            {labels[id] || words.connect(name)}
           </Button>
         ),
       )}
       <p className="text-sm text-muted">{words.note}</p>
-      {OAUTH_PLATFORMS.map(({ id }) =>
+      {shown.map(({ id }) =>
         words.notes?.[id] ? (
           <p key={id} className="text-sm text-muted">
             {words.notes[id]}
           </p>
         ) : null,
       )}
-      <p className="text-sm text-muted">{words.reddit}</p>
+      {!only && <p className="text-sm text-muted">{words.reddit}</p>}
     </div>
   )
 }
