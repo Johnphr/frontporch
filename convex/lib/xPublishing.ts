@@ -10,7 +10,8 @@
 // one post instead of a self-thread.
 // Replies: since 2026-02-23 the API refuses a reply unless the author mentioned or quoted us.
 // Self-replies (our threads) are reported as untouched but X's docs don't say. If X refuses
-// one, we stop, keep what's posted and say so. We never reply to, mention or quote anyone else.
+// one, we stop, keep what's posted and say so (the AI note is in post 1, so a partial thread
+// still has it). We never reply to, mention or quote anyone else.
 // Never log or return tokens or post text.
 
 import type { PlatformOutcome, ThreadRecord } from "./postFlow.ts";
@@ -105,8 +106,8 @@ export async function postXStory(
         return {
           status: "failed",
           error:
-            `X refused the self-reply (reply restriction): ${http}. Posted ${records.length} of ${n}; the AI note was in the last post, ` +
-            "so take the posted part down (undo) or switch to one post (X_THREAD=off). Retrying won't help.",
+            `X refused the self-reply (reply restriction): ${http}. Posted ${records.length} of ${n} (the first post carries the AI note). ` +
+            "Retrying won't help: switch to one post (X_THREAD=off), or take the partial thread down (undo).",
           ...keep(),
         };
       }

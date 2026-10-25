@@ -6,11 +6,22 @@
 // ZWJ family or a flag) counts 2; every URL counts 23, whatever its length.
 //
 //   thread mode   the Bluesky splitter (lib/blueskyThread.ts) at a smaller limit until every
-//                 post fits 280 weighted: hook first, AI note at the end of the last post. 2-5 posts.
+//                 post fits 280 weighted. The AI note goes in the FIRST post, after the hook: X may
+//                 refuse the self-replies, so a partial thread still carries it. The full
+//                 disclosure when it fits, else the short one. 1-5 posts.
 //   single mode   one post: the hook, then as many next sentences as fit, then the AI note.
 
 import { cleanStoryBody, splitBlueskyThread, threadLang, type ThreadSplit } from "./blueskyThread.ts";
 import { disclosureFor } from "./linkedinPost.ts";
+
+// Short AI note for X when the full disclosure doesn't fit next to the hook.
+export const X_SHORT_DISCLOSURE = "Written up with AI from my phone call.";
+export const X_SHORT_DISCLOSURE_ES = "Escrito con IA a partir de mi llamada.";
+
+/** The short AI note in his call language. */
+export function shortDisclosureFor(lang: string | undefined): string {
+  return threadLang(lang) === "es" ? X_SHORT_DISCLOSURE_ES : X_SHORT_DISCLOSURE;
+}
 
 export const X_MAX_WEIGHTED = 280;
 export const X_URL_WEIGHT = 23;
@@ -83,18 +94,60 @@ export const fitsX = (text: string, max = X_MAX_WEIGHTED) => weightedLength(text
 const fail = (reason: string): ThreadSplit => ({ ok: false, reason });
 
 /**
- * The story as an X self-thread. Same result shape as splitBlueskyThread. The Bluesky splitter
- * counts graphemes, so we shrink its limit until every post fits 280 weighted (CJK and emoji
- * count double).
+ * Take the disclosure (added by the Bluesky splitter at the end) off the posts. It may have
+ * been packed word by word across the last posts. Null if the posts don't end with it.
+ */
+function stripTrailingDisclosure(posts: string[], disclosure: string): string[] | null {
+  const out = [...posts];
+  let need = disclosure;
+  while (out.length) {
+    const last = out[out.length - 1];
+    if (last.endsWith(need)) {
+      const rest = last.slice(0, last.length - need.length).trimEnd();
+      if (rest) out[out.length - 1] = rest;
+      else out.pop();
+      return out;
+    }
+    if (!need.endsWith(last)) return null;
+    need = need.slice(0, need.length - last.length).trimEnd();
+    out.pop();
+  }
+  return null;
+}
+
+/**
+ * The story as an X self-thread. Same result shape as splitBlueskyThread; `disclosure` is the
+ * note we used (full or short). The Bluesky splitter counts graphemes, so we shrink its limit
+ * until every post fits 280 weighted (CJK and emoji count double) and the hook has room for
+ * the note.
  */
 export function splitXThread(raw: string, lang: string | undefined): ThreadSplit {
+  const full = disclosureFor(threadLang(lang));
+  const short = shortDisclosureFor(lang);
   let limit = X_MAX_WEIGHTED;
-  for (let tries = 0; tries < 10; tries++) {
+  for (let tries = 0; tries < 20; tries++) {
     const split = splitBlueskyThread(raw, lang, { limit, maxPosts: X_MAX_THREAD_POSTS, minPosts: X_MIN_THREAD_POSTS });
-    if (!split.ok) return fail(split.reason.replace(/characters/g, "X characters"));
-    const worst = Math.max(...split.posts.map((p) => weightedLength(p)));
-    if (worst <= X_MAX_WEIGHTED) return split;
-    const next = Math.min(limit - 1, Math.floor((limit * X_MAX_WEIGHTED) / worst) - 1);
+    if (!split.ok) {
+      // We shrank the limit to make room for the note, and now the opening sentence alone is too long.
+      if (limit < X_MAX_WEIGHTED && /^The opening line/.test(split.reason)) {
+        const room = X_MAX_WEIGHTED - weightedLength(`\n\n${short}`);
+        return fail(`The opening sentence is too long to share the first X post with the AI note (at most ${room} X characters).`);
+      }
+      return fail(split.reason.replace(/characters/g, "X characters"));
+    }
+    const body = stripTrailingDisclosure(split.posts, split.disclosure);
+    if (!body || !body.length) return fail("Couldn't place the AI note.");
+    const hook = body[0];
+    const note = fitsX(`${hook}\n\n${full}`) ? full : short;
+    const posts = [`${hook}\n\n${note}`, ...body.slice(1)];
+    const weights = posts.map((p) => weightedLength(p));
+    if (weights.every((w) => w <= X_MAX_WEIGHTED)) return { ...split, posts, hook, disclosure: note };
+    // Shrink by the first post's overflow (hook + note), or in proportion for the others.
+    const firstOver = weights[0] - X_MAX_WEIGHTED;
+    const worst = Math.max(...weights.slice(1), 0);
+    let next = limit - 1;
+    if (firstOver > 0) next = Math.min(next, limit - firstOver - 1);
+    if (worst > X_MAX_WEIGHTED) next = Math.min(next, Math.floor((limit * X_MAX_WEIGHTED) / worst) - 1);
     if (next < 70) break;
     limit = next;
   }
@@ -119,13 +172,8 @@ function cutToWeight(text: string, budget: number): string {
   return out ? `${out.replace(/[\s,.;:—-]+$/u, "")}…` : "";
 }
 
-/** One X post: hook + the next sentences that fit + the AI note. Same result shape as splitXThread. */
-export function singleXPost(raw: string, lang: string | undefined): ThreadSplit {
-  const disclosure = disclosureFor(threadLang(lang));
-  const body = cleanStoryBody(raw);
-  if (!body) return fail("The post is empty.");
+function singleWith(body: string, disclosure: string, lang: string | undefined): ThreadSplit {
   const budget = X_MAX_WEIGHTED - weightedLength(`\n\n${disclosure}`);
-
   const paragraphs = body.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
   let text = "";
   outer: for (const [pi, p] of paragraphs.entries()) {
@@ -140,6 +188,18 @@ export function singleXPost(raw: string, lang: string | undefined): ThreadSplit 
     }
   }
   if (!text) return fail("The opening line has no words that fit one X post.");
-  const post = `${text}\n\n${disclosure}`;
-  return { ok: true, posts: [post], hook: text, body, disclosure, langs: [threadLang(lang)] };
+  return { ok: true, posts: [`${text}\n\n${disclosure}`], hook: text, body, disclosure, langs: [threadLang(lang)] };
+}
+
+/**
+ * One X post: hook + the next sentences that fit + the AI note. The full disclosure, unless
+ * only the short note leaves room for the whole first sentence. Same result shape as splitXThread.
+ */
+export function singleXPost(raw: string, lang: string | undefined): ThreadSplit {
+  const body = cleanStoryBody(raw);
+  if (!body) return fail("The post is empty.");
+  const withFull = singleWith(body, disclosureFor(threadLang(lang)), lang);
+  if (withFull.ok && !withFull.hook.endsWith("…")) return withFull;
+  const withShort = singleWith(body, shortDisclosureFor(lang), lang);
+  return withShort.ok && !withShort.hook.endsWith("…") ? withShort : withFull.ok ? withFull : withShort;
 }

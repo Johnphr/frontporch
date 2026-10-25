@@ -63,6 +63,8 @@ test("self-reply refused (403 reply restriction): stop, keep the root, say so", 
   assert.match(out.error, /refused the self-reply/);
   assert.match(out.error, /Posted 1 of 3/);
   assert.match(out.error, /X_THREAD=off/);
+  assert.match(out.error, /first post carries the AI note/);
+  assert.match(out.error, /Retrying won't help/);
   assert.ok(!out.error.includes("mentioned or otherwise"), "X's free text isn't copied");
 });
 
@@ -120,13 +122,24 @@ test("single-post mode: one post, no reply field, AI note included", async () =>
   assert.equal(calls[0].body.reply, undefined);
 });
 
-test("thread mode texts: AI note only in the last post", () => {
+test("thread mode texts: AI note only in the first post", () => {
   const split = xStoryTexts(STORY, "en", "thread");
   assert.ok(split.ok);
   if (!split.ok) return;
   assert.ok(split.posts.length >= 2);
-  assert.ok(split.posts.at(-1)!.endsWith(DEFAULT_DISCLOSURE));
-  assert.ok(!split.posts.slice(0, -1).some((p) => p.includes(DEFAULT_DISCLOSURE)));
+  assert.ok(split.posts[0].endsWith(DEFAULT_DISCLOSURE));
+  assert.ok(!split.posts.slice(1).some((p) => p.includes(DEFAULT_DISCLOSURE)));
+});
+
+test("a real thread cut short by a refused self-reply: what's live still has the AI note", async () => {
+  const split = xStoryTexts(STORY, "en", "thread");
+  assert.ok(split.ok);
+  if (!split.ok) return;
+  const { fetchFn, calls } = fakeX([{ status: 201 }, { status: 403, body: { detail: "Replying to this post is not allowed." } }]);
+  const out = await postXStory(fetchFn, login, { texts: split.posts });
+  assert.equal(out.status, "failed");
+  assert.equal(out.status === "failed" ? out.records?.length : 0, 1);
+  assert.ok(calls[0].body.text.includes(DEFAULT_DISCLOSURE), "the posted root carries the note");
 });
 
 test("xPostUrl only for a real username + numeric id", () => {

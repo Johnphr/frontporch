@@ -68,15 +68,15 @@ Off by default: X charges for every post and every read. Code: `convex/xAuth.ts`
 
 **Replies.** Since 2026-02-23 the X API refuses a reply unless the post's author mentioned or
 quoted you. Our threads only reply to his own posts; third-party reports say self-replies still
-work, but X's docs don't say so. If X refuses one, we stop, keep what went out, and the error
-says so (then use `X_THREAD=off`). We **never** reply to, mention or quote other people on X:
+work, but X's docs don't say so. So on X the AI note goes in the **first** post. If X refuses a
+self-reply, we stop, keep what went out, and the error says so (then use `X_THREAD=off`). We **never** reply to, mention or quote other people on X:
 X's automation rules forbid unsolicited automated mentions and keyword-triggered replies.
 
 ## Safety
 
 - Posts use **only what the person said**; the prompt forbids adding facts or advice.
 - Pip doesn't give or ask for medical, legal or financial advice, and doesn't push on painful topics.
-- Every post says it was written up with AI from a phone call (the last post of each Bluesky thread).
+- Every post says it was written up with AI from a phone call (the last post of each Bluesky thread; the first post of an X thread, since X may refuse the rest).
 - He can take any post down by asking on the call ("Pip, please take that last post down").
   Pip never argues; it confirms which post, and right after the call the post and the thread
   replies from the same call come down from Bluesky and Reddit (LinkedIn posts are flagged for
