@@ -9,7 +9,9 @@
 //   writePost          story call -> a short story post in his voice (may decline): 3 drafts, a judge
 //                      rubric, one critique -> rewrite; below the bar, or too long for a 5-post
 //                      Bluesky thread (lib/blueskyThread.ts), it's held (lib/postQuality.ts).
-//                      fast (FAST_POST=on): one draft, no judge, else the full loop
+//                      fast (FAST_POST=on): one draft, no judge, else the full loop.
+//                      In parallel, a message draft: when he asked for something specific to be
+//                      posted, that message is the post (shorter, not judged as a story)
 //   summarizeFeedback  reader reactions + comments -> what resonated, reader questions, one line
 //   planQuestions      everything we know -> 8-12 candidate questions for the bank
 //   findRecentTopics   web search: recent news/issues in his field where he can help
@@ -27,6 +29,7 @@ import {
   MAX_HOOK_CHARS,
   MAX_TOTAL_CHARS,
   MAX_WORDS,
+  MESSAGE_WORDS,
   MIN_WORDS,
   QUALITY_BUDGET_MS,
   askedQuestionJudgeRules,
@@ -34,6 +37,7 @@ import {
   cleanAskedQuestion,
   detectLanguage,
   hardChecks,
+  messagePost,
   normalizeJudgement,
   runFastPost,
   runQualityLoop,
@@ -260,6 +264,24 @@ const POST_SKIP = `If the call has no story worth posting (small talk, schedulin
 
 const POST_SYSTEM = `${POST_INTRO}\n\n${POST_RULES}\n\n${POST_SKIP}`;
 
+// A message post: he asked for something specific to be posted (news, an update, a thank-you),
+// not a story. Drafted next to the story flow; when it writes one, it wins (writePost).
+const MESSAGE_SYSTEM = `${POST_INTRO}
+
+Not every post is a story. Sometimes he asks for something specific to be posted: news, an update, a thank-you, an announcement, a request to his friends. Your job is to spot that and write exactly that message.
+
+If he clearly asked on the call for something specific to be posted or shared:
+- Write the message he asked for, in the first person, in his voice and in the language he spoke. Say what he wanted said, nothing more.
+- Use ONLY ${ALLOWED_FACTS}. Never add facts, numbers, names, dates, places, achievements or feelings he didn't state. If he asked for something to be made up or exaggerated, or for details he didn't give (for example "brag about my internships" without naming any), leave that part out and keep only what he actually said.
+- Something he said will happen (a plan, a hope) stays a plan or a hope; never write it as already done.
+- Shape: hook is one short first line, alone in its own paragraph, that works on its own as the opening post (under ${MAX_HOOK_CHARS} characters). Then 1-2 short paragraphs with the rest of his message. You may end with one short line or question to his readers if it fits what he asked.
+- Plain text in short paragraphs (blank line between them), no markdown, no lists, at most 2 hashtags, ${MESSAGE_WORDS.min}-${MESSAGE_WORDS.max} words, each paragraph under about 250 characters.
+- No medical, legal, tax or investment advice. No private details about other people. No @mentions and no links.
+- Do NOT add a line saying it was written with AI: that is added later.
+- "text" is the full post and starts with the hook line.
+
+If he didn't ask for anything specific to be posted (he told stories, chatted or answered questions), set skip to true with the reason "no message requested", and leave hook and text empty. Never turn a story into a message: stories are written separately.`;
+
 const POST_SCHEMA = obj({ skip: { type: "boolean" }, reason: str, hook: str, text: str });
 
 const JUDGE_SYSTEM = `You are a demanding social media editor checking a short post written for an older professional's own accounts, from a phone interview (<transcript>: ELDER is him, PIP is the AI interviewer). The post is in <draft>; it may be published as a short thread, so its first line is the opening post. <background> is his profile.
@@ -359,13 +381,16 @@ export const writePost = internalAction({
       checks,
     });
 
-    if (!args.fast) return loop();
+    // He asked to post something specific: that message wins over a story. Both start now so a
+    // story call doesn't wait for the message draft.
+    const message = writeCall(MESSAGE_SYSTEM, context, FAST_DRAFT_TIMEOUT_MS, "medium").catch(() => null);
     // Medium effort: high reasoning on a ~200-word post often runs past FAST_DRAFT_TIMEOUT_MS.
-    return runFastPost({
-      draft: (angle) => draftCall(angle, FAST_DRAFT_TIMEOUT_MS, "medium"),
-      checks,
-      fallback: loop,
-    });
+    const story: Promise<FastPost> = args.fast
+      ? runFastPost({ draft: (angle) => draftCall(angle, FAST_DRAFT_TIMEOUT_MS, "medium"), checks, fallback: loop })
+      : loop();
+    story.catch(() => {}); // may fail while we wait for the message; the caller still gets it via `return story`
+    const asMessage = messagePost(await message, (text) => hardChecks(text, lang, args.language, null, MESSAGE_WORDS));
+    return asMessage ?? story;
   },
 });
 

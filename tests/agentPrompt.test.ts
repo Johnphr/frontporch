@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 
 import { buildAgentConfig } from "../convex/lib/cartesia.ts";
 import { CHARACTERS, getCharacter } from "../convex/lib/characters.ts";
-import { CALL_VARIABLES, CONTEXT_PARTS, callGoal, characterAgent } from "../convex/lib/prompts/agent.ts";
+import { CALL_VARIABLES, CONTEXT_PARTS, accountsLine, callGoal, characterAgent } from "../convex/lib/prompts/agent.ts";
 import { conversationPrinciples, guardrails, persona, type CallLanguage } from "../convex/lib/prompts/principles.ts";
 
 const VAR = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
@@ -91,4 +91,23 @@ test("reader comments: shared early unprompted; exact words only when asked", as
     assert.match(text, /if it's rude or insulting, say so kindly first/);
   }
   assert.ok(CONTEXT_PARTS.includes("reader_comments"));
+});
+
+test("accountsLine: which of Bluesky / X his posts go to", () => {
+  assert.equal(accountsLine({ bluesky: true, x: true }), "Connected: Bluesky, X.");
+  assert.equal(accountsLine({ bluesky: true, x: false }), "Connected: Bluesky. Not connected yet: X.");
+  assert.equal(accountsLine({ bluesky: false, x: false }), "Not connected yet: Bluesky, X.");
+  assert.ok(CONTEXT_PARTS.includes("accounts"));
+});
+
+test("posting: every host knows posts go to <accounts>, needn't be a story, and never invents", async () => {
+  const { inboundAgent } = await import("../convex/lib/prompts/inbound.ts");
+  for (const text of [...CHARACTERS.map((c) => characterAgent(c).instructions), inboundAgent(getCharacter("victoria")!).instructions]) {
+    assert.match(text, /<accounts> \(where their posts go\)/);
+    assert.match(text, /Not every post has to be a story/);
+    assert.match(text, /Never say you can't post/);
+    assert.match(text, /isn't connected yet/);
+    assert.match(text, /posts only say what they told you/);
+    assert.match(text, /So is posting what they want to share/); // the guardrail doesn't contradict it
+  }
 });

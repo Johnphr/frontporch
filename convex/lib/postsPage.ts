@@ -24,7 +24,7 @@ export type PagePost = {
   guardIssues?: string[];
   error?: string;
   /** Post quality (lib/postQuality.ts), when writePost scored it. */
-  quality?: { score: number; passed: boolean; rounds: number; notes: string[]; mode?: "fast" };
+  quality?: { score: number; passed: boolean; rounds: number; notes: string[]; mode?: "fast" | "message" };
   /** posts.timings: hang-up -> posted, per stage (lib/fastPost.ts). */
   timings?: PostTimings;
   /** Why a needs_review post is held (posts.heldFor; missing = the fact-check). */
@@ -176,6 +176,10 @@ function qualityBlock(q: PagePost["quality"]): string {
   if (q.mode === "fast") {
     const rest = q.notes.filter((n) => !/^Fast mode/.test(n));
     return `<div class="check good"><strong>Fast mode: one draft, no judge</strong> (FAST_POST=on; fact-checked before posting)${issuesList(rest)}</div>`;
+  }
+  if (q.mode === "message") {
+    const rest = q.notes.filter((n) => !/^Message post/.test(n));
+    return `<div class="check good"><strong>Message post: he asked to share this</strong> (not judged as a story; fact-checked before posting)${issuesList(rest)}</div>`;
   }
   const rewrites = `${q.rounds} rewrite${q.rounds === 1 ? "" : "s"}`;
   return `<div class="check ${q.passed ? "good" : "bad"}"><strong>Quality: ${q.score}/100 (${q.passed ? "passed" : "below the bar"})</strong>, ${rewrites}${issuesList(q.notes)}</div>`;

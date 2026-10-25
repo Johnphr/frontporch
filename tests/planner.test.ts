@@ -435,3 +435,9 @@ test("isStaleRefresh: an overlapping refresh that began earlier doesn't overwrit
   assert.equal(isStaleRefresh(undefined, NOW), false, "no start time: always writes");
   assert.equal(isStaleRefresh(NOW, undefined), false, "first refresh");
 });
+
+test("story call context says where his posts go in <accounts>", () => {
+  const ctx = toPromptVariables(buildCallPlan({ kind: "story" }), { name: "W", profile: null }, { accounts: "Connected: Bluesky, X." }).context;
+  assert.match(ctx, /<accounts>\nConnected: Bluesky, X\.\n<\/accounts>/);
+  assert.equal(toPromptVariables(buildCallPlan({ kind: "story" }), { name: "W", profile: null }).context.includes("accounts"), false);
+});

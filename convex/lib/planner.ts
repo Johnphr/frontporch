@@ -418,7 +418,7 @@ export function firstBankQuestion<T extends { question: string }>(bank: T[] | un
 export function toPromptVariables(
   plan: CallPlan,
   elder: { name: string; profile?: Profile | null },
-  opts: { avoid?: string[]; lang?: CallLanguage } = {},
+  opts: { avoid?: string[]; lang?: CallLanguage; accounts?: string } = {},
 ): CallVariables {
   return {
     first_name: firstName(elder.name ?? "", opts.lang),
@@ -429,6 +429,7 @@ export function toPromptVariables(
       feedback: plan.feedback,
       reader_comments: plan.readerComments,
       question: plan.question,
+      accounts: opts.accounts,
     }),
   };
 }

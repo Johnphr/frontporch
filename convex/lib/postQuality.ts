@@ -86,6 +86,10 @@ export const MAX_WORDS = 200;
 /** Far outside the target length is a blocker, not just a penalty. */
 export const HARD_MIN_WORDS = 90;
 export const HARD_MAX_WORDS = 260;
+/** Word targets for hardChecks: a story post, or a message post (he asked to share something specific). */
+export type WordLimits = { min: number; max: number; hardMin: number; hardMax: number };
+export const STORY_WORDS: WordLimits = { min: MIN_WORDS, max: MAX_WORDS, hardMin: HARD_MIN_WORDS, hardMax: HARD_MAX_WORDS };
+export const MESSAGE_WORDS: WordLimits = { min: 20, max: 120, hardMin: 10, hardMax: HARD_MAX_WORDS };
 /** The first line is the opening post of a thread: keep it well under one post (300). */
 export const MAX_HOOK_CHARS = 200;
 /**
@@ -293,6 +297,7 @@ export function quotesVerbatim(post: string, question: string): boolean {
  * so a Spanish post is never penalized by English-only rules. `disclosureLang`: the language
  * the post goes out in (posts.language, publish.postLanguage), for the thread-fit check.
  * `askedQuestion`: the question the call answered (also checks it isn't quoted word for word).
+ * `limits`: the length targets (STORY_WORDS, or MESSAGE_WORDS for a message post).
  * An @mention or a link is always a blocker: a story post never needs one.
  */
 export function hardChecks(
@@ -300,6 +305,7 @@ export function hardChecks(
   expectedLang: Lang = "unknown",
   disclosureLang?: "en" | "es",
   askedQuestion?: AskedQuestion | null,
+  limits: WordLimits = STORY_WORDS,
 ): CheckIssue[] {
   const issues: CheckIssue[] = [];
   if (new RegExp(MENTION_RE.source, "u").test(text)) {
@@ -312,10 +318,11 @@ export function hardChecks(
     issues.push({ id: "quoted_question", severity: "major", message: "Quotes the asked question word for word; paraphrase it in his voice." });
   }
   const words = wordCount(text);
-  if (words < HARD_MIN_WORDS || words > HARD_MAX_WORDS) {
-    issues.push({ id: "length", severity: "major", message: `${words} words; aim for ${MIN_WORDS}-${MAX_WORDS}.` });
-  } else if (words < MIN_WORDS || words > MAX_WORDS) {
-    issues.push({ id: "length", severity: "minor", message: `${words} words; aim for ${MIN_WORDS}-${MAX_WORDS}.` });
+  const aim = `${words} words; aim for ${limits.min}-${limits.max}.`;
+  if (words < limits.hardMin || words > limits.hardMax) {
+    issues.push({ id: "length", severity: "major", message: aim });
+  } else if (words < limits.min || words > limits.max) {
+    issues.push({ id: "length", severity: "minor", message: aim });
   }
   const chars = Array.from(text.trim()).length;
   if (chars > MAX_TOTAL_CHARS) {
@@ -489,8 +496,8 @@ export type QualityReport = {
   rounds: number; // rewrite rounds run (0-MAX_REWRITE_ROUNDS)
   notes: string[];
   scores: CriterionScores;
-  /** "fast": FAST_POST's single draft, never judged (score 0 means "not scored"). */
-  mode?: "fast";
+  /** "fast": FAST_POST's single draft; "message": a message he asked to post. Never judged (score 0 means "not scored"). */
+  mode?: "fast" | "message";
 };
 
 /** Keep the stored notes short (they're shown on /posts and saved on the posts row). */
@@ -633,6 +640,15 @@ export function fastQualityReport(issues: CheckIssue[]): QualityReport {
   };
 }
 
+// ---------- message posts: he asked to post something specific ----------
+
+export const MESSAGE_NOTE = "Message post: he asked to share this; not judged as a story.";
+
+/** A message post's quality: passed (the story rubric doesn't apply), the minor issues as notes. */
+export function messageQualityReport(issues: CheckIssue[]): QualityReport {
+  return { ...fastQualityReport(issues), notes: trimNotes([MESSAGE_NOTE, ...issues.map((i) => i.message)]), mode: "message" };
+}
+
 /**
  * One draft with a short timeout, the code checks, no judge or rewrite. Falls back to the normal
  * loop (`fallback`, a fixed reason, for the log) when the draft throws or times out, declines
@@ -653,6 +669,17 @@ export async function runFastPost(deps: FastDeps): Promise<FastPost> {
   const blockers = issues.filter((i) => i.severity === "major");
   if (blockers.length) return fallback(`fast draft blocked (${blockers.map((i) => i.id).join(", ")})`);
   return { skip: false, text: draft.text, hook: draft.hook, quality: fastQualityReport(issues), hold: false };
+}
+
+/**
+ * A message draft (he asked to post something specific) -> the post, or null when it declined,
+ * came back empty or has a blocker (then the story flow decides). Checked with MESSAGE_WORDS.
+ */
+export function messagePost(draft: DraftResult | null, checks: (text: string) => CheckIssue[]): WrittenPost | null {
+  if (!draft || draft.skip || !draft.text.trim()) return null;
+  const issues = checks(draft.text);
+  if (issues.some((i) => i.severity === "major")) return null;
+  return { skip: false, text: draft.text, hook: draft.hook, quality: messageQualityReport(issues), hold: false };
 }
 
 /**
