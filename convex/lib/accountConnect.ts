@@ -1,6 +1,7 @@
 // signup.connectBluesky's steps, with the database and fetch passed in (unit-tested with fakes).
-// Check the handle and app password, reserve an attempt (rate limit + locked once active),
-// log in once to Bluesky to prove it works, encrypt the app password, save.
+// Check the handle and app password, reserve an attempt (rate limits per sign-up, per handle
+// and in all; locked once active), log in once to Bluesky to prove it works (a main-password or
+// DM-access session is logged out and refused), encrypt the app password, save.
 // The password is never logged, returned or stored in the clear; results are codes only.
 
 import { encryptSecret, loadAccountKey, type SealedSecret } from "./accountCrypto.ts";

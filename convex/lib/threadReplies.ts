@@ -2,7 +2,7 @@
 //
 // When a story call's question came from a thread we found online (an audience question),
 // we answer that thread in his words, from his own account. Only platforms with a posting API:
-//   bluesky   auto: his account (BLUESKY_HANDLE + app password), threaded under the post
+//   bluesky   auto: his connected account (lib/logins.ts), threaded under the post
 //   reddit    auto ONLY when REDDIT_POSTING=on and the script-app credentials are set
 //             (new Reddit API apps need manual approval since Nov 2025)
 //   any other source (forums, Q&A sites, Stack Exchange), and Bluesky/Reddit while
@@ -112,7 +112,7 @@ export function replyMode(platform: ReplyPlatform | null, env: ReplyEnv): { mode
     case "bluesky":
       return env.blueskyHandle && env.blueskyPassword
         ? { mode: "auto", reason: "Posted on Bluesky from his account, threaded under the question." }
-        : { mode: "none", reason: "Bluesky login isn't set (BLUESKY_HANDLE, BLUESKY_APP_PASSWORD)." };
+        : { mode: "none", reason: "His Bluesky account isn't connected (lib/logins.ts)." };
     case "reddit": {
       if (!redditPostingOn(env.redditPosting)) return { mode: "none", reason: "Reddit posting is off or his Reddit login isn't set (REDDIT_POSTING)." };
       const creds = [env.redditClientId, env.redditClientSecret, env.redditUsername, env.redditPassword];
