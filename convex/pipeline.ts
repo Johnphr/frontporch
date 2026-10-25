@@ -12,10 +12,11 @@
 //          memories  llm.extractKnowledge -> memories.addMany (+ resolve the open threads he
 //                    finished; only thread ids we sent are passed back)
 //          post      llm.writePost, given the time left of the 10-min action limit
-//                    (lib/postQuality.postBudgetMs; may decline: no post; below the quality bar -> saved as
-//                    needs_review, not posted) -> one posts row per call
-//                    (posts.by_call) -> linkedapi.createPost, scheduled only for a new row
-//                    and only when AUTO_POST isn't "off" (off = preview-only, for tests)
+//                    (lib/postQuality.postBudgetMs; may decline: no post; below the quality bar,
+//                    or too long for a 5-post Bluesky thread -> saved as needs_review, not
+//                    posted) -> one posts row per call (posts.by_call) -> publish.publishPost
+//                    (Bluesky thread, Reddit when on, LinkedIn when on), scheduled only for a
+//                    new row and only when AUTO_POST isn't "off" (off = saved, not posted)
 //          reply     threadReplies.draftForCall (scheduled; only when the question came from
 //                    a Bluesky thread, or Reddit once REDDIT_POSTING is on)
 //          plan      conversation.refreshQuestionBank (scheduled)
@@ -38,8 +39,10 @@ import { markBankRowUsed } from "./conversation";
 import { inboundPlanToMark } from "./lib/inbound";
 import { canClaimProcessing, finishPatch, isProfileUsable, mergeProfile, type Profile } from "./lib/onboarding";
 import { runSteps, type StepReport } from "./lib/planner";
-import { parseAutoPost } from "./lib/postFlow";
-import { MIN_POST_BUDGET_MS, holdDecision, postBudgetMs } from "./lib/postQuality";
+import { threadFitProblem } from "./lib/blueskyThread";
+import { blueskyLoginForElder, redditLoginForElder } from "./lib/logins";
+import { linkedinPostingOn, parseAutoPost } from "./lib/postFlow";
+import { MIN_POST_BUDGET_MS, detectLanguage, holdDecision, postBudgetMs } from "./lib/postQuality";
 import { postQuality } from "./schema";
 
 // Convex exposes env vars on process.env (declared so we don't need @types/node).
@@ -146,7 +149,8 @@ export const findPostForCall = internalQuery({
  * Dev/testing: a finished call from a fixture (tests/fixtures/onboarding_call.json,
  * story_call.json), so the whole post-call flow runs without a phone. Use a throwaway seeded
  * elder: fixture facts merge into his profile and memories. A story fixture would post to his
- * real LinkedIn, so it's refused while posting is live unless allowPost is set.
+ * real accounts (Bluesky, and Reddit / LinkedIn when on), so it's refused while posting is
+ * live unless allowPost is set.
  */
 export const seedEndedCall = internalMutation({
   args: {
@@ -159,10 +163,12 @@ export const seedEndedCall = internalMutation({
     allowPost: v.optional(v.boolean()),
   },
   handler: async (ctx, { elderId, kind, turns, allowPost, ...rest }) => {
-    const postingLive =
-      parseAutoPost(process.env.AUTO_POST) && Boolean(process.env.LINKEDAPI_TOKEN && process.env.LINKEDAPI_ID_TOKEN);
-    if (kind === "story" && postingLive && !allowPost) {
-      throw new Error("This fixture would post to his LinkedIn: set AUTO_POST=off (or pass allowPost: true)");
+    const anyAccount =
+      Boolean(await blueskyLoginForElder(ctx, elderId)) ||
+      Boolean(await redditLoginForElder(ctx, elderId)) ||
+      (linkedinPostingOn(process.env.LINKEDIN_POSTING) && Boolean(process.env.LINKEDAPI_TOKEN && process.env.LINKEDAPI_ID_TOKEN));
+    if (kind === "story" && parseAutoPost(process.env.AUTO_POST) && anyAccount && !allowPost) {
+      throw new Error("This fixture would post to his real accounts: set AUTO_POST=off (or pass allowPost: true)");
     }
     const callId = await ctx.db.insert("calls", { elderId, kind, status: "ended", transcript: turns, ...rest });
     await ctx.scheduler.runAfter(0, internal.pipeline.processCall, { callId });
@@ -234,8 +240,9 @@ async function runStoryCall(
           budgetMs,
         });
         if (post.skip) return `no post: ${post.reason}`;
-        // Below the quality bar: saved as needs_review (shown on /posts), never auto-posted.
-        const hold = holdDecision(post.quality);
+        // Below the quality bar, or too long for a Bluesky thread: saved as needs_review (shown
+        // on /posts), never auto-posted.
+        const hold = holdDecision(post.quality, threadFitProblem(post.text, detectLanguage(post.text) === "es" ? "es" : "en"));
         const { postId, created } = await ctx.runMutation(internal.pipeline.insertPost, {
           elderId: elder._id,
           callId,
@@ -244,14 +251,13 @@ async function runStoryCall(
           ...(hold ? { hold: { summary: hold.summary } } : {}),
         });
         if (!created) return `post ${postId} already exists`;
-        if (hold) return `post ${postId} held for review (quality ${post.quality.score}/100); post it with linkedapi:approvePost`;
-        // AUTO_POST=off (tests): keep the row `pending`; preview with linkedapi:previewPost,
-        // post on purpose with linkedapi:createPost.
+        if (hold) return `post ${postId} held for review (quality ${post.quality.score}/100); post it with publish:approvePost`;
+        // AUTO_POST=off (tests): keep the row `pending` (see it on /posts), post on purpose.
         if (!parseAutoPost(process.env.AUTO_POST)) {
-          return `post ${postId} saved, preview only (AUTO_POST=off)`;
+          return `post ${postId} saved, not posted (AUTO_POST=off); post it with: npx convex run publish:publishPost '{"postId":"${postId}"}'`;
         }
-        // Posting runs on its own (guard + LinkedAPI + polling) so it can't hold up the rest.
-        await ctx.scheduler.runAfter(0, internal.linkedapi.createPost, { postId });
+        // Publishing runs on its own (fact-check + every platform) so it can't hold up the rest.
+        await ctx.scheduler.runAfter(0, internal.publish.publishPost, { postId });
         return `post ${postId} scheduled`;
       },
     },

@@ -2,7 +2,7 @@
 //
 //   post 1        the hook: the first paragraph, or as many of its first sentences as fit
 //   posts 2..N    the story, the lesson and the question, packed by paragraph (by sentence
-//                 when a paragraph is too long; by word only for a sentence over one post)
+//                 when that needs too many posts; by word as a last resort, never inside a word)
 //   last post     ends with the AI disclosure line (lib/linkedinPost.disclosureFor, EN / ES)
 //
 // 3-5 posts, each at most 300 graphemes (and 3,000 UTF-8 bytes, the lexicon's other limit).
@@ -70,22 +70,11 @@ function sentences(paragraph: string): Unit[] {
   return out;
 }
 
-/** A sentence longer than one post, cut between words. Null if one word alone is too long. */
+/** A sentence longer than one post, as single words (packed between words). Null if one word alone is too long. */
 function wordPieces(unit: Unit, limit: number): Unit[] | null {
   const words = unit.text.split(/\s+/).filter(Boolean);
-  const out: Unit[] = [];
-  let current = "";
-  for (const w of words) {
-    if (graphemeCount(w) > limit) return null;
-    const next = current ? `${current} ${w}` : w;
-    if (graphemeCount(next) <= limit) current = next;
-    else {
-      out.push({ text: current, sep: out.length ? " " : unit.sep });
-      current = w;
-    }
-  }
-  if (current) out.push({ text: current, sep: out.length ? " " : unit.sep });
-  return out;
+  if (words.some((w) => graphemeCount(w) > limit)) return null;
+  return words.map((text, i) => ({ text, sep: i === 0 ? unit.sep : " " }));
 }
 
 const fits = (text: string, limit: number) => graphemeCount(text) <= limit && utf8Length(text) <= MAX_POST_BYTES;
@@ -188,8 +177,11 @@ export function splitBlueskyThread(raw: string, lang: string | undefined, opts: 
   const rest = all.slice(hookEnd).map((u, i) => (i === 0 ? { ...u, sep: "\n\n" as const } : u));
   const withDisclosure: Unit[] = [...rest, { text: disclosure, sep: "\n\n" }];
 
+  // Paragraphs kept whole when they fit; else sentences fill each post; last resort: words
+  // (a sentence then continues in the next post, still never cut inside a word).
   let tail = pack(withDisclosure, limit, true);
   if (1 + tail.length > maxPosts) tail = pack(withDisclosure, limit, false);
+  if (1 + tail.length > maxPosts) tail = pack(withDisclosure.flatMap((u) => wordPieces(u, limit) ?? [u]), limit, false);
   const posts = [hookUnits, ...tail];
   if (posts.length > maxPosts) {
     return fail(`It needs ${posts.length} posts; a thread holds at most ${maxPosts}. Shorten it by about ${overflow(posts, maxPosts, limit)} characters.`);

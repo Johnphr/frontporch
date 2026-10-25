@@ -6,8 +6,9 @@
 //   extractProfile     onboarding call -> his profile + story seeds              (slice 1, PR #7)
 //   extractKnowledge   story call -> memories (facts, story seeds, open threads,
 //                      people, places, topics covered / to avoid)
-//   writePost          story call -> a short story post in his voice, platform-neutral (may decline): 3 drafts, a judge
-//                      rubric, critique -> rewrite; below the bar it's held (lib/postQuality.ts)
+//   writePost          story call -> a short story post in his voice (may decline): 3 drafts, a judge
+//                      rubric, critique -> rewrite; below the bar, or too long for a 5-post Bluesky
+//                      thread (lib/blueskyThread.ts), it's held (lib/postQuality.ts)
 //   summarizeFeedback  reader reactions + comments -> what resonated, reader questions, one line
 //   planQuestions      everything we know -> 8-12 candidate questions for the bank
 //   findRecentTopics   web search: recent news/issues in his field where he can help
@@ -32,6 +33,7 @@ import {
   runQualityLoop,
   type WrittenPost,
 } from "./lib/postQuality";
+import { MAX_POST_GRAPHEMES } from "./lib/bluesky";
 import { neutralizeFences } from "./lib/text";
 import { normalizeProfile, type Profile } from "./lib/onboarding";
 import { structuredOutput, webResearch, type Effort } from "./lib/openai";
@@ -218,8 +220,9 @@ export const extractKnowledge = internalAction({
 
 // ---------- writePost ----------
 
-// The writer is platform-neutral: one short story in paragraphs. Publishing formats it per
-// platform (e.g. a short Bluesky thread: the first line is the opening post).
+// The writer writes one short story in paragraphs. Publishing formats it per platform
+// (publish.ts): a Bluesky thread (the first paragraph is post 1), a Reddit post on his profile
+// (the first line is the title).
 // Allowed facts, the same for the writer and the judge: what he said on the call (or what Pip
 // said and he clearly confirmed), plus his profile in <background>. <readers> is only a hint
 // about what readers liked, never a source of facts.
@@ -228,7 +231,7 @@ const ALLOWED_FACTS = `what he said on the call (or what Pip said and he clearly
 const POST_INTRO = `You write a short social media post in the first person, as the older professional in the call (ELDER), for his own social accounts. PIP is the AI interviewer.`;
 
 const POST_RULES = `Shape:
-1. hook: one short first line that works on its own as the opening post and makes people want to read on (under ${MAX_HOOK_CHARS} characters).
+1. hook: one short first line, alone in its own paragraph, that works on its own as the opening post and makes people want to read on (under ${MAX_HOOK_CHARS} characters).
 2. One story from the call, with the concrete details he gave (names, places, numbers, what he saw and did).
 3. The lesson he drew from it, in his words where possible.
 4. End with one short question to readers, so they reply.
@@ -236,7 +239,8 @@ const POST_RULES = `Shape:
 Rules:
 - Use ONLY ${ALLOWED_FACTS}. Never add facts, numbers, names, dates, places or lessons beyond that. <readers> tells you what readers liked; it is not a source of facts.
 - Keep his voice and his phrases, in the language he spoke on the call (Spanish stays Spanish); fix only grammar and obvious speech-to-text errors.
-- Plain text in short paragraphs (blank line between them), no markdown, no bullet or numbered lists, at most 2 hashtags, ${MIN_WORDS}-${MAX_WORDS} words and under ${MAX_TOTAL_CHARS} characters in total, so it reads well as a short thread.
+- Plain text in short paragraphs (blank line between them), no markdown, no bullet or numbered lists, at most 2 hashtags, ${MIN_WORDS}-${MAX_WORDS} words and under ${MAX_TOTAL_CHARS} characters in total.
+- It is published as a Bluesky thread of 3-5 posts of at most ${MAX_POST_GRAPHEMES} characters, split at paragraph breaks: the hook is post 1 and a short AI note goes at the end of the last post. So keep each paragraph under about 250 characters.
 - Plain language in his register. No filler or stock phrases ("delve", "it's worth noting", "Bottom line:", "This isn't about X. It's about Y.").
 - No medical, legal, tax or investment advice. No private details about other people.
 - Do NOT add a line saying it was written with AI: that is added later.

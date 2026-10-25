@@ -1,6 +1,7 @@
 // TEMPORARY: the posts review page (convex/postsPage.ts serves it at /posts). Lets the team read
-// every generated post as it would be published, to iterate fast on the content before LinkedIn
-// is connected. Pure HTML rendering, no Convex imports (unit-tested). Remove with postsPage.ts.
+// every generated post as it would be published (the Bluesky thread, post 1/N ...) and where each
+// platform stands, to iterate fast on the content. Pure HTML rendering, no Convex imports
+// (unit-tested). Remove with postsPage.ts.
 
 export type PagePost = {
   id: string;
@@ -9,7 +10,13 @@ export type PagePost = {
   elderFirstName: string;
   kind?: string;
   question?: string;
-  text: string; // as it would be published (formatted, disclosure line included)
+  text: string; // the post as written (platform-neutral)
+  /** The Bluesky thread as publish.ts would split it (disclosure in the last post)... */
+  thread?: string[];
+  /** ...or why it can't be split. */
+  threadProblem?: string;
+  /** Where it went: one row per platform (postPublications). */
+  publications?: PagePublication[];
   guardSummary?: string;
   guardIssues?: string[];
   error?: string;
@@ -18,6 +25,8 @@ export type PagePost = {
   /** Why a needs_review post is held (posts.heldFor; missing = the fact-check). */
   heldFor?: "quality" | "guard";
 };
+
+export type PagePublication = { id: string; platform: string; status: string; url?: string; error?: string; posts?: number };
 
 /** A thread reply (threadReplies.ts) as the review page shows it. */
 export type PageReply = {
@@ -51,6 +60,19 @@ const STATUS_LABEL: Record<string, string> = {
   needs_attention: "Needs attention",
 };
 
+const PUBLICATION_LABEL: Record<string, string> = {
+  pending: "Not posted yet",
+  posting: "Posting",
+  posted: "Posted",
+  failed: "Failed",
+  maybe_posted: "Maybe posted: check his profile",
+  skipped: "Off",
+  removing: "Taking down",
+  removed: "Taken down",
+};
+
+const PLATFORM_LABEL: Record<string, string> = { bluesky: "Bluesky", reddit: "Reddit", linkedin: "LinkedIn" };
+
 function issuesList(issues: string[]): string {
   return issues.length ? `<ul>${issues.map((i) => `<li>${escapeHtml(i)}</li>`).join("")}</ul>` : "";
 }
@@ -61,9 +83,49 @@ function checkBlock(check: PageCheck | undefined): string {
   return `<div class="check ${check.pass ? "good" : "bad"}"><strong>Fact-check now: ${check.pass ? "pass" : "would be held"}</strong> (${escapeHtml(check.mode)}) ${escapeHtml(check.summary)}${issuesList(check.issues)}</div>`;
 }
 
-export function statusLabel(p: Pick<PagePost, "status" | "heldFor">): string {
+/** The post's label, from its real state: a platform row that went out (or may have) wins over "pending". */
+export function statusLabel(p: Pick<PagePost, "status" | "heldFor" | "publications">): string {
   if (p.status === "needs_review" && p.heldFor === "quality") return "Held: below the quality bar";
+  const rows = p.publications ?? [];
+  if (p.status === "pending" || p.status === "posting") {
+    if (rows.some((r) => r.status === "posted")) return "Published";
+    if (rows.some((r) => r.status === "maybe_posted")) return "Maybe posted: check";
+    if (rows.some((r) => r.status === "posting" || (r.status === "pending" && r.platform === "linkedin"))) return "Posting";
+  }
   return STATUS_LABEL[p.status] ?? p.status;
+}
+
+/** The command a person runs next for this post / platform row ("" when none). */
+export function nextCommand(p: Pick<PagePost, "id" | "status">, row?: PagePublication): string {
+  if (row) {
+    if (row.status === "maybe_posted") return `npx convex run publish:retryPublication '{"publicationId":"${row.id}","approve":true}'`;
+    if (row.status === "failed") return `npx convex run publish:retryPublication '{"publicationId":"${row.id}"}'`;
+    return "";
+  }
+  if (p.status === "needs_review") return `npx convex run publish:approvePost '{"postId":"${p.id}"}'`;
+  if (p.status === "pending" || p.status === "failed") return `npx convex run publish:publishPost '{"postId":"${p.id}"}'`;
+  return "";
+}
+
+function threadBlock(p: PagePost): string {
+  if (p.thread?.length) {
+    const n = p.thread.length;
+    return `<div class="thread">${p.thread
+      .map((t, i) => `<div class="tpost"><span class="tnum">${i + 1}/${n}</span><div class="post">${escapeHtml(t)}</div></div>`)
+      .join("")}</div>`;
+  }
+  return `${p.threadProblem ? `<p class="err">Doesn't fit a Bluesky thread: ${escapeHtml(p.threadProblem)}</p>` : ""}<div class="post">${escapeHtml(p.text)}</div>`;
+}
+
+function publicationsBlock(p: PagePost): string {
+  const rows = p.publications ?? [];
+  if (!rows.length) return "";
+  const items = rows.map((r) => {
+    const href = safeHref(r.url);
+    const cmd = nextCommand(p, r);
+    return `<li><strong>${escapeHtml(PLATFORM_LABEL[r.platform] ?? r.platform)}</strong>: <span class="pstatus s-${escapeHtml(r.status)}">${escapeHtml(PUBLICATION_LABEL[r.status] ?? r.status)}</span>${r.posts ? ` (${r.posts} post${r.posts === 1 ? "" : "s"})` : ""}${href ? ` <a href="${href}" target="_blank" rel="noopener noreferrer">open</a>` : ""}${r.error && r.status !== "posted" ? ` <span class="perr">${escapeHtml(r.error)}</span>` : ""}${cmd ? `<br><code>${escapeHtml(cmd)}</code>` : ""}</li>`;
+  });
+  return `<ul class="pubs">${items.join("")}</ul>`;
 }
 
 function qualityBlock(q: PagePost["quality"]): string {
@@ -81,12 +143,15 @@ function card(p: PagePost, key: string, check: PageCheck | undefined): string {
     ? `<div class="check bad"><strong>Held:</strong> ${escapeHtml(p.guardSummary ?? "")}${issuesList(heldIssues)}</div>`
     : "";
   const href = `?key=${encodeURIComponent(key)}&check=${encodeURIComponent(p.id)}#${encodeURIComponent(p.id)}`;
+  const cmd = nextCommand(p);
   return `<article id="${escapeHtml(p.id)}">
   <header><span class="who">${escapeHtml(p.elderFirstName)}</span><span class="badge s-${escapeHtml(p.status)}">${escapeHtml(statusLabel(p))}</span><time>${date} UTC</time></header>
   ${p.question ? `<p class="q">Call question: ${escapeHtml(p.question)}</p>` : ""}
-  <div class="post">${escapeHtml(p.text)}</div>
+  ${threadBlock(p)}
+  ${publicationsBlock(p)}
   ${p.error ? `<p class="err">${escapeHtml(p.error)}</p>` : ""}
   ${qualityBlock(p.quality)}${stored}${checkBlock(check?.postId === p.id ? check : undefined)}
+  ${cmd ? `<p class="cmd">${p.status === "needs_review" ? "Approve and post" : "Post it"}: <code>${escapeHtml(cmd)}</code></p>` : ""}
   <footer><a href="${href}">Fact-check now</a> <span class="id">${escapeHtml(p.id)}</span></footer>
 </article>`;
 }
@@ -164,8 +229,11 @@ header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:14px}
 .check{font-size:14px;border-left:3px solid var(--line);padding:4px 10px}.check.good{border-color:var(--good)}.check.bad{border-color:var(--bad)}
 .check ul{margin:4px 0 0;padding-left:18px}.err{color:var(--bad);margin:0;font-size:14px}
 footer{display:flex;gap:12px;font-size:13px;flex-wrap:wrap}a{color:inherit}.id{font-family:ui-monospace,monospace;font-size:12px}
+.thread{display:grid;gap:8px}.tpost{border-left:3px solid var(--line);padding:2px 10px}.tnum{color:var(--muted);font-size:12px}
+.pubs{margin:0;padding-left:18px;font-size:14px}.perr{color:var(--bad)}.s-posted{color:var(--good)}.s-maybe_posted{color:var(--bad)}
+code{font-family:ui-monospace,monospace;font-size:12px;word-break:break-all}.cmd{margin:0;font-size:13px}
 </style></head><body><main>
-<h1>Generated posts</h1><p class="sub">Temporary review page. Newest first, as they would be published. Nothing here posts to LinkedIn.</p>
+<h1>Generated posts</h1><p class="sub">Temporary review page. Newest first, as the Bluesky thread they become (Reddit gets the same story on his profile when it's on; LinkedIn is off). Nothing on this page posts anything: run the commands shown.</p>
 ${body}
 ${renderRepliesSection(opts.replies ?? [])}
 </main></body></html>`;
