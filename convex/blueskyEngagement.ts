@@ -1,12 +1,13 @@
 // How readers reacted to his Bluesky threads (the feedback loop's main source).
 //
 //   scrapeForElder       daily (schedule.dailyEngagement): for each thread he posted in the
-//                        last ~30 days, getPostThread -> likes + reposts on his posts, replies
-//                        by others -> engagement:upsert. One failing thread doesn't stop the rest.
+//                        last ~30 days, getPostThread -> likes + reposts on the root post,
+//                        replies by others -> engagement:upsert. A thread he deleted -> engagement:markGone.
+//                        One failing thread doesn't stop the rest.
 //   publicationsForElder his Bluesky postPublications rows (read only; publish.ts writes them)
 //
-// Reads go to the public AppView (no login needed). Only if that fails for another reason
-// than "deleted" do we retry through his PDS with his session (lib/logins.ts), if he has one.
+// With his login (lib/logins.ts) reads go through his PDS, so accounts he blocked come back as
+// blockedPost and are skipped. Without one, or if that read fails, the public AppView is used.
 // Pure parsing/mapping: lib/blueskyEngagement.ts. Errors carry HTTP statuses only, never tokens.
 
 import { v } from "convex/values";
@@ -27,6 +28,10 @@ import { blueskyLoginForElder, type BlueskyLogin } from "./lib/logins";
 
 /** At most this many rows are looked at per run (newest first). */
 const MAX_PUBLICATIONS = 100;
+const HTTP_TIMEOUT_MS = 10_000;
+
+/** fetch with a timeout: a hung read fails instead of stalling the run. */
+const timedFetch: FetchFn = (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) });
 
 export const publicationsForElder = internalQuery({
   args: { elderId: v.id("elders") },
@@ -71,21 +76,27 @@ export const scrapeForElder = internalAction({
     const result: ScrapeResult = { threads: pubs.length, upserted: 0, likes: 0, reposts: 0, replies: 0, gone: 0, errors: [] };
     if (pubs.length === 0) return result;
 
-    const fetchFn = fetch as unknown as FetchFn;
-    let login: BlueskyLogin | null | undefined; // looked up only if a public read fails
+    const fetchFn = timedFetch;
+    let login: BlueskyLogin | null = null;
+    try {
+      login = await blueskyLoginForElder(ctx, elderId);
+    } catch {
+      login = null; // no usable login: public reads only
+    }
 
     const read = async (pub: BlueskyPublication): Promise<ThreadEngagement> => {
       const records = pub.records ?? [];
-      try {
-        return await threadEngagement(fetchFn, records);
-      } catch (error) {
-        if (isNotFound(error)) throw error;
-        if (login === undefined) login = await blueskyLoginForElder(ctx, elderId);
-        if (!login) throw error;
-        return await withSession(fetchFn, sharedSessionCache(), login, (s) =>
-          threadEngagement(fetchFn, records, { service: s.service, accessJwt: s.accessJwt }),
-        );
+      if (login) {
+        try {
+          return await withSession(fetchFn, sharedSessionCache(), login, (s) =>
+            threadEngagement(fetchFn, records, { service: s.service, accessJwt: s.accessJwt }),
+          );
+        } catch (error) {
+          if (isNotFound(error)) throw error; // deleted: the public read would say the same
+          login = null; // session reads failing: public only for the rest of this run (no login retries)
+        }
       }
+      return threadEngagement(fetchFn, records);
     };
 
     for (const pub of pubs) {
@@ -94,8 +105,19 @@ export const scrapeForElder = internalAction({
       try {
         engagement = await read(pub);
       } catch (error) {
-        if (isNotFound(error)) result.gone += 1; // deleted on Bluesky: nothing to read
-        else result.errors.push(`${label}: ${short(error)}`);
+        if (!isNotFound(error)) {
+          result.errors.push(`${label}: ${short(error)}`);
+          continue;
+        }
+        result.gone += 1; // he deleted it on Bluesky: its old replies must not feed the bank
+        const linkedinUrl = publicationUrl(pub);
+        if (linkedinUrl) {
+          try {
+            await ctx.runMutation(internal.engagement.markGone, { elderId, linkedinUrl, platform: "bluesky" });
+          } catch (markError) {
+            result.errors.push(`engagement:markGone ${label}: ${short(markError)}`);
+          }
+        }
         continue;
       }
       const args = toUpsertArgs(elderId, pub, engagement);

@@ -8,6 +8,8 @@ import {
   feedbackWindowStart,
   linkedinEngagementOn,
   nextSnapshot,
+  LINKEDIN_AFTER_BLUESKY_MS,
+  feedbackVisible,
   planDailyEngagement,
   platformOf,
   shouldRefreshBank,
@@ -124,11 +126,26 @@ test("planDailyEngagement: Bluesky for every active elder; LinkedIn only behind 
     { kind: "bluesky", elderId: "e", delayMs: 60_000 },
   ]);
   const on = planDailyEngagement(elders, true, 30_000).filter((j) => j.kind === "linkedin");
+  // After the 3 Bluesky runs (90 s) plus 12 minutes, so the refresh debounce has passed.
+  assert.equal(LINKEDIN_AFTER_BLUESKY_MS, 12 * 60_000);
   assert.deepEqual(on, [
-    { kind: "linkedin", elderId: "a", delayMs: 0 },
-    { kind: "linkedin", elderId: "e", delayMs: 30_000 },
+    { kind: "linkedin", elderId: "a", delayMs: 90_000 + 12 * 60_000 },
+    { kind: "linkedin", elderId: "e", delayMs: 120_000 + 12 * 60_000 },
   ]);
   assert.equal(planDailyEngagement(elders, true, 30_000).length, 5);
+  // Each elder's LinkedIn run is past the debounce window after his Bluesky run.
+  const all = planDailyEngagement(elders, true, 30_000);
+  for (const li of on) {
+    const bs = all.find((j) => j.kind === "bluesky" && j.elderId === li.elderId)!;
+    assert.ok(li.delayMs - bs.delayMs >= LINKEDIN_AFTER_BLUESKY_MS);
+  }
+});
+
+test("feedbackVisible: a post deleted on its platform or taken down stays out of recentFeedback", () => {
+  assert.equal(feedbackVisible({}, null), true);
+  assert.equal(feedbackVisible({}, {}), true);
+  assert.equal(feedbackVisible({ goneAt: 1 }, null), false, "he deleted the thread in the app");
+  assert.equal(feedbackVisible({}, { removedAt: 1 }), false, "taken down by undo");
 });
 
 test("LinkedIn canonicalization is unchanged for LinkedIn rows", () => {

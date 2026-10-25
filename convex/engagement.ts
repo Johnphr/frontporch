@@ -7,6 +7,8 @@
 //                   something changed schedules conversation.refreshQuestionBank
 //                   (debounced: at most once per elder every 10 minutes, 2 minutes
 //                   after the first change so the whole scrape run lands first)
+//   markGone        the post was deleted on its platform (he deleted the thread himself):
+//                   sets goneAt so recentFeedback stops using it
 //   recentFeedback  posts whose reactions/comments changed recently, for the planner
 //
 // Owner: Core: Data.
@@ -19,6 +21,7 @@ import {
   BANK_REFRESH_DELAY_MS,
   canonicalBlueskyPostUrl,
   cleanComments,
+  feedbackVisible,
   feedbackWindowStart,
   nextSnapshot,
   platformOf,
@@ -91,6 +94,7 @@ export const upsert = internalMutation({
         scrapedAt: now,
         ...(changed ? { changedAt: now } : {}),
         ...(post && !existing.postId ? { postId: post._id } : {}),
+        ...(existing.goneAt !== undefined ? { goneAt: undefined } : {}), // readable again
       });
     } else {
       engagementId = await ctx.db.insert("engagement", {
@@ -124,6 +128,26 @@ export const upsert = internalMutation({
   },
 });
 
+/** The post is gone on its platform. No row yet = nothing to hide. */
+export const markGone = internalMutation({
+  args: { elderId: v.id("elders"), linkedinUrl: v.string(), platform: v.optional(platformValidator) },
+  handler: async (ctx, args): Promise<{ marked: boolean }> => {
+    const platform = args.platform ?? "linkedin";
+    const linkedinUrl =
+      platform === "bluesky" ? canonicalBlueskyPostUrl(args.linkedinUrl) : canonicalLinkedInPostUrl(args.linkedinUrl);
+    if (!linkedinUrl) return { marked: false };
+    const row = (
+      await ctx.db
+        .query("engagement")
+        .withIndex("by_url", (q) => q.eq("linkedinUrl", linkedinUrl))
+        .collect()
+    ).find((r) => r.elderId === args.elderId && platformOf(r) === platform);
+    if (!row) return { marked: false };
+    if (row.goneAt === undefined) await ctx.db.patch(row._id, { goneAt: Date.now() });
+    return { marked: true };
+  },
+});
+
 export type Feedback = {
   /** the post's link on its platform */
   linkedinUrl: string;
@@ -149,7 +173,7 @@ export const recentFeedback = internalQuery({
     const out = await Promise.all(
       rows.map(async (row): Promise<Feedback | null> => {
         const post = row.postId ? await ctx.db.get(row.postId) : null;
-        if (post?.removedAt !== undefined) return null; // taken down: don't bring it up on a call
+        if (!feedbackVisible(row, post)) return null; // deleted or taken down: don't bring it up on a call
         return {
           linkedinUrl: row.linkedinUrl,
           platform: platformOf(row),
