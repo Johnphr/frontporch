@@ -4,22 +4,29 @@
 // Order of work for one post:
 //   1. posts.removedAt (+ reason, status "removed") first, so publishing never sends it again.
 //   2. each postPublications row:
-//        pending / failed / skipped  -> removed (it never went out)
-//        posted / maybe_posted       -> claim as `removing`, delete on the platform, then removed
-//                                       (on failure: back to the previous status + short error)
-//        posting (in flight)         -> left alone; publish re-checks removedAt and calls us again
+//        has a live copy (Bluesky records, Reddit fullname), whatever its status ("failed"
+//        included: a thread that stopped halfway)
+//                                    -> claim as `removing`, delete on the platform, then removed
+//                                       (on failure: back to its status + short error)
+//        pending / failed / skipped, no copy -> removed (it never went out)
+//        posting (in flight)         -> left alone; publish re-checks removedAt and calls us again.
+//                                       Stale (> 15 min, crashed): deleted as maybe_posted if it
+//                                       has a copy, else "manual" (check his profile by hand)
 //        removing (another run)      -> left alone, unless that claim is stale (crashed run)
 //        removed                     -> nothing to do (running twice is safe)
-//        linkedin                    -> no delete API through LinkedAPI: "manual" (a person
-//                                       removes it by hand, then runs undo:markRemovedByHand)
+//        linkedin                    -> no delete through LinkedAPI: "manual" once it went out
+//        threads, x (any other)      -> no delete here yet: always "manual" (never marked
+//                                       removed without a delete)
+//   After a manual removal: undo:markRemovedByHand.
 // Never log post text, reply text, tokens or passwords.
 
 import type { DeleteOutcome } from "./blueskyDelete.ts";
 import type { FetchFn } from "./blueskyClient.ts";
 import type { RedditLogin } from "./logins.ts";
+import { KEEP_UP_LINE, TAKE_DOWN_LINE, TODAY_LINE } from "./prompts/principles.ts";
 import { redditToken } from "./replyPosting.ts";
 
-export type Platform = "bluesky" | "reddit" | "linkedin";
+export type Platform = "bluesky" | "reddit" | "linkedin" | "threads" | "x";
 
 /** A claim older than this is assumed crashed and can be retaken. */
 export const STALE_REMOVE_MS = 15 * 60_000;
@@ -29,32 +36,49 @@ export const LATEST_WINDOW_MS = 14 * 86_400_000;
 
 export const DEFAULT_REASON = "take-down request";
 export const CALL_REASON = "he asked on the call";
+/** This call's own post, stopped because of a take-down on the same call. */
+export const HOLD_REASON = "held: he asked on this call";
+export const HOLD_UNSURE_REASON = "held: he may have asked to take a post down (check with him)";
 
 // ---------- one row: what to do ----------
+
+/** What a failed delete puts the row back to. */
+export type RestoreStatus = "posted" | "maybe_posted" | "failed" | "pending" | "skipped" | "draft" | "needs_review";
 
 export type Step =
   | { kind: "already_removed" }
   | { kind: "mark_removed" } // never went out
   | { kind: "wait"; reason: string } // in flight; someone calls us again
-  | { kind: "manual" } // no delete API: a person removes it by hand
-  | { kind: "delete"; previous: "posted" | "maybe_posted" };
+  | { kind: "manual"; note?: string } // no delete here: a person removes it by hand
+  | { kind: "delete"; previous: RestoreStatus };
 
 const NEVER_POSTED_PUB = ["pending", "failed", "skipped"];
 const NEVER_POSTED_REPLY = ["draft", "needs_review", "failed"];
+
+export const STUCK_NOTE = "Stuck while posting, with no post id saved: check his profile and remove it by hand.";
 
 function stepFor(
   row: { status: string; claimedAt?: number },
   now: number,
   neverPosted: string[],
-  canDelete: boolean,
+  canDelete: boolean, // we have a delete for this platform
+  hasCopy: boolean, // ids of something that went out (Bluesky records, Reddit fullname, reply uri)
 ): Step {
   const s = row.status;
+  const stale = row.claimedAt === undefined || now - row.claimedAt > STALE_REMOVE_MS;
   if (s === "removed") return { kind: "already_removed" };
-  if (neverPosted.includes(s)) return { kind: "mark_removed" };
-  if (s === "posting") return { kind: "wait", reason: "still being posted; it's taken down once that finishes" };
+  if (neverPosted.includes(s)) {
+    // A thread that stopped halfway is "failed", but some of it is live.
+    if (hasCopy) return canDelete ? { kind: "delete", previous: s as RestoreStatus } : { kind: "manual" };
+    return { kind: "mark_removed" };
+  }
+  if (s === "posting") {
+    if (!stale) return { kind: "wait", reason: "still being posted; it's taken down once that finishes" };
+    if (hasCopy && canDelete) return { kind: "delete", previous: "maybe_posted" };
+    return { kind: "manual", note: STUCK_NOTE };
+  }
   if (s === "removing") {
-    const fresh = row.claimedAt !== undefined && now - row.claimedAt <= STALE_REMOVE_MS;
-    if (fresh) return { kind: "wait", reason: "already being taken down" };
+    if (!stale) return { kind: "wait", reason: "already being taken down" };
     // A crashed undo run: we don't know if it went, so treat it as "maybe posted".
     return canDelete ? { kind: "delete", previous: "maybe_posted" } : { kind: "manual" };
   }
@@ -62,9 +86,28 @@ function stepFor(
   return { kind: "wait", reason: `unknown status ${s}` };
 }
 
-/** One postPublications row. LinkedIn has no delete, so it's always manual once it went out. */
-export function publicationStep(row: { platform: string; status: string; claimedAt?: number }, now: number): Step {
-  return stepFor(row, now, NEVER_POSTED_PUB, row.platform === "bluesky" || row.platform === "reddit");
+/** Does this row hold ids of something that went out? */
+export function pubHasCopy(row: { platform: string; records?: unknown[]; externalId?: string }): boolean {
+  if (row.platform === "bluesky") return Boolean(row.records?.length);
+  if (row.platform === "reddit") return isRedditFullname(row.externalId);
+  return false;
+}
+
+/**
+ * One postPublications row. Only Bluesky and Reddit have a delete here. LinkedIn: a row that
+ * never went out is removed, else manual. Any other platform (Threads, X): manual unless it's
+ * already removed.
+ */
+export function publicationStep(
+  row: { platform: string; status: string; claimedAt?: number; records?: unknown[]; externalId?: string },
+  now: number,
+): Step {
+  if (row.platform === "linkedin") return stepFor(row, now, NEVER_POSTED_PUB, false, false);
+  if (row.platform !== "bluesky" && row.platform !== "reddit") {
+    if (row.status === "removed") return { kind: "already_removed" };
+    return { kind: "manual", note: `No delete for ${row.platform} yet: remove it by hand, then run undo:markRemovedByHand.` };
+  }
+  return stepFor(row, now, NEVER_POSTED_PUB, true, pubHasCopy(row));
 }
 
 /** Where to delete a thread reply: its Bluesky uri (or "find his reply under threadRef"), or its Reddit fullname. */
@@ -91,7 +134,9 @@ export function replyStep(
   reply: { platform: string; status: string; claimedAt?: number; postedUri?: string; postedUrl?: string; threadRef?: string },
   now: number,
 ): Step {
-  return stepFor(reply, now, NEVER_POSTED_REPLY, replyDeleteTarget(reply) !== null);
+  const target = replyDeleteTarget(reply);
+  const hasCopy = Boolean(reply.postedUri) || (target !== null && "fullname" in target);
+  return stepFor(reply, now, NEVER_POSTED_REPLY, target !== null, hasCopy);
 }
 
 // ---------- patches ----------
@@ -122,16 +167,21 @@ export function claimPatch(step: Step, now: number, manualNote = MANUAL_NOTE): R
     case "delete":
       return { status: "removing", claimedAt: now };
     case "manual":
-      return { error: manualNote };
+      return { error: step.note ?? manualNote };
     default:
       return null;
   }
 }
 
 /** Row patch after the platform delete. */
-export function finishPatch(previous: "posted" | "maybe_posted", outcome: DeleteOutcome, now: number): Record<string, unknown> {
+export function finishPatch(previous: RestoreStatus, outcome: DeleteOutcome, now: number): Record<string, unknown> {
   if (outcome.ok) return { status: "removed", removedAt: now, claimedAt: undefined, error: undefined };
   return { status: previous, claimedAt: undefined, error: `Take-down failed: ${outcome.error}`.slice(0, 200) };
+}
+
+/** A finish only applies to the claim this run made (a stale claim may have been retaken). */
+export function ownsClaim(row: { status: string; claimedAt?: number }, claimedAt: number | undefined): boolean {
+  return row.status === "removing" && claimedAt !== undefined && row.claimedAt === claimedAt;
 }
 
 // ---------- the run ----------
@@ -144,9 +194,21 @@ export type Entry = {
   step: Step;
   uris?: string[]; // Bluesky: every post of the thread, root first
   externalId?: string; // Reddit fullname
+  claimedAt?: number; // delete steps: the claim this run made
 };
 
 export type RemovalResult = { removed: string[]; failed: string[]; manual: string[]; waiting: string[] };
+
+export const EMPTY_RESULT: RemovalResult = { removed: [], failed: [], manual: [], waiting: [] };
+
+export function mergeResults(a: RemovalResult, b: RemovalResult): RemovalResult {
+  return {
+    removed: [...a.removed, ...b.removed],
+    failed: [...a.failed, ...b.failed],
+    manual: [...a.manual, ...b.manual],
+    waiting: [...a.waiting, ...b.waiting],
+  };
+}
 
 function label(e: { platform: string; url?: string }): string {
   return e.url ? `${e.platform} ${e.url}` : e.platform;
@@ -156,7 +218,7 @@ export type RunDeps = {
   /** Delete on the platform (only called for "delete" entries). */
   remove(entry: Entry): Promise<DeleteOutcome>;
   /** Record the outcome on the row. */
-  finish(entry: Entry & { step: { kind: "delete"; previous: "posted" | "maybe_posted" } }, outcome: DeleteOutcome): Promise<void>;
+  finish(entry: Entry & { step: { kind: "delete"; previous: RestoreStatus } }, outcome: DeleteOutcome): Promise<void>;
 };
 
 /**
@@ -186,6 +248,18 @@ export async function runRemoval(entries: Entry[], deps: RunDeps): Promise<Remov
     }
   }
   return out;
+}
+
+/** removePost runs at most this many times in all for one request. */
+export const MAX_REMOVE_TRIES = 3;
+/** Wait before try 2 and try 3 (the last is past the 15-min stale window). */
+export const RETRY_DELAYS_MS = [60_000, 16 * 60_000];
+
+/** When to run removePost again (ms), or null: nothing failed or waiting, or out of tries. `attempt` starts at 1. */
+export function retryDelay(result: RemovalResult, attempt: number): number | null {
+  if (!result.failed.length && !result.waiting.length) return null;
+  if (attempt >= MAX_REMOVE_TRIES) return null;
+  return RETRY_DELAYS_MS[Math.min(Math.max(attempt, 1), RETRY_DELAYS_MS.length) - 1];
 }
 
 /** A post that was published to LinkedIn before postPublications existed: manual, with its link. */
@@ -227,6 +301,7 @@ export function planPostRemoval(
       step,
       ...(row.records?.length ? { uris: row.records.map((r) => r.uri) } : {}),
       ...(row.externalId ? { externalId: row.externalId } : {}),
+      ...(step.kind === "delete" ? { claimedAt: now } : {}),
     });
   }
   const legacy = legacyLinkedinEntry(post, rows);
@@ -297,20 +372,31 @@ export type LatestCandidate = {
   createdAt: number; // posts._creationTime
   status: string; // posts.status
   linkedinUrl?: string;
-  publications: Array<{ status: string; postedAt?: number }>;
+  removedAt?: number;
+  removedReason?: string;
+  // hasCopy: the row holds ids of something that went out (pubHasCopy), whatever its status
+  publications: Array<{ status: string; postedAt?: number; hasCopy?: boolean }>;
 };
 
 const WENT_OUT = new Set(["posted", "maybe_posted", "posting", "removing"]);
+
+/** This call's own post, held because of a take-down on that call (HOLD_REASON, HOLD_UNSURE_REASON). */
+export function isHoldReason(reason: string | undefined): boolean {
+  return typeof reason === "string" && reason.startsWith("held:");
+}
 
 /** When it went out (newest publication), or undefined if it never did. */
 export function publishedAt(c: LatestCandidate): number | undefined {
   let at: number | undefined;
   for (const p of c.publications) {
-    const wentOut = WENT_OUT.has(p.status) || (p.status === "removed" && p.postedAt !== undefined);
+    const wentOut = WENT_OUT.has(p.status) || p.hasCopy === true || (p.status === "removed" && p.postedAt !== undefined);
     if (wentOut) at = Math.max(at ?? 0, p.postedAt ?? c.createdAt);
   }
   // Older posts published straight to LinkedIn have no publication rows.
   if (at === undefined && !c.publications.length && c.linkedinUrl && (c.status === "published" || c.status === "removed")) at = c.createdAt;
+  // Already taken down: still counts (at its creation time), so asking again never reaches back
+  // to an older post. Not a post held on its own call: that one never went out.
+  if (at === undefined && c.removedAt !== undefined && !isHoldReason(c.removedReason)) at = c.createdAt;
   return at;
 }
 
@@ -339,143 +425,231 @@ export function pickLatestPost(
 
 // ---------- "take that post down" in a call transcript ----------
 //
-// The phone path (pipeline.ts): after a call, a clear take-down request runs removeLatest.
-//   clear      he asks, in a request ("can you take that post down?", "borre la publicación")
-//   confirmed  he said something like it ("take it down", or "post" in a story) AND Pip
-//              committed to it in one of its next two turns ("I'll have it taken down")
-// "We had to take the post down" (a fence post, in a story) is neither. A request turned down
-// in the same breath ("don't take it down") or later ("leave it up") doesn't count.
+// The phone path (pipeline.ts). Only Pip's exact lines (prompts/principles.ts) delete anything:
+//   line         Pip said TAKE_DOWN_LINE right after he asked for a take-down (in one of his
+//                last two turns): his most recent earlier post comes down; this call's is held
+//   today        Pip said TODAY_LINE right after he asked: this call's post is held
+//   unconfirmed  he clearly asked in his own words, but Pip said no line: nothing is deleted;
+//                this call's post is held and the call is flagged for family (calls.takeDown)
+// A retraction later in the call ("leave it up", "never mind", "déjela", Pip's KEEP_UP_LINE)
+// cancels everything before it. Stories ("take down the post on the wall"), past tense
+// ("borré las historias"), questions about what Pip can do ("can you delete posts?"), quotes
+// ("take down that story, he said") and refusals ("no quiero que la quite") are not requests.
 
 export type TranscriptTurn = { role: string; text: string };
+export type TakeDownHow = "line" | "today" | "unconfirmed";
+export type TakeDown = { asked: false } | { asked: true; how: TakeDownHow };
 
+/** Lowercase, no accents. The Spanish past tense of the removal verbs ("borré") is marked first, so it never folds into the imperative ("borre"). */
 function fold(text: string): string {
   return text
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .normalize("NFC")
     .toLowerCase()
-    .replace(/[’‘]/g, "'");
+    .replace(/\b(quit|borr|baj|elimin|retir)é(?!\p{L})/gu, "$1e_past")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[’‘]/g, "'")
+    .replace(/[“”«»]/g, '"');
 }
 
-// Regex pieces, as RegExp sources (String.raw keeps the backslashes).
-const FILLER_EN = String.raw`(?:(?:the|that|this|my|last|latest|previous|recent|newest|other|week'?s?|new)\s+){0,4}`;
-const NOUN_EN = String.raw`(?:post|posts|story|stories|one (?:about|you|from|we|i|with))`;
-const FILLER_ES = String.raw`(?:(?:la|el|las|los|esa|ese|esta|este|mi|mis|ultima|ultimo|pasada|pasado|de|que|semana|nueva)\s+){0,4}`;
-const NOUN_ES = String.raw`(?:publicacion|publicaciones|post|posts|historia|historias)`;
-const VERB_ES = String.raw`(?:quit|baj|borr|elimin|retir)[a-z]*`;
+/** Only letters, digits and apostrophes, single spaces: for comparing Pip's lines. */
+function words(text: string): string {
+  return fold(text).replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** The part of a line that must appear in Pip's turn: its last sentence ("Of course." may be dropped). */
+function lineKey(line: string): string {
+  const sentences = line.replace(/"/g, "").split(/(?<=[.!?])\s+/).filter((x) => x.trim());
+  return words(sentences[sentences.length - 1] ?? line);
+}
+const keysOf = (lines: Record<string, string>) => Object.values(lines).map(lineKey);
+const TAKE_DOWN_KEYS = keysOf(TAKE_DOWN_LINE);
+const TODAY_KEYS = keysOf(TODAY_LINE);
+const KEEP_UP_KEYS = keysOf(KEEP_UP_LINE);
+
+function saysLine(pipText: string, lineKeys: string[]): boolean {
+  const said = ` ${words(pipText)} `;
+  return lineKeys.some((k) => said.includes(` ${k} `));
+}
+
 const re = (source: string) => new RegExp(source, "g");
 
-/** Requests naming the post. Each match's verb is where the framing check looks back from. */
-const STRICT = [
-  re(String.raw`\b(?:take|pull)\s+(?:down|off)\s+${FILLER_EN}${NOUN_EN}\b`),
-  re(String.raw`\b(?:take|pull)\s+${FILLER_EN}${NOUN_EN}\s+(?:down|off)\b`),
-  re(String.raw`\b(?:take|pull)\s+${FILLER_EN}${NOUN_EN}\s+(?:about|from|on|with)\b[^.?!,]{0,40}\s(?:down|off)\b`),
-  re(String.raw`\b(?:delete|remove|unpost|unpublish|erase)\s+${FILLER_EN}${NOUN_EN}\b`),
-  re(String.raw`\b${VERB_ES}\s+${FILLER_ES}${NOUN_ES}\b`),
-  /\bdar de baja\s+(?:la|esa|mi)\s+(?:publicacion|historia)\b/g,
+// English: a request names one post ("that post", "my story about..."), never a bare "posts".
+const DET_EN = String.raw`(?:(?:the|that|this|my|last|latest|previous|recent|most recent|newest|other|last week's|last weeks|today's|todays|new)\s+){1,4}`;
+const NOUN_EN = String.raw`(?:post|story)`;
+// Spanish: usted imperative / subjunctive or infinitive (+ pronouns); never "borré" or "retiramos".
+const VERB_ES = String.raw`(?:quit|borr|baj|elimin|retir)(?:e|en|ar)(?:me|se|nos)?(?:la|lo|las|los)?`;
+const DET_ES = String.raw`(?:(?:la|el|esa|ese|esta|este|mi|su|ultima|ultimo|nueva)\s+){1,3}`;
+// "historia" is also history or records: only with a sign it's the one we posted.
+const NOUN_ES = String.raw`(?:publicacion|post|historia(?=\s+(?:que\s+(?:me\s+|le\s+)?(?:subi|subio|subieron|public|pus|compart)|de\s+la\s+semana\s+pasada|de\s+hoy)))`;
+
+/** Requests naming the post (need a request lead-in, or none: an imperative). */
+const CLEAR = [
+  re(String.raw`\b(?:take|pull)\s+(?:down|off)\s+${DET_EN}${NOUN_EN}\b`),
+  re(String.raw`\b(?:take|pull)\s+${DET_EN}${NOUN_EN}\s+(?:down|off)\b`),
+  re(String.raw`\b(?:take|pull)\s+${DET_EN}${NOUN_EN}\s+about\b[^.?!,]{0,40}?\s(?:down|off)\b`),
+  re(String.raw`\b(?:delete|remove|unpost|unpublish|erase)\s+${DET_EN}${NOUN_EN}\b`),
+  re(String.raw`\b${VERB_ES}\s+${DET_ES}${NOUN_ES}\b`),
+  re(String.raw`\bdar de baja\s+${DET_ES}${NOUN_ES}\b`),
 ];
 
-/** Said as a wish, no lead-in needed: "I'd like that post taken down", "I don't want that story up". */
+/** Said as a wish (no lead-in needed): "I'd like that post taken down", "ya no quiero esa publicación". */
 const WISH = [
-  re(String.raw`\b(?:want|like|need|rather have)\s+${FILLER_EN}${NOUN_EN}\s+(?:(?:taken|pulled|brought)\s+(?:down|off)|deleted|removed)\b`),
-  re(String.raw`\b(?:don'?t|do not) want\s+${FILLER_EN}${NOUN_EN}\s+(?:up|online|out there|on there|on the internet)\b`),
-  re(String.raw`\bya no quiero\s+${FILLER_ES}${NOUN_ES}\b`),
+  re(String.raw`\b(?:want|like|need|rather have)\s+${DET_EN}${NOUN_EN}\s+(?:(?:taken|pulled|brought)\s+(?:down|off)|deleted|removed)\b`),
+  re(String.raw`\b(?:don't|do not) want\s+${DET_EN}${NOUN_EN}\s+(?:up|online|out there|on the internet)\b`),
+  re(String.raw`\bya no quiero\s+${DET_ES}${NOUN_ES}\b`),
 ];
 
-/** Any take-down wording at all: counts only when Pip commits to it right after. */
+/** Any take-down wording at all: enough for Pip's line to count right after it. */
 const VAGUE = [
-  /\b(?:take|pull)\b[^.?!]{0,30}\b(?:down|off)\b/g,
-  /\b(?:delete|remove|erase|unpost)\b/g,
-  re(String.raw`\b${VERB_ES}\b`),
+  /\b(?:take|pull|bring)\b[^.?!]{0,30}?\b(?:down|off)\b/g,
+  /\b(?:delete|remove|erase|unpost|unpublish)\b/g,
+  /\b(?:don't|do not) (?:post|put up|share|publish) (?:it|that|this|today's story|the story|that story)\b/g,
+  /\b(?:don't|do not) want (?:it|that|that one|this|the post|that post|the story|that story|today's story) (?:up|online|out there|posted|on the internet)\b/g,
+  // Spanish verb + a pronoun, article or end of phrase (so English "quite a day" isn't one)
+  re(String.raw`\b${VERB_ES}(?=\s+(?:la|el|esa|ese|esta|este|mi|su|eso|por favor)\b|\s*[,.!?]|\s*$)`),
   /\bdar de baja\b/g,
+  /\bno (?:la|lo) (?:publique|publiquen|suba|suban)\b/g,
+  /\bya no (?:la|lo) quiero\b/g,
 ];
 
-/** Words before the verb that make it a request (or nothing at all: an imperative). */
-const LEAD_IN = /^(?:(?:oh|um|uh|well|so|and|yes|yeah|ok|okay|actually|hey|listen|also|but|now|pip|juanito|oiga|mire|bueno|pues|ah|eh|y|tambien|oye|este|si|ahora)\b[\s,]*)*/;
+/** He changed his mind. */
+const RETRACT = [
+  /\bchanged? my mind\b/g,
+  /\bkeep it\b/g,
+  /\bleave (?:it|that|that one|the post|that post|the story|it all) up\b/g,
+  /\bnever ?mind\b/g,
+  /\bdon't (?:take|pull) (?:it|that|that one|the post|that post) (?:down|off)\b/g,
+  /\bdon't (?:delete|remove) (?:it|that|that one|the post|that post)\b/g,
+  /\bcambie de (?:opinion|idea)\b/g,
+  /\b(?:dejela|dejala|dejelo|dejalo)\b/g,
+  /\bno (?:la|lo|las|los) (?:quite|quiten|borre|borren|baje|bajen|retire|retiren|elimine|eliminen)\b/g,
+];
+
+/** Words before the verb that are just talk (or nothing at all: an imperative). */
+const LEAD_IN = /^(?:(?:oh|um|uh|well|so|and|yes|yeah|ok|okay|actually|hey|listen|also|but|now|pip|juanito|oiga|mire|bueno|pues|ah|eh|y|tambien|oye|si|ahora)\b[\s,]*)*/;
 const FRAMING_EN =
   /^(?:(?:please|can you|could you|would you|will you|you can|just|go ahead and|let's|i want you to|i want them to|i need you to|i'd like you to|i would like you to|i want to|i'd like to|i would like to|i'd rather you|have them|can we|could we|we should|you should|i think we should|get them to)\s*,?\s*)+$/;
 const FRAMING_ES =
-  /^(?:(?:por favor|puede|podria|pudiera|quiero que|me gustaria que|quisiera que|necesito que|le pido que|favor de|me hace el favor de|hagame el favor de|haga el favor de|que|me|se|la|lo|usted|ustedes|no)\s*,?\s*)+$/;
+  /^(?:(?:por favor|(?:me |nos |le )?(?:la |lo |las |los )?(?:puede|podria|pudiera|quiere|quisiera)(?: usted)?|quiero que|quisiera que|me gustaria que|necesito que|le pido que|favor de|(?:me )?(?:hace|haga|hagame) el favor de|usted)\s*,?\s*)*(?:(?:me|se|le|nos)\s+)?(?:(?:la|lo|las|los)\s+)?$/;
+
+/** The sentence the match sits in, up to the match. */
+function clauseBefore(before: string): string {
+  return (before.split(/[.!?;—–]|\s-\s/).pop() ?? "").replace(/[¿¡]/g, " ");
+}
 
 /** Is the text before the verb (same sentence) a request lead-in? */
 function framed(before: string): boolean {
-  const sentence = (before.split(/[.!?;:—–]|\s-\s/).pop() ?? "").replace(/[¿¡"]/g, " ");
-  const rest = sentence.trimStart().replace(LEAD_IN, "").trim();
+  const rest = clauseBefore(before).trimStart().replace(LEAD_IN, "").trim();
   return rest === "" || FRAMING_EN.test(`${rest} `) || FRAMING_ES.test(`${rest} `);
 }
 
-/** "Don't take it down", "no la quite" (but "¿no me la quita?" is a polite request). */
+/** "Don't take it down", "no quiero que la quite", "never delete that post". */
 function negated(before: string): boolean {
-  if (/\b(?:don'?t|do not|never|wouldn'?t|no need to|not)\s+(?:\w+\s+){0,2}$/.test(before)) return true;
-  return /(?:^|[^¿\w])\s*(?:no|nunca)\s+(?:me\s+|le\s+)?(?:la\s+|lo\s+|las\s+|los\s+|se\s+)?$/.test(before);
+  const clause = clauseBefore(before);
+  return (
+    /\b(?:don't|do not|never|wouldn't|won't|shouldn't|didn't|no need to|not)\s+(?:[\w']+\s+){0,3}$/.test(clause) ||
+    /(?:^|\s)(?:no|nunca|jamas)\s+(?:[\w']+\s+){0,3}$/.test(clause)
+  );
 }
 
-/** Pip committing to it (the prompt's line: "I'll have it taken down right after our call"). */
-const CONFIRM = [
-  /\b(?:i'll|i will|we'll|we will|i'm going to|we're going to|i can|i'll make sure|consider it)\b[^.?!]{0,40}\b(?:taken down|take (?:it|that|that one) down|removed|deleted|done)\b/,
-  /\b(?:la|lo|las|los) (?:quitamos|bajamos|borramos|retiramos|eliminamos|quito|bajo|borro|retiro|elimino)\b/,
-  /\b(?:voy a|vamos a|van a)\s+(?:quitar|bajar|borrar|retirar|eliminar)(?:la|lo|las|los)\b/,
-  /\bse (?:quite|baje|borre|retire|elimine)\b/,
-];
+/** Someone else's words: inside quotes, "..., he said", or "my boss said, ...". */
+function reported(before: string, after: string): boolean {
+  if ((before.match(/"/g) ?? []).length % 2 === 1) return true;
+  const sentenceAfter = after.split(/[.!?]/)[0] ?? "";
+  if (/,\s*(?:[\w']+\s+){0,3}(?:said|says|told|tells|yelled|shouted|goes|dijo|dice|decia|grito)\b/.test(sentenceAfter)) return true;
+  return /\b(?:said|says|told (?:me|him|her|us|them)|yelled|shouted|dijo|dice|decia|grito)\s*,?\s*$/.test(clauseBefore(before));
+}
 
-/** Pip's line when he changes his mind ("No problem, I'll leave it up."). */
-const PIP_KEEP_UP = [/\bi'll leave it up\b/, /\bla dejamos\b/];
+// After the post: only words that keep it about the online post ("the post on the wall" is not).
+const TAIL_OK_EN =
+  /^(?:\s*(?:please|for me|right now|right away|now|today|anymore|again|too|as well|already|then|if you (?:can|could)|when you can|online|up|down|off))*\s*(?:$|about\b|from (?:last|this|the other|the last|yesterday|earlier|before|a few|bluesky|reddit|the internet|my (?:page|account|profile)|online|social media)\b|(?:that |which )?(?:you|we|they|pip|juanito|front porch|y'all) (?:put|posted|wrote|shared|made|did|sent)\b|on (?:bluesky|reddit|the internet|line|my (?:page|account|profile)|social media|facebook)\b)/;
+const TAIL_OK_ES =
+  /^(?:\s*(?:por favor|ahora|ya|hoy|tambien|si puede|cuando pueda|mas reciente))*\s*(?:$|de (?:la semana pasada|la otra vez|la ultima vez|ayer|hoy|antier|bluesky|internet|reddit)\b|que\b|sobre\b|acerca\b|en (?:internet|bluesky|reddit|linea)\b)/;
 
-/** He changed his mind later in the call. */
-const RETRACT = [
-  /\b(?:leave|keep) (?:it|that|that one|the post|that post|the story) up\b/,
-  /\bdon'?t (?:take|pull) (?:it|that|that one|the post|that post) (?:down|off)\b/,
-  /\bdon'?t (?:delete|remove) (?:it|that|that one|the post|that post)\b/,
-  /\bnever ?mind,? (?:about )?(?:the|that) (?:post|story)\b/,
-  /\bnever ?mind,? (?:leave|keep) it\b/,
-  /\bno (?:la|lo|las|los) (?:quite|quiten|borre|borren|baje|bajen|retire|elimine)\b/,
-  /\bmejor (?:dejela|dejala|dejelo|dejalo)\b/,
-  /\b(?:dejela|dejala) (?:asi|ahi|puesta|arriba)\b/,
-];
+function tailOk(after: string): boolean {
+  const clause = (after.split(/[,.!?;]/)[0] ?? "").replace(/[¿¡"]/g, " ");
+  return TAIL_OK_EN.test(clause) || TAIL_OK_ES.test(clause);
+}
 
-type Hit = { framed: boolean };
-
-function hits(text: string, patterns: RegExp[]): Hit[] {
-  const out: Hit[] = [];
+/** Last position of a usable match (-1 = none). */
+function lastHit(text: string, patterns: RegExp[], usable: (before: string, after: string) => boolean): number {
+  let at = -1;
   for (const p of patterns) {
-    const re = new RegExp(p.source, "g");
+    const r = new RegExp(p.source, "g");
     let m: RegExpExecArray | null;
-    while ((m = re.exec(text))) {
-      const before = text.slice(0, m.index);
-      if (!negated(before)) out.push({ framed: framed(before) });
+    while ((m = r.exec(text))) {
+      if (usable(text.slice(0, m.index), text.slice(m.index + m[0].length))) at = Math.max(at, m.index);
+      if (m[0].length === 0) r.lastIndex += 1;
     }
   }
-  return out;
+  return at;
 }
 
-function pipConfirmsAfter(turns: TranscriptTurn[], i: number): boolean {
-  const next = turns.slice(i + 1).filter((t) => t.role === "pip").slice(0, 2);
-  return next.some((t) => CONFIRM.some((r) => r.test(fold(t.text))));
+/** One of his turns: where he asks (any wording / clear wording) and where he takes it back (-1 = not in it). */
+export function readElderTurn(raw: string): { ask: number; clear: number; retract: number } {
+  const text = fold(raw);
+  const usable = (before: string, after: string) => !negated(before) && !reported(before, after);
+  const clear = Math.max(
+    lastHit(text, CLEAR, (b, a) => usable(b, a) && framed(b) && tailOk(a)),
+    lastHit(text, WISH, (b, a) => !reported(b, a) && tailOk(a)),
+  );
+  const ask = Math.max(clear, lastHit(text, VAGUE, usable));
+  const retract = lastHit(text, RETRACT, () => true);
+  return { ask, clear, retract };
 }
 
 /**
  * Did he ask, on this call, to take a post down? See the rules above. Reads his turns and
  * Pip's; returns no text.
  */
-export function detectTakeDown(turns: TranscriptTurn[]): { asked: boolean; how?: "clear" | "confirmed" } {
-  let asked: "clear" | "confirmed" | undefined;
-  for (let i = 0; i < turns.length; i++) {
-    const t = turns[i];
-    if (t.role !== "elder") {
-      if (asked && t.role === "pip" && PIP_KEEP_UP.some((r) => r.test(fold(t.text)))) asked = undefined;
+export function detectTakeDown(turns: TranscriptTurn[]): TakeDown {
+  let line = false;
+  let today = false;
+  let clear = false;
+  let elderTurns = 0;
+  let askedOnTurn = -10; // his turn number with the latest ask still standing
+  const reset = () => {
+    line = today = clear = false;
+    askedOnTurn = -10;
+  };
+  for (const t of turns) {
+    if (t.role === "elder") {
+      elderTurns += 1;
+      const r = readElderTurn(t.text);
+      if (r.retract > r.ask) {
+        reset();
+        continue;
+      }
+      if (r.ask >= 0) askedOnTurn = elderTurns;
+      if (r.clear >= 0) clear = true;
       continue;
     }
-    const text = fold(t.text);
-    if (RETRACT.some((r) => r.test(text))) {
-      asked = undefined;
+    if (t.role !== "pip") continue;
+    if (saysLine(t.text, KEEP_UP_KEYS)) {
+      reset();
       continue;
     }
-    if (hits(text, STRICT).some((h) => h.framed) || hits(text, WISH).length) {
-      asked = "clear";
-      continue;
-    }
-    if (hits(text, VAGUE).length && pipConfirmsAfter(turns, i)) asked = "confirmed";
+    if (elderTurns - askedOnTurn > 1) continue; // a line only counts right after he asked
+    if (saysLine(t.text, TAKE_DOWN_KEYS)) line = true;
+    else if (saysLine(t.text, TODAY_KEYS)) today = true;
   }
-  return asked ? { asked: true, how: asked } : { asked: false };
+  if (line) return { asked: true, how: "line" };
+  if (today) return { asked: true, how: "today" };
+  if (clear) return { asked: true, how: "unconfirmed" };
+  return { asked: false };
+}
+
+/** The note on calls.takeDown, for family (no words from the call). */
+export function takeDownNote(how: TakeDownHow): string {
+  if (how === "line") return "He asked to take down his most recent post and Pip confirmed: it's being taken down. This call's post is held.";
+  if (how === "today") return "He asked not to post today's story: this call's post is held.";
+  return "He may have asked to take a post down, but Pip didn't confirm, so nothing was deleted. This call's post is held. Check with him; undo:removePost takes any post down.";
+}
+
+/** The reason on this call's own post when it's held. */
+export function holdReason(how: TakeDownHow): string {
+  return how === "unconfirmed" ? HOLD_UNSURE_REASON : HOLD_REASON;
 }
 
 // ---------- /posts review page ----------

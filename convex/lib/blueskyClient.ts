@@ -40,7 +40,7 @@ export class BlueskyHttpError extends Error {
   }
 }
 
-async function httpError(what: string, res: { status: number; json(): Promise<unknown> }): Promise<BlueskyHttpError> {
+export async function httpError(what: string, res: { status: number; json(): Promise<unknown> }): Promise<BlueskyHttpError> {
   const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
   const name = typeof body?.error === "string" && /^[A-Za-z]{1,40}$/.test(body.error) ? body.error : undefined;
   return new BlueskyHttpError(what, res.status, name);
