@@ -255,6 +255,41 @@ uses the post's elder; `previewText` takes an optional `"language":"es-MX"`.
 
 Unit tests for the formatter and posting decisions (no Convex needed): `node --test "tests/**/*.test.ts"`.
 
+## Check the LinkedIn connection (`linkedapiCheck.ts`, read-only)
+
+Set the tokens in Convex yourself (never paste them in chat or commit them):
+
+```bash
+npx convex env set LINKEDAPI_TOKEN <workspace token>
+npx convex env set LINKEDAPI_ID_TOKEN <the account's identification token>
+```
+
+Then check, without posting anything:
+
+```bash
+npx convex run linkedapiCheck:checkConnection '{}'                         # token valid? which accounts are connected?
+npx convex run linkedapiCheck:checkConnection '{"elderId":"<elders id>"}'  # can we post as him right now?
+```
+
+It only calls LinkedAPI's Admin endpoint `accounts.getAll`: no workflow, nothing posted, no
+token returned or logged. (Per LinkedAPI's docs, for an account that needs reconnecting that call
+creates a reconnection session if none exists, so you get a link to send him.)
+
+- `idToken.matchesAccount`: which connected account `LINKEDAPI_ID_TOKEN` belongs to (missing =
+  it doesn't match any connected account).
+- `elder.verdict` (matched by his `linkedinUrl`):
+  - `ready to post as <name>`: his account is connected and active.
+  - `needs reconnection: open <link>`: his LinkedIn session expired; he opens the link to log in again.
+  - `not connected to LinkedAPI yet`: his account isn't in the LinkedAPI workspace; connect it there.
+  - `his row has no linkedinUrl`: set it (sign-up page or dashboard).
+  - `account is frozen`: the LinkedAPI subscription was downgraded or expired.
+
+**Known gap (multi-user):** posting (`linkedapi.ts`) still uses the single env
+`LINKEDAPI_ID_TOKEN` for every elder, so every post goes to that one account. The fix is to look
+up each elder's identification token at post time from `accounts.getAll` by his `linkedinUrl`,
+and to connect new accounts through LinkedAPI connection sessions from the sign-up page. Not
+built yet.
+
 ## Memory, engagement, scheduling (Core: Data)
 
 Env: `OPENAI_API_KEY` (embeddings for `memories.ts`; `addMany` and `search` throw a

@@ -97,7 +97,7 @@ test("elderVerdict covers every case", () => {
   if (!parsed.ok) return;
   const [walter, rosa] = parsed.accounts;
   assert.equal(elderVerdict(undefined, undefined), "his row has no linkedinUrl");
-  assert.equal(elderVerdict("https://www.linkedin.com/in/x", undefined), "not connected to LinkedAPI yet");
+  assert.equal(elderVerdict("https://www.linkedin.com/in/someone-else", undefined), "not connected to LinkedAPI yet");
   assert.equal(elderVerdict("linkedin.com/in/walter-smith", walter), "ready to post as Walter Smith");
   assert.equal(
     elderVerdict("linkedin.com/in/rosadiaz", rosa),
