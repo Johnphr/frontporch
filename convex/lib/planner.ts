@@ -369,13 +369,29 @@ export type CallPlan = {
   knownBackground?: string;
   /** questionBank row behind `question`; pass to conversation.markPlanUsed once the call starts */
   bankId?: string;
+  /** Where `question` came from when it's research (questionSourceLine): the host says so. */
+  questionSource?: string;
 };
 
 export const FALLBACK_MAIN_QUESTION = "Tell me about a day at work you'll never forget.";
 
+/**
+ * <question_source> for a question that came from research before the call, so the host can say
+ * so ("I came across people in your field asking..."). Fixed text from code; `why` is the
+ * planner's note on a recent topic (callContext fences it). Other sources: undefined.
+ */
+export function questionSourceLine(source: string | undefined, why?: string): string | undefined {
+  if (source === "audience") return "Research before this call: real people in their field asked something like this online.";
+  if (source === "recent_topic") {
+    const note = why?.trim();
+    return `Research before this call: this is being talked about in their field lately.${note ? ` Background: ${note}` : ""}`;
+  }
+  return undefined;
+}
+
 export function buildCallPlan(input: {
   kind: CallKind;
-  bank?: { _id: string; question: string; topicKey: string }[];
+  bank?: { _id: string; question: string; topicKey: string; source?: string; why?: string }[];
   memories?: MemoryLike[];
   feedbackLine?: string;
   readerComments?: string;
@@ -390,6 +406,7 @@ export function buildCallPlan(input: {
     };
   }
   const main = firstBankQuestion(input.bank);
+  const questionSource = main ? questionSourceLine(main.source, main.why) : undefined;
   const memoryLines = formatMemoriesBrief(input.memories ?? [], { max: 6 })
     .split("\n")
     .map((l) => l.replace(/^- /, ""))
@@ -402,6 +419,7 @@ export function buildCallPlan(input: {
     ...(input.readerComments?.trim() ? { readerComments: input.readerComments.trim() } : {}),
     ...(input.commentKeys?.length ? { commentKeys: input.commentKeys } : {}),
     ...(main ? { bankId: main._id } : {}),
+    ...(questionSource ? { questionSource } : {}),
   };
 }
 
@@ -429,6 +447,7 @@ export function toPromptVariables(
       feedback: plan.feedback,
       reader_comments: plan.readerComments,
       question: plan.question,
+      question_source: plan.questionSource,
       accounts: opts.accounts,
     }),
   };

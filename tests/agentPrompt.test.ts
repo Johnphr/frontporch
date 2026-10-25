@@ -123,3 +123,13 @@ test("call shape: off-topic for a moment, then back to the interview; under 10 m
     assert.doesNotMatch(text, /10 to 20 minutes/);
   }
 });
+
+test("research: every host says where a researched question came from, using only <question_source>", async () => {
+  const { inboundAgent } = await import("../convex/lib/prompts/inbound.ts");
+  assert.ok(CONTEXT_PARTS.includes("question_source"));
+  for (const text of [...CHARACTERS.map((c) => characterAgent(c).instructions), inboundAgent(getCharacter("victoria")!).instructions]) {
+    assert.match(text, /<question_source> \(where today's question came from/);
+    assert.match(text, /first say briefly and naturally where it came from/);
+    assert.match(text, /never name a website, a person or a detail it doesn't give/);
+  }
+});

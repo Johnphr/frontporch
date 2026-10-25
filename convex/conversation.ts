@@ -524,7 +524,7 @@ export const planNextCall = internalAction({
       // Don't make the call wait: use the default question now and fill the bank for next time.
       await ctx.scheduler.runAfter(0, internal.conversation.refreshQuestionBank, { elderId });
     }
-    const bank = context.queued.map((r) => ({ _id: String(r._id), question: r.question, topicKey: r.topicKey }));
+    const bank = context.queued.map((r) => ({ _id: String(r._id), question: r.question, topicKey: r.topicKey, source: r.source, why: r.why }));
     const question = firstBankQuestion(bank)?.question ?? FALLBACK_MAIN_QUESTION;
 
     // Memories related to today's question, plus people/places so Pip can use names. Each
