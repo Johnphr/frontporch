@@ -44,8 +44,8 @@ export const MINOR_PENALTY = 5;
 export const MAX_REWRITE_ROUNDS = 1;
 
 // Time: writePost runs inside pipeline.processCall, and Convex actions stop at 10 minutes
-// (ACTION_LIMIT_MS). The memories step runs first (extractKnowledge: up to 2 x 120 s, plus
-// embeddings), so the post step gets what's left: postBudgetMs() = the smaller of
+// (ACTION_LIMIT_MS). The memories step runs alongside it (extractKnowledge: up to 2 x 120 s,
+// plus embeddings), so the post step gets: postBudgetMs() = the smaller of
 // QUALITY_BUDGET_MS and (10 min - time already used - ACTION_SAFETY_MS for saving the post and
 // scheduling the next steps). runQualityLoop never starts a model call past that deadline and
 // caps each call's timeout to the time left. Worst case inside the budget: drafts (parallel)

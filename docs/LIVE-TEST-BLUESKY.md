@@ -97,6 +97,8 @@ Other env vars, all optional (leave them unset unless you need them):
 
 Threads posts only when he connected Threads, so there's no switch for it.
 
+For the pitch, `npx convex env set FAST_POST on`: one draft + fact-check, post in ~15-30 s after hang-up.
+
 ### Test Bluesky accounts
 
 Make **two** accounts at https://bsky.app: **the elder** (posts the thread) and **a reader**
@@ -210,7 +212,7 @@ $f = Get-Content tests/fixtures/story_call.json -Raw | ConvertFrom-Json; $f.elde
 No-shell alternative: Dashboard → Functions → `pipeline:seedEndedCall` → Run function. Paste the
 fixture's JSON with your elderId in place of `REPLACE_WITH_ELDER_ID`.
 
-Watch it (3–6 min: memories, 3 drafts, the judge, up to 2 rewrites):
+Watch it (2–4 min: memories and post together, 3 drafts, the judge, at most 1 rewrite):
 
 ```bash
 npx convex logs
@@ -389,7 +391,7 @@ npx convex run cartesia:startCall "{elderId:'$ELDER_ID'}"
 
 It returns `{status: "started", kind: "story", ...}`. `kind: "onboarding"` means he isn't
 `active` with a profile. Talk for 2+ minutes, tell one story (more than 30 words from you), then
-hang up. The call goes `queued → in_progress → ended → done` (polled every minute). After that,
+hang up. The call goes `queued → in_progress → ended → done` (polled every 15 s, 3 s with `FAST_POST=on`). After that,
 continue from section 4.3.
 
 ## 10. Troubleshooting
@@ -408,7 +410,7 @@ continue from section 4.3.
 | Bluesky row `failed`, `elderAccounts.status: "invalid"` | Bluesky refused the login (app password revoked) | Reconnect (see the "locked" row above) |
 | `needs_review`, `/posts` says "Held by fact-check" + issues | The fact-check found claims not in the call | Read the issues. `publish:approvePost` posts it as is |
 | Fact-check issue "OPENAI_API_KEY is not set in Convex…" | Missing key | Set it. Click "Fact-check now" on `/posts`, then `publish:approvePost` |
-| `needs_review`, "Held: below the quality bar" | Score under 75 (or one criterion under 5) after 2 rewrites | `publish:approvePost` (fact-checks first), or seed again |
+| `needs_review`, "Held: below the quality bar" | Score under 75 (or one criterion under 5) after 1 rewrite | `publish:approvePost` (fact-checks first), or seed again |
 | `needs_review`, "Held: too long for a Bluesky thread" | Can't fit 5 posts of 300 characters (AI line included) | Shorten `posts.text` in the dashboard (keep the paragraphs), then `publish:approvePost`. It refuses until the text fits |
 | `publishPost`: "Held for review. Read it, then run publish:approvePost." | Post is `needs_review` | Use `approvePost` |
 | Bluesky row `maybe_posted` | Timeout after the request went out | Check his profile, then `npx convex run publish:retryPublication "{publicationId:'<id>',approve:true}"` |
