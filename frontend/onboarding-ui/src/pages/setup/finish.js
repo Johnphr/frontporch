@@ -11,7 +11,7 @@ import { saveCallId } from '../../lib/useCallStatus'
 export async function placeCall(elderId, token) {
   try {
     const res = await signupApi.requestCall(elderId, token)
-    if (res?.callId) {
+    if (res?.ok === true && res.callId) {
       saveCallId(res.callId)
       return { callId: res.callId }
     }
