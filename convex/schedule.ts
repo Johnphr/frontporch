@@ -3,6 +3,8 @@
 //   tick                      hourly: for each elder whose weekly call is about an hour
 //                             away -> conversation.prepareCall; whose call hour has
 //                             started -> cartesia.startCall. Each call slot is handled once.
+//                             Website sign-ups still in onboarding only when PUBLIC_CALLS
+//                             allows the number (lib/signupRules.cronMayCall).
 //   dailyEngagement           daily: blueskyEngagement.scrapeForElder for every active
 //                             elder; apify.scrapeEngagement (LinkedIn) too for those with a
 //                             linkedinUrl, only when LINKEDIN_POSTING=on (staggered)
@@ -19,6 +21,7 @@ import { internalAction, internalMutation } from "./_generated/server";
 import { loopCovers, type LoopEnv } from "./lib/callLoop";
 import { linkedinEngagementOn, planDailyEngagement } from "./lib/engagementRules";
 import { PREPARE_CALL_FN, START_CALL_FN, dueActions } from "./lib/schedule";
+import { cronMayCall } from "./lib/signupRules";
 
 // Convex exposes env vars on process.env (declared so we don't need @types/node).
 declare const process: { env: Record<string, string | undefined> };
@@ -51,6 +54,11 @@ export const runTick = internalMutation({
     for (const elder of elders) {
       if (elder.stage !== "active" && elder.stage !== "onboarding") continue;
       result.checked += 1;
+      // Website sign-ups in onboarding ring only when PUBLIC_CALLS allows the number.
+      if (!cronMayCall(elder, process.env)) {
+        result.skipped.push({ elderId: elder._id, reason: "sign-up not allowed by PUBLIC_CALLS" });
+        continue;
+      }
       const due = dueActions(elder, now);
       if (due.skipReason) {
         result.skipped.push({ elderId: elder._id, reason: due.skipReason });

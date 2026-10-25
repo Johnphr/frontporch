@@ -3,7 +3,7 @@
 // No runtime imports: unit-tested directly with Node (tests/signup.test.ts).
 
 import type { CallLanguage } from "./prompts/principles.ts";
-import { localParts, type Weekday } from "./schedule.ts";
+import { WEEKDAYS, localParts, type Weekday } from "./schedule.ts";
 
 export const MAX_NAME_CHARS = 100;
 export const CALLS_PER_DAY = 3;
@@ -163,9 +163,26 @@ export function signupTimezone(raw: string | undefined, phone: string): string {
   return zone && isIanaZone(zone) ? zone : zoneFromPhone(phone);
 }
 
-/** Default weekly slot (lib/schedule.ts format): the sign-up weekday in his zone, 10:00. */
+/**
+ * Default weekly slot (lib/schedule.ts format): the day after sign-up in his zone, 10:00.
+ * Tomorrow, so signing up at 9:55 never brings a surprise call five minutes later.
+ */
 export function defaultCallSlot(nowMs: number, timeZone: string): { callDay: Weekday; callHour: number } {
-  return { callDay: localParts(nowMs, timeZone).weekday, callHour: DEFAULT_CALL_HOUR };
+  const today = WEEKDAYS.indexOf(localParts(nowMs, timeZone).weekday);
+  return { callDay: WEEKDAYS[(today + 1) % 7], callHour: DEFAULT_CALL_HOUR };
+}
+
+/**
+ * May the hourly cron (schedule.runTick) ring him? A website sign-up (has signupTokenHash)
+ * still in onboarding gets the same PUBLIC_CALLS gate as "Call me now": the SMS check is
+ * fake, so anyone can type any number. Seeded or hand-made elders, and active ones, always may.
+ */
+export function cronMayCall(
+  elder: { stage?: string; phone: string; signupTokenHash?: string },
+  env: { PUBLIC_CALLS?: string; CALL_ALLOWLIST?: string },
+): boolean {
+  if (elder.stage !== "onboarding" || !elder.signupTokenHash) return true;
+  return publicCallAllowed(env.PUBLIC_CALLS, env.CALL_ALLOWLIST, elder.phone);
 }
 
 // ---------- Sign-up token ----------
