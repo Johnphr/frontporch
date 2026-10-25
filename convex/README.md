@@ -253,6 +253,15 @@ The AI-disclosure footer follows the elder's language: Spanish (`es-*`) elders g
 `SPANISH_DISCLOSURE`, everyone else the English line (`lib/linkedinPost.ts`). `previewPost`
 uses the post's elder; `previewText` takes an optional `"language":"es-MX"`.
 
+**Post quality** (`llm.writePost`, `lib/postQuality.ts`): 3 drafts with different angles, a
+judge scores each (hook, story, voice, lesson, question, clarity, 0-10, plus any fact he never
+said = score 0), code checks (120-250 words, hook ≤140 chars, ≤2 hashtags, stock phrases,
+markdown, closing question, language), then up to 2 critique -> rewrite rounds on the best.
+It passes at 75/100 with no criterion under 5. Below the bar the post is saved as
+`needs_review` with the judge's notes (shown on `/posts`) and never auto-posts; after a look,
+post it with `npx convex run linkedapi:approvePost '{"postId":"<posts id>"}'`. Cost: up to ~10
+model calls per post; time: ~240 s at worst (each call has its own timeout).
+
 Unit tests for the formatter and posting decisions (no Convex needed): `node --test "tests/**/*.test.ts"`.
 
 ## Memory, engagement, scheduling (Core: Data)
