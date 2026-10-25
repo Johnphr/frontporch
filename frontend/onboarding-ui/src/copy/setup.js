@@ -34,11 +34,8 @@ export const SETUP = {
 
   language: {
     legend: 'Language',
-    hint: 'Each host speaks one language. Choose the language first, then the host.',
     en: 'English',
-    enSub: 'Daniel, Oscar or Victoria',
     es: 'Spanish',
-    esSub: 'Español. Calls with Diana',
     hostLegend: 'Host',
   },
 

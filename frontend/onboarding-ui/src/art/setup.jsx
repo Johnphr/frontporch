@@ -153,21 +153,6 @@ export const NameArt = ({ className }) => (
   </Svg>
 )
 
-/** Step 3: two speech bubbles. */
-export const LanguageArt = ({ className }) => (
-  <Svg viewBox="0 0 320 200" className={className}>
-    <circle cx="160" cy="100" r="92" fill="#FCEEF1" />
-    <rect x="44" y="40" width="140" height="60" rx="30" fill="#F2B8C6" />
-    <path d="M76 94 L66 118 L98 98 Z" fill="#F2B8C6" />
-    <rect x="72" y="60" width="84" height="8" rx="4" fill="#FFFFFF" />
-    <rect x="72" y="74" width="56" height="8" rx="4" fill="#FFFFFF" opacity="0.75" />
-    <rect x="136" y="106" width="140" height="60" rx="30" fill="#8FAE9B" />
-    <path d="M244 160 L256 184 L224 166 Z" fill="#8FAE9B" />
-    <rect x="164" y="126" width="84" height="8" rx="4" fill="#FFFFFF" />
-    <rect x="164" y="140" width="60" height="8" rx="4" fill="#FFFFFF" opacity="0.75" />
-  </Svg>
-)
-
 /** Step 4: a calendar and a clock. */
 export const CalendarArt = ({ className }) => (
   <Svg viewBox="0 0 320 200" className={className}>
