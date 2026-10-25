@@ -12,6 +12,8 @@
 //                              check the thread, then approve:true). approve:true also posts a
 //                              reply the fact-check held. Bluesky first looks for his existing
 //                              reply under the post, so a retry never answers twice.
+//   Undo (undo.ts): a reply that was taken down, or whose call's post was, is never posted;
+//   one taken down mid-post is removed as soon as the post finishes (finishReply).
 //   postDrafts({ maxAgeDays? })   posts every "draft" reply newer than maxAgeDays (default 7):
 //                              the way to send drafts written while AUTO_POST was off.
 //
@@ -25,7 +27,7 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { internalAction, internalMutation, internalQuery, type QueryCtx } from "./_generated/server";
 import { sharedSessionCache, type FetchFn } from "./lib/blueskyClient";
 import { blueskyLoginForElder, redditLoginForElder, type LoginCtx } from "./lib/logins";
 import { parseAutoPost } from "./lib/postFlow";
@@ -146,14 +148,24 @@ export const getReplyForPosting = internalQuery({
   },
 });
 
-/** Atomic claim: only one run moves a reply to `posting`. */
+/** Was the post from this call taken down (undo.ts)? Then its replies never post. */
+async function postRemovedForCall(ctx: { db: QueryCtx["db"] }, callId: Id<"calls">): Promise<boolean> {
+  const post = await ctx.db
+    .query("posts")
+    .withIndex("by_call", (q) => q.eq("callId", callId))
+    .first();
+  return post?.removedAt !== undefined;
+}
+
+/** Atomic claim: only one run moves a reply to `posting` (never once it or its post was taken down). */
 export const claimReply = internalMutation({
   args: { replyId: v.id("threadReplies"), approve: v.boolean() },
   handler: async (ctx, { replyId, approve }): Promise<{ ok: boolean; reason?: string }> => {
     const reply = await ctx.db.get(replyId);
     if (!reply) return { ok: false, reason: "Reply not found." };
     const now = Date.now();
-    const check = canClaimReply({ status: reply.status, claimedAt: reply.claimedAt }, now, approve);
+    const removed = reply.removedAt !== undefined || (await postRemovedForCall(ctx, reply.callId));
+    const check = canClaimReply({ status: reply.status, claimedAt: reply.claimedAt, removed }, now, approve);
     if (!check.ok) return { ok: false, reason: check.reason };
     await ctx.db.patch(replyId, {
       status: "posting",
@@ -170,15 +182,22 @@ export const finishReply = internalMutation({
     replyId: v.id("threadReplies"),
     status: v.union(v.literal("posted"), v.literal("failed"), v.literal("maybe_posted")),
     postedUrl: v.optional(v.string()),
+    postedUri: v.optional(v.string()), // Bluesky at:// uri of his reply (undo deletes by it)
     error: v.optional(v.string()),
   },
-  handler: async (ctx, { replyId, status, postedUrl, error }) => {
+  handler: async (ctx, { replyId, status, postedUrl, postedUri, error }) => {
     await ctx.db.patch(replyId, {
       status,
       claimedAt: undefined,
       ...(postedUrl ? { postedUrl } : {}),
+      ...(postedUri ? { postedUri } : {}),
       ...(status === "posted" ? { postedAt: Date.now(), error: undefined } : { error: error ?? "Posting failed." }),
     });
+    // Taken down while it was being posted: take this one down too.
+    const reply = await ctx.db.get(replyId);
+    if (status !== "failed" && reply && (reply.removedAt !== undefined || (await postRemovedForCall(ctx, reply.callId)))) {
+      await ctx.scheduler.runAfter(0, internal.undo.removeReply, { replyId });
+    }
   },
 });
 
@@ -322,7 +341,7 @@ export const postReply = internalAction({
           await ctx.runMutation(
             internal.threadReplies.finishReply,
             outcome.status === "posted"
-              ? { replyId, status: "posted", ...(outcome.url ? { postedUrl: outcome.url } : {}) }
+              ? { replyId, status: "posted", ...(outcome.url ? { postedUrl: outcome.url } : {}), ...(outcome.uri ? { postedUri: outcome.uri } : {}) }
               : { replyId, status: outcome.status, error: outcome.error },
           );
         },

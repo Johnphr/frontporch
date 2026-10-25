@@ -20,8 +20,9 @@ export type ReplyLanguage = "en" | "es";
  *   failed        nothing was posted (refused before or by the platform): safe to retry
  *   maybe_posted  the post request went out but we don't know if it landed (timeout, 5xx):
  *                 a person checks the thread, then retries with approve: true
+ *   removing / removed   taken down by undo.ts (lib/undo.ts)
  */
-export const REPLY_STATUSES = ["draft", "needs_review", "posting", "posted", "failed", "maybe_posted"] as const;
+export const REPLY_STATUSES = ["draft", "needs_review", "posting", "posted", "failed", "maybe_posted", "removing", "removed"] as const;
 export type ReplyStatus = (typeof REPLY_STATUSES)[number];
 
 /** A posting claim older than this is assumed crashed and can be retaken. */
@@ -222,7 +223,8 @@ export function guardContextForReply(replyLang: ReplyLanguage, callLanguage: str
 
 // ---------- posting claims ----------
 
-export type ReplyState = { status: string; claimedAt?: number };
+/** removed: the reply or its call's post was taken down (undo.ts); it never posts again. */
+export type ReplyState = { status: string; claimedAt?: number; removed?: boolean };
 
 /**
  * May this run post the reply now? One run at a time (claim -> `posting`), never twice.
@@ -232,9 +234,12 @@ export type ReplyState = { status: string; claimedAt?: number };
  *   posting        -> only if the earlier claim is stale (crashed run) AND approve: true,
  *                     since the crashed run may have posted
  *   posted         -> no
+ *   removed (or its post taken down) -> never
  * (On Bluesky, posting also checks for his existing reply under the post first.)
  */
 export function canClaimReply(reply: ReplyState, now: number, approve: boolean): { ok: true } | { ok: false; reason: string } {
+  // Taken down (the reply, or the post from the same call): never posted, approve or not.
+  if (reply.removed) return { ok: false, reason: "Taken down: it won't be posted." };
   switch (reply.status) {
     case "draft":
     case "failed":
@@ -252,6 +257,9 @@ export function canClaimReply(reply: ReplyState, now: number, approve: boolean):
         : { ok: false, reason: "An earlier run stopped mid-post: check the thread, then retry with approve: true." };
     case "posted":
       return { ok: false, reason: "Already posted." };
+    case "removing":
+    case "removed":
+      return { ok: false, reason: "Taken down: it won't be posted." };
     default:
       return { ok: false, reason: `Unknown status ${reply.status}.` };
   }
