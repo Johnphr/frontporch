@@ -8,7 +8,8 @@
 //   publicationsForElder his Bluesky postPublications rows (read only; publish.ts writes them)
 //
 // With his login (lib/logins.ts) reads go through his PDS, so accounts he blocked come back as
-// blockedPost and are skipped. Without one, or if that read fails, the public AppView is used.
+// blockedPost and are skipped. Without one, if that read fails, or with publicOnly (the frequent
+// recent-post crons), the public AppView is used.
 // Pure parsing/mapping: lib/blueskyEngagement.ts. Errors carry HTTP statuses only, never tokens.
 
 import { v } from "convex/values";
@@ -71,9 +72,11 @@ function short(error: unknown): string {
 }
 
 export const scrapeForElder = internalAction({
-  // days: only threads posted in the last `days` (the 5-min recent cron passes 2). Default 30.
-  args: { elderId: v.id("elders"), days: v.optional(v.number()) },
-  handler: async (ctx, { elderId, days }): Promise<ScrapeResult> => {
+  // days: only threads posted in the last `days` (default 30). publicOnly: skip his login and read
+  // the public AppView (the 30-s / 5-min crons: a login every run would hit Bluesky's
+  // createSession limit, 300 a day). Blocked accounts' replies are then dropped only by the daily run.
+  args: { elderId: v.id("elders"), days: v.optional(v.number()), publicOnly: v.optional(v.boolean()) },
+  handler: async (ctx, { elderId, days, publicOnly }): Promise<ScrapeResult> => {
     const rows = await ctx.runQuery(internal.blueskyEngagement.publicationsForElder, { elderId });
     const pubs = publicationsToScrape(rows, Date.now(), scrapeDays(days));
     const result: ScrapeResult = { threads: pubs.length, upserted: 0, likes: 0, reposts: 0, replies: 0, gone: 0, errors: [] };
@@ -81,10 +84,12 @@ export const scrapeForElder = internalAction({
 
     const fetchFn = timedFetch;
     let login: BlueskyLogin | null = null;
-    try {
-      login = await blueskyLoginForElder(ctx, elderId);
-    } catch {
-      login = null; // no usable login: public reads only
+    if (!publicOnly) {
+      try {
+        login = await blueskyLoginForElder(ctx, elderId);
+      } catch {
+        login = null; // no usable login: public reads only
+      }
     }
 
     const read = async (pub: BlueskyPublication): Promise<ThreadEngagement> => {

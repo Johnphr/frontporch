@@ -160,7 +160,12 @@ export const recentEngagement = internalMutation({
     const counts = { bluesky: 0, threads: 0 };
     const days = recentScrapeDays(tier);
     for (const job of planRecentEngagement(pubs, now, RECENT_STAGGER_MS[tier], tier)) {
-      await ctx.scheduler.runAfter(job.delayMs, SCRAPERS[job.kind], { elderId: job.elderId, days });
+      // Bluesky: public reads only (no login every 30 s; Bluesky limits logins per day).
+      if (job.kind === "bluesky") {
+        await ctx.scheduler.runAfter(job.delayMs, SCRAPERS.bluesky, { elderId: job.elderId, days, publicOnly: true });
+      } else {
+        await ctx.scheduler.runAfter(job.delayMs, SCRAPERS.threads, { elderId: job.elderId, days });
+      }
       counts[job.kind] += 1;
     }
     return counts;
