@@ -1,6 +1,8 @@
 // Step 6 (after Review saved the sign-up): his own accounts. Bluesky with a handle + app password
 // (BlueskyConnect.jsx), Threads and X with OAuth (OAuthConnect.jsx). All optional. Finish
-// connects Bluesky first if its fields are filled in, then asks for the first call.
+// connects Bluesky first if its fields are filled in, then asks for the first call: the button
+// says so ("Finish and call now"), with "<host> calls this phone right away." under it.
+// lang: 'es' when the calls are in Spanish (Onboarding setupLanguage).
 import { useRef, useState } from 'react'
 import { accountsCopy } from '../../copy/accounts'
 import { CheckMark, ProfileArt } from '../../art/setup'
@@ -9,8 +11,8 @@ import { BlueskyConnect } from './BlueskyConnect'
 import { OAuthConnect } from './OAuthConnect'
 import { ART, StepCard } from './steps'
 
-export default function AccountsStep({ data, set, words, headingRef, elderId, token, onFinish, beforeLeave }) {
-  const A = accountsCopy()
+export default function AccountsStep({ data, set, words, lang = 'en', host, headingRef, elderId, token, onFinish, beforeLeave }) {
+  const A = accountsCopy(lang)
   const B = A.bluesky
   const form = useRef(null)
   const [finishing, setFinishing] = useState(false)
@@ -36,10 +38,11 @@ export default function AccountsStep({ data, set, words, headingRef, elderId, to
       busy={finishing}
       busyLabel={A.finishing}
       actions={
-        <Button variant="link" small disabled={finishing} onClick={() => finish(true)}>
+        <Button variant="link" small disabled={finishing} aria-describedby="step-footnote" onClick={() => finish(true)}>
           {A.skip}
         </Button>
       }
+      footnote={host ? A.callsNow(host, data.who === 'helper', words.n) : null}
     >
       <p className="flex items-center gap-3 font-bold">
         <CheckMark className="h-8 w-8 flex-none" fill="#8FAE9B" />
@@ -51,13 +54,17 @@ export default function AccountsStep({ data, set, words, headingRef, elderId, to
         <h2 id="bsky-title" className="text-subhead">
           {B.title}
         </h2>
-        {bluesky ? (
-          <p aria-live="polite" className="flex items-center gap-3 rounded-inset bg-sage-tint px-5 py-4">
-            <CheckMark className="h-8 w-8 flex-none" fill="#8FAE9B" />
-            {bluesky.status === 'saved' ? B.connected(bluesky.handle) : B.locked}
-          </p>
-        ) : (
-          <BlueskyConnect ref={form} words={B} elderId={elderId} token={token} disabled={finishing} onDone={(state) => set({ bluesky: state })} />
+        {/* One live region, mounted from the start, so "Bluesky connected" is read out when it appears. */}
+        <div aria-live="polite" className="w-full empty:hidden">
+          {bluesky && (
+            <p className="flex items-center gap-3 rounded-inset bg-sage-tint px-5 py-4">
+              <CheckMark className="h-8 w-8 flex-none" fill="#8FAE9B" />
+              {bluesky.status === 'saved' ? B.connected(bluesky.handle) : B.locked}
+            </p>
+          )}
+        </div>
+        {!bluesky && (
+          <BlueskyConnect ref={form} words={B} lang={lang} elderId={elderId} token={token} disabled={finishing} onDone={(state) => set({ bluesky: state })} />
         )}
       </section>
 
@@ -65,7 +72,7 @@ export default function AccountsStep({ data, set, words, headingRef, elderId, to
         <h2 id="oauth-title" className="text-subhead">
           {A.oauth.title}
         </h2>
-        <OAuthConnect words={A.oauth} elderId={elderId} token={token} beforeLeave={beforeLeave} />
+        <OAuthConnect words={A.oauth} lang={lang} elderId={elderId} token={token} beforeLeave={beforeLeave} />
       </section>
     </StepCard>
   )

@@ -18,7 +18,7 @@ export const ART = 'w-full max-w-[13rem] self-center'
 const AVATAR = 'h-14 w-14 flex-none rounded-full sm:h-[4.5rem] sm:w-[4.5rem]'
 
 /** The card every step sits in. Extra `actions` go after the submit button. */
-export function StepCard({ step, art, title, headingRef, onSubmit, nextLabel, busy, busyLabel, actions, children }) {
+export function StepCard({ step, art, title, headingRef, onSubmit, nextLabel, busy, busyLabel, actions, footnote, children }) {
   return (
     <Card
       as="form"
@@ -36,11 +36,16 @@ export function StepCard({ step, art, title, headingRef, onSubmit, nextLabel, bu
       </h1>
       {children}
       <div className="flex w-full flex-wrap items-center gap-x-6 gap-y-4">
-        <Button type="submit" busy={busy} busyLabel={busyLabel}>
+        <Button type="submit" busy={busy} busyLabel={busyLabel} aria-describedby={footnote ? 'step-footnote' : undefined}>
           {nextLabel}
         </Button>
         {actions}
       </div>
+      {footnote && (
+        <p id="step-footnote" className="-mt-1 text-sm font-bold">
+          {footnote}
+        </p>
+      )}
     </Card>
   )
 }

@@ -11,6 +11,8 @@ import { BlueskyConnect } from '../setup/BlueskyConnect'
 import { OAuthConnect } from '../setup/OAuthConnect'
 import { Button, Card, ErrorText, PillChoices, Toast, cx } from '../../ui/controls'
 import HostCard from './HostCard'
+import { go } from '../../lib/route'
+import { unfinishedSetup } from '../../lib/setupProgress'
 
 const H2 = 'text-subhead'
 const DAY_OPTIONS = DAYS.map((d) => ({ value: d.id, label: d.short, aria: d.name }))
@@ -147,6 +149,15 @@ export default function HomeTab({ elderId, token, profile, onChange }) {
         </p>
         <CallUsLine host={host} />
       </div>
+      {unfinishedSetup(elderId) && (
+        <Card aria-labelledby="finish-setup-title">
+          <h2 id="finish-setup-title" className={H2}>
+            {HOME.finishSetupTitle}
+          </h2>
+          <p>{HOME.finishSetupLead}</p>
+          <Button onClick={() => go('/setup')}>{HOME.finishSetup}</Button>
+        </Card>
+      )}
       <HostCard
         elderId={elderId}
         token={token}

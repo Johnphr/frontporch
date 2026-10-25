@@ -1,16 +1,18 @@
 // Setup step 6: where his stories are posted (his own Bluesky, Threads and X accounts).
 // English and Spanish; error keys are the backend's codes (signup:connectBluesky,
 // signup:startOAuthConnect, and the ?connect_error= codes from the OAuth callbacks).
-// The page is English for now: accountsCopy(them, name) picks 'en'; pass 'es' for a Spanish page.
+// accountsCopy(lang): setup passes 'es' when the calls are in Spanish (Onboarding setupLanguage).
 
 const EN = {
   title: (them, n) => (them ? `Where should ${n}'s stories go?` : 'Where should your stories go?'),
   lead: (them) =>
     `Stories are posted on ${them ? 'their' : 'your'} own accounts, under ${them ? 'their' : 'your'} name. This step is optional: you can skip it.`,
   saved: 'Your sign-up is saved.',
-  finish: 'Finish',
+  finish: 'Finish and call now',
   finishing: 'Finishing…',
-  skip: 'Skip and finish',
+  skip: 'Skip and call now',
+  // Under the Finish buttons: both ring the phone straight away.
+  callsNow: (host, them, n) => (them ? `${host} calls ${n}'s phone right away.` : `${host} calls this phone right away.`),
 
   bluesky: {
     title: 'Bluesky',
@@ -97,9 +99,10 @@ const ES = {
   title: (them, n) => (them ? `¿Dónde publicamos las historias de ${n}?` : '¿Dónde publicamos sus historias?'),
   lead: () => 'Las historias se publican en sus propias cuentas, con su nombre. Este paso es opcional: puede omitirlo.',
   saved: 'Su registro quedó guardado.',
-  finish: 'Terminar',
+  finish: 'Terminar y llamar ahora',
   finishing: 'Terminando…',
-  skip: 'Omitir y terminar',
+  skip: 'Omitir y llamar ahora',
+  callsNow: (host, them, n) => (them ? `${host} llamará al teléfono de ${n} enseguida.` : `${host} llamará a este teléfono enseguida.`),
 
   bluesky: {
     title: 'Bluesky',
@@ -183,5 +186,5 @@ const ES = {
 
 export const ACCOUNTS = { en: EN, es: ES }
 
-/** The accounts step's words (English page for now). */
+/** The accounts step's words: 'es' for Spanish calls, else English. */
 export const accountsCopy = (lang = 'en') => ACCOUNTS[lang] || EN

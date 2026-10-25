@@ -13,7 +13,7 @@ const LINK = 'inline-flex min-h-touch-sm flex-wrap items-center gap-x-2 self-sta
  * words = accountsCopy().bluesky. onDone({ status: 'saved', handle } | { status: 'locked' }).
  * `connectLabel` overrides the button text (e.g. "Reconnect Bluesky").
  */
-export const BlueskyConnect = forwardRef(function BlueskyConnect({ words: B, elderId, token, onDone, disabled, connectLabel, idPrefix = 'bsky' }, ref) {
+export const BlueskyConnect = forwardRef(function BlueskyConnect({ words: B, lang = 'en', elderId, token, onDone, disabled, connectLabel, idPrefix = 'bsky' }, ref) {
   const [handle, setHandle] = useState('')
   const [appPassword, setAppPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -55,7 +55,7 @@ export const BlueskyConnect = forwardRef(function BlueskyConnect({ words: B, eld
       setError(B.errors[res?.error] || B.errors.failed)
       return false
     } catch (err) {
-      setError(err.code === 'NOT_FOUND' ? B.errors.not_found : errorText(err))
+      setError(err.code === 'NOT_FOUND' ? B.errors.not_found : errorText(err, lang))
       return false
     } finally {
       setBusy(false)
@@ -120,7 +120,8 @@ export const BlueskyConnect = forwardRef(function BlueskyConnect({ words: B, eld
           }}
           onKeyDown={onEnter}
         />
-        <Button variant="link" small className="self-start" aria-pressed={showPassword} onClick={() => setShowPassword((s) => !s)}>
+        {/* The label says what a press does (show / hide); no aria-pressed on top of it. */}
+        <Button variant="link" small className="self-start" aria-controls={passwordId} onClick={() => setShowPassword((s) => !s)}>
           {showPassword ? B.hide : B.show}
         </Button>
       </div>

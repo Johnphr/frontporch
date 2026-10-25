@@ -1,13 +1,15 @@
 // "Connect Threads" / "Connect X" (convex/signup.ts startOAuthConnect). Click -> the backend gives
 // the platform's consent URL -> the browser goes there -> the platform sends him to convex
 // /oauth/<id>/callback -> back to the site with ?connected=<id> or ?connect_error=<code>&platform=<id>
-// (lib/oauthReturn.js). Setup progress survives the trip (Onboarding.jsx); which platforms are
-// connected is kept under OAUTH_KEY. No token from the platform ever reaches this page.
+// (lib/oauthReturn.js). Setup progress survives the trip (lib/setupProgress.js); which platforms
+// setup connected is kept under OAUTH_KEY:<elderId> in localStorage (the trip may come back in a
+// new tab), and OAUTH_FROM_KEY says whether it started in setup or on his page (App.jsx).
+// No token from the platform ever reaches this page.
 import { useEffect, useState } from 'react'
 import { signupApi } from '../../api'
 import { errorText } from '../../copy'
 import { takeOAuthReturn } from '../../lib/oauthReturn'
-import { OAUTH_KEY } from '../../lib/session'
+import { OAUTH_FROM_KEY, OAUTH_KEY } from '../../lib/session'
 import { CheckMark } from '../../art/setup'
 import { Button, ErrorText } from '../../ui/controls'
 
@@ -16,18 +18,27 @@ export const OAUTH_PLATFORMS = [
   { id: 'x', name: 'X', Icon: XIcon },
 ]
 
-const loadConnected = () => {
+const connectedKey = (elderId) => `${OAUTH_KEY}:${elderId}`
+const loadConnected = (elderId) => {
   try {
-    return JSON.parse(sessionStorage.getItem(OAUTH_KEY)) || {}
+    const saved = JSON.parse(localStorage.getItem(connectedKey(elderId)))
+    return saved && typeof saved === 'object' ? saved : {}
   } catch {
     return {}
   }
 }
-const saveConnected = (value) => {
+const saveConnected = (elderId, value) => {
   try {
-    sessionStorage.setItem(OAUTH_KEY, JSON.stringify(value))
+    localStorage.setItem(connectedKey(elderId), JSON.stringify(value))
   } catch {
     /* storage unavailable */
+  }
+}
+const noteStart = (from) => {
+  try {
+    localStorage.setItem(OAUTH_FROM_KEY, from)
+  } catch {
+    /* storage unavailable: App.jsx falls back to setup progress */
   }
 }
 
@@ -36,10 +47,10 @@ const saveConnected = (value) => {
  * `only`: platform ids to offer (his page offers the ones not connected); `labels` overrides
  * the button text per platform (e.g. "Reconnect Threads").
  */
-export function OAuthConnect({ words, elderId, token, beforeLeave, only, labels = {} }) {
+export function OAuthConnect({ words, lang = 'en', elderId, token, beforeLeave, only, labels = {} }) {
   const shown = only ? OAUTH_PLATFORMS.filter((p) => only.includes(p.id)) : OAUTH_PLATFORMS
   // His page knows the real states (getProfile), so it doesn't read setup's saved list.
-  const [connected, setConnected] = useState(() => (only ? {} : loadConnected()))
+  const [connected, setConnected] = useState(() => (only || !elderId ? {} : loadConnected(elderId)))
   const [notice, setNotice] = useState(null) // { platform, ok, code? }
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -51,7 +62,7 @@ export function OAuthConnect({ words, elderId, token, beforeLeave, only, labels 
     if (back.ok) {
       setConnected((prev) => {
         const next = { ...prev, [back.platform]: true }
-        saveConnected(next)
+        if (!only && elderId) saveConnected(elderId, next)
         return next
       })
     }
@@ -69,12 +80,13 @@ export function OAuthConnect({ words, elderId, token, beforeLeave, only, labels 
       const res = await signupApi.startOAuthConnect(elderId, token, id)
       if (res?.ok && /^https:\/\//.test(res.url || '')) {
         beforeLeave?.()
+        noteStart(only ? 'home' : 'setup')
         window.location.assign(res.url)
         return
       }
       setError(words.errors[res?.error] || words.errors.failed)
     } catch (err) {
-      setError(err.code === 'NOT_FOUND' ? words.errors.not_found : err.code === 'NETWORK' ? errorText(err) : words.errors.failed)
+      setError(err.code === 'NOT_FOUND' ? words.errors.not_found : err.code === 'NETWORK' ? errorText(err, lang) : words.errors.failed)
     }
     setBusy('')
   }

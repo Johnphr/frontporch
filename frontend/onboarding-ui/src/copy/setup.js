@@ -103,7 +103,7 @@ export function setupCopy({ them, name, host, hostId }) {
     whenTitle: them ? `When should ${host} call ${n}?` : `When should ${host} call?`,
     whenSummary: (day, time) => `${host} will call ${them ? `${n} ` : ''}every ${day} at ${time}.`,
     reviewTitle: them ? `Does this look right for ${n}?` : 'Does this look right?',
-    reviewIntro: `You can change anything later from ${them ? `${n}'s` : 'your'} page.`,
+    reviewIntro: `You can change ${your} host and call time later from ${them ? `${n}'s` : 'your'} page.`,
     reviewWho: them ? `Me, helping ${n}` : 'Me, for myself',
     phoneNote: (signedIn) =>
       them ? `The number ${host} will call. Make sure it is ${n}'s phone.` : signedIn ? 'The number you signed in with.' : `The number ${host} will call.`,

@@ -37,7 +37,7 @@ function ChangeLink({ label = R.change, what, ...rest }) {
   )
 }
 
-export default function Review({ data, set, words, headingRef, signedInPhone, onGoto, onDone }) {
+export default function Review({ data, set, words, lang = 'en', headingRef, signedInPhone, onGoto, onDone }) {
   const [editing, setEditing] = useState(!data.phone)
   const [country, setCountry] = useState(() => splitE164(data.phone).country)
   const [national, setNational] = useState('')
@@ -198,7 +198,7 @@ export default function Review({ data, set, words, headingRef, signedInPhone, on
           <ChangeLink what="when" onClick={() => onGoto(4)} />
         </Row>
       </dl>
-      <ErrorText id="finish-error">{errorText(error)}</ErrorText>
+      <ErrorText id="finish-error">{errorText(error, lang)}</ErrorText>
     </StepCard>
   )
 }
