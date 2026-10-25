@@ -49,11 +49,37 @@ reconnect. Website sign-ups are called (by the button or the weekly cron) only w
 `PUBLIC_CALLS` allows their number. Details:
 [ARCHITECTURE.md → Accounts](ARCHITECTURE.md#accounts-his-own-bluesky-from-sign-up).
 
+## X (Twitter)
+
+Off by default: X charges for every post and every read. Code: `convex/xAuth.ts` (connect),
+`convex/lib/xPublishing.ts` (posting), `convex/xEngagement.ts` (feedback). Details:
+[ARCHITECTURE.md → X](ARCHITECTURE.md#x-twitter).
+
+1. **Make the X app** at developer.x.com: User authentication settings → OAuth 2.0 on,
+   type **Web App (confidential client)**, permissions **Read and write**, callback URL
+   `https://<deployment>.convex.site/oauth/x/callback` (exactly), website = the sign-up site.
+2. **Env:** `X_CLIENT_ID`, `X_CLIENT_SECRET`, `SIGNUP_SITE_URL` (where he lands after connecting),
+   `ACCOUNTS_ENC_KEY` (already set for Bluesky). Then the switches, all off by default:
+   `X_POSTING=on` (post), `X_THREAD=off` (one post instead of a thread), `X_READ_FEEDBACK=on`
+   (read likes/retweets/quotes daily), `X_READ_REPLIES=on` (also read reply texts; costs more).
+3. **Credits:** new apps are pay-per-use, no free tier. Buy credits in the developer console.
+   Roughly $0.015 per post ($0.20 if it has a link), about $0.005 per post read. A 4-post thread is
+   about $0.06. The feedback run logs its estimated reads (`estimatedReads=`).
+4. **Automated label:** each person turns on X's "Automated" account label (Settings → Your
+   account → Account information → Automation) and names the managing account. X requires it
+   for accounts that post through an app.
+
+**Replies.** Since 2026-02-23 the X API refuses a reply unless the post's author mentioned or
+quoted you. Our threads only reply to his own posts; third-party reports say self-replies still
+work, but X's docs don't say so. So on X the AI note goes in the **first** post. If X refuses a
+self-reply, we stop, keep what went out, and the error says so (then use `X_THREAD=off`). We **never** reply to, mention or quote other people on X:
+X's automation rules forbid unsolicited automated mentions and keyword-triggered replies.
+
 ## Safety
 
 - Posts use **only what the person said**; the prompt forbids adding facts or advice.
 - Pip doesn't give or ask for medical, legal or financial advice, and doesn't push on painful topics.
-- Every post says it was written up with AI from a phone call (the last post of each Bluesky thread).
+- Every post says it was written up with AI from a phone call (the last post of each Bluesky thread; the first post of an X thread, since X may refuse the rest).
 - By phone he can take down his **most recent** post ("Pip, please take my last post down").
   Pip never argues and says one fixed line; only that line, right after he asked, takes the
   post down after the call (from Bluesky and Reddit, with the thread replies from the same
