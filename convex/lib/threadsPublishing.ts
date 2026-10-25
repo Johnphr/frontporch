@@ -25,6 +25,7 @@ import {
   isThreadsGone,
   publishContainer,
   str,
+  type ContainerOptions,
   type ThreadsAuth,
 } from "./threadsClient.ts";
 import { writeFailureStatus } from "./threadReplies.ts";
@@ -86,7 +87,7 @@ export type ThreadsStoryOptions = {
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /** Wait for FINISHED. ERROR / EXPIRED -> an error text. Still not ready after maxWait: try publishing anyway. */
-async function waitReady(fetchFn: FetchFn, auth: ThreadsAuth, id: string, o: ThreadsStoryOptions): Promise<string | null> {
+async function waitReady(fetchFn: FetchFn, auth: ThreadsAuth, id: string, o: WaitOptions): Promise<string | null> {
   const sleep = o.sleep ?? defaultSleep;
   const maxWait = o.maxWaitMs ?? 30_000;
   const step = o.pollMs ?? 3_000;
@@ -123,6 +124,32 @@ async function permalinkOf(fetchFn: FetchFn, auth: ThreadsAuth, records: ThreadR
   }
 }
 
+export type OnePost = { ok: true; id: string } | { ok: false; status: "failed" | "maybe_posted"; error: string };
+export type WaitOptions = Pick<ThreadsStoryOptions, "sleep" | "maxWaitMs" | "pollMs">;
+
+/**
+ * One post: create the TEXT container -> wait until FINISHED -> publish. A failure before the
+ * publish request is "failed" (nothing went out); a publish timeout / 5xx / no id is "maybe_posted".
+ */
+export async function publishOnePost(fetchFn: FetchFn, auth: ThreadsAuth, text: string, o: ContainerOptions, wait: WaitOptions = {}): Promise<OnePost> {
+  let container: string;
+  try {
+    container = await createTextContainer(fetchFn, auth, text, o);
+  } catch (error) {
+    return { ok: false, status: "failed", error: error instanceof Error ? error.message : "Threads create failed" };
+  }
+  const notReady = await waitReady(fetchFn, auth, container, wait);
+  if (notReady) return { ok: false, status: "failed", error: notReady };
+  let id: string;
+  try {
+    id = await publishContainer(fetchFn, auth, container);
+  } catch (error) {
+    const status = error instanceof ThreadsHttpError ? writeFailureStatus(error.status || undefined) : "maybe_posted";
+    return { ok: false, status, error: error instanceof Error ? error.message : "Threads publish failed" };
+  }
+  return id ? { ok: true, id } : { ok: false, status: "maybe_posted", error: "Threads answered without a post id" };
+}
+
 /** Post the thread (splitThreadsThread made `texts`): post 1, then each next post as a reply to the previous one. */
 export async function postThreadsStory(fetchFn: FetchFn, login: ThreadsAuth | null, a: ThreadsStoryOptions): Promise<PlatformOutcome> {
   if (!login) return { status: "failed", error: "His Threads account isn't connected." };
@@ -141,24 +168,9 @@ export async function postThreadsStory(fetchFn: FetchFn, login: ThreadsAuth | nu
   }
 
   for (let i = done.length; i < a.texts.length; i++) {
-    let container: string;
-    try {
-      container = await createTextContainer(fetchFn, login, a.texts[i], i > 0 ? { replyToId: done[i - 1].uri } : {});
-    } catch (error) {
-      // No container, nothing published.
-      return failure("failed", error instanceof Error ? error.message : "Threads create failed", done, a.texts.length, await permalinkOf(fetchFn, login, done));
-    }
-    const notReady = await waitReady(fetchFn, login, container, a);
-    if (notReady) return failure("failed", notReady, done, a.texts.length, await permalinkOf(fetchFn, login, done));
-    let id: string;
-    try {
-      id = await publishContainer(fetchFn, login, container);
-    } catch (error) {
-      const status = error instanceof ThreadsHttpError ? writeFailureStatus(error.status || undefined) : "maybe_posted";
-      return failure(status, error instanceof Error ? error.message : "Threads publish failed", done, a.texts.length, await permalinkOf(fetchFn, login, done));
-    }
-    if (!id) return failure("maybe_posted", "Threads answered without a post id", done, a.texts.length, await permalinkOf(fetchFn, login, done));
-    done.push({ uri: id, cid: "" });
+    const one = await publishOnePost(fetchFn, login, a.texts[i], i > 0 ? { replyToId: done[i - 1].uri } : {}, a);
+    if (!one.ok) return failure(one.status, one.error, done, a.texts.length, await permalinkOf(fetchFn, login, done));
+    done.push({ uri: one.id, cid: "" });
   }
   const url = await permalinkOf(fetchFn, login, done);
   return { status: "posted", records: done, ...(url ? { url } : {}) };
