@@ -77,6 +77,7 @@ export const getDraftContext = internalQuery({
   handler: async (ctx, { callId }) => {
     const call = await ctx.db.get(callId);
     if (!call || call.kind !== "story") return null;
+    if (call.takeDown) return null; // he asked to take a post down on this call: no reply
     const bankId = (call.plan as { bankId?: unknown } | undefined)?.bankId;
     const bankDocId = typeof bankId === "string" ? ctx.db.normalizeId("questionBank", bankId) : null;
     const bankRow = bankDocId ? await ctx.db.get(bankDocId) : null;
@@ -152,6 +153,8 @@ export const getReplyForPosting = internalQuery({
 
 /** Was the post from this call taken down (undo.ts)? Then its replies never post. */
 async function postRemovedForCall(ctx: { db: QueryCtx["db"] }, callId: Id<"calls">): Promise<boolean> {
+  // He asked on this call to take a post down (undo.ts): no reply from this call either.
+  if ((await ctx.db.get(callId))?.takeDown) return true;
   const post = await ctx.db
     .query("posts")
     .withIndex("by_call", (q) => q.eq("callId", callId))
