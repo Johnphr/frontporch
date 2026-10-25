@@ -10,7 +10,9 @@
 //                                     "manual". An in-flight `posting` row is left: publish.ts
 //                                     calls us again after. Then the thread replies from the
 //                                     post's call. Something failed or waiting: runs again later
-//                                     (3 tries in all). -> { removed, failed, manual, waiting }
+//                                     (3 tries in all). A Bluesky row that may have gone out with
+//                                     no post ids: looked for in his repo first, else "manual".
+//                                     -> { removed, cleared (never went out), failed, manual, waiting }
 //   removeReply({ replyId })          the same for one thread reply (Bluesky deleteRecord on
 //                                     postedUri; Reddit /api/del by the comment's fullname)
 //   removeLatest({ elderId, reason?, askedOnCallId? })   his newest post that went out (last
@@ -31,8 +33,9 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery, type ActionCtx } from "./_generated/server";
-import { findOwnReply, sharedSessionCache, withSession, type FetchFn } from "./lib/blueskyClient";
+import { findOwnReply, listOwnPosts, sharedSessionCache, withSession, type FetchFn } from "./lib/blueskyClient";
 import { deleteBlueskyThread, type DeleteOutcome } from "./lib/blueskyDelete";
+import { splitBlueskyThread } from "./lib/blueskyThread";
 import { blueskyLoginForElder, redditLoginForElder } from "./lib/logins";
 import { threadsLoginForElder } from "./lib/threadsLogin";
 import { deleteThreadsPosts } from "./lib/threadsPublishing";
@@ -46,9 +49,11 @@ import {
   cleanReason,
   deleteCopy,
   deleteRedditThing,
+  deleteUnsavedBluesky,
   finishPatch,
   holdReason,
   mergeResults,
+  needsBlueskyLookup,
   ownsClaim,
   pickLatestPost,
   planPostRemoval,
@@ -64,7 +69,9 @@ import {
   type LatestCandidate,
   type Platform,
   type RemovalResult,
+  type RemoveOutcome,
 } from "./lib/undo";
+import { postLanguage } from "./publish";
 
 const HTTP_TIMEOUT_MS = 20_000;
 
@@ -101,7 +108,9 @@ export const claimPostRemoval = internalMutation({
   handler: async (
     ctx,
     { postId, reason },
-  ): Promise<{ found: false } | { found: true; elderId: Id<"elders">; callId: Id<"calls">; entries: Entry[] }> => {
+  ): Promise<
+    { found: false } | { found: true; elderId: Id<"elders">; callId: Id<"calls">; entries: Entry[]; blueskyTexts?: string[] }
+  > => {
     const post = await ctx.db.get(postId);
     if (!post) return { found: false };
     const rows = await ctx.db
@@ -111,7 +120,13 @@ export const claimPostRemoval = internalMutation({
     const plan = planPostRemoval(post, rows, reason, Date.now());
     await ctx.db.patch(postId, plan.postPatch); // first: nothing new goes out
     for (const { id, patch } of plan.rowPatches) await ctx.db.patch(id as Id<"postPublications">, patch);
-    return { found: true, elderId: post.elderId, callId: post.callId, entries: plan.entries };
+    // A Bluesky row with no post ids: the thread as publish.ts posted it, to find it in his repo.
+    let blueskyTexts: string[] | undefined;
+    if (plan.entries.some(needsBlueskyLookup)) {
+      const split = splitBlueskyThread(post.text, post.language ?? postLanguage(await ctx.db.get(post.elderId)));
+      if (split.ok) blueskyTexts = split.posts;
+    }
+    return { found: true, elderId: post.elderId, callId: post.callId, entries: plan.entries, ...(blueskyTexts ? { blueskyTexts } : {}) };
   },
 });
 
@@ -123,11 +138,16 @@ export const finishPublication = internalMutation({
     claimedAt: v.optional(v.number()),
     ok: v.boolean(),
     error: v.optional(v.string()),
+    manual: v.optional(v.boolean()), // not found: a person checks (error = the note)
   },
-  handler: async (ctx, { publicationId, previous, claimedAt, ok, error }) => {
+  handler: async (ctx, { publicationId, previous, claimedAt, ok, error, manual }) => {
     const row = await ctx.db.get(publicationId);
     if (!row || !ownsClaim(row, claimedAt)) return; // someone else finished or retook it
-    const outcome: DeleteOutcome = ok ? { ok: true, deleted: 0, alreadyGone: 0 } : { ok: false, error: error ?? "unknown error" };
+    const outcome: RemoveOutcome = ok
+      ? { ok: true, deleted: 0, alreadyGone: 0 }
+      : manual
+        ? { ok: false, error: error ?? "check his profile", manual: true }
+        : { ok: false, error: error ?? "unknown error" };
     await ctx.db.patch(publicationId, finishPatch(previous, outcome, Date.now()));
   },
 });
@@ -146,6 +166,21 @@ function deleteOnPlatform(
   });
 }
 
+/** A Bluesky row that may have gone out with no post ids: find it in his repo, then delete it (lib/undo.deleteUnsavedBluesky). */
+async function findAndDeleteBluesky(ctx: ActionCtx, elderId: Id<"elders">, texts: string[] | undefined, since: number | undefined): Promise<RemoveOutcome> {
+  const login = await blueskyLoginForElder(ctx, elderId);
+  if (!login) return { ok: false, error: "His Bluesky account isn't connected." };
+  const cache = sharedSessionCache();
+  return deleteUnsavedBluesky(
+    {
+      list: () => withSession(timedFetch, cache, login, (s) => listOwnPosts(timedFetch, s, 50)),
+      remove: (uris) => deleteBlueskyThread(timedFetch, cache, login, uris),
+    },
+    texts,
+    since,
+  );
+}
+
 /**
  * Take a post down everywhere it went, and the thread replies from its call. Contract with
  * publish.ts: called with { postId } when it finds removedAt set right after posting.
@@ -159,7 +194,7 @@ export const removePost = internalAction({
     if (!claim.found) return { ...EMPTY_RESULT, failed: ["Post not found."] };
     const { elderId, callId } = claim;
     let result = await runRemoval(claim.entries, {
-      remove: (e) => deleteOnPlatform(ctx, elderId, e),
+      remove: (e) => (needsBlueskyLookup(e) ? findAndDeleteBluesky(ctx, elderId, claim.blueskyTexts, e.since) : deleteOnPlatform(ctx, elderId, e)),
       finish: async (e, outcome) => {
         await ctx.runMutation(internal.undo.finishPublication, {
           publicationId: e.id as Id<"postPublications">,
@@ -167,6 +202,7 @@ export const removePost = internalAction({
           ...(e.claimedAt !== undefined ? { claimedAt: e.claimedAt } : {}),
           ok: outcome.ok,
           ...(outcome.ok ? {} : { error: outcome.error }),
+          ...(!outcome.ok && "manual" in outcome ? { manual: true } : {}),
         });
       },
     });
@@ -434,8 +470,14 @@ export const holdPostForCall = internalMutation({
 
 const DELETABLE = new Set(["bluesky", "reddit"]);
 
+/** Rows a person may mark: no delete here, or a Bluesky row that may have gone out with no ids. */
+function markableByHand(r: { platform: string; status: string; records?: unknown[] }): boolean {
+  return !DELETABLE.has(r.platform) || (r.platform === "bluesky" && r.status === "maybe_posted" && !pubHasCopy(r));
+}
+
 /**
- * After someone took a post down by hand where we have no delete (LinkedIn, Threads, X). Pass
+ * After someone took a post down by hand where we have no delete (LinkedIn, Threads / X with no
+ * ids, a Bluesky maybe_posted row with no ids that wasn't found in his repo). Pass
  * the publication row, or the post (marks those rows removed; an older post with only
  * posts.linkedinUrl gets a row saying so).
  *   npx convex run undo:markRemovedByHand '{"postId":"..."}'
@@ -447,7 +489,7 @@ export const markRemovedByHand = internalMutation({
     const done = { status: "removed" as const, removedAt: now, claimedAt: undefined, error: undefined };
     if (publicationId) {
       const row = await ctx.db.get(publicationId);
-      if (!row || DELETABLE.has(row.platform)) return { marked: 0 };
+      if (!row || !markableByHand(row)) return { marked: 0 };
       await ctx.db.patch(publicationId, done);
       return { marked: 1 };
     }
@@ -459,7 +501,7 @@ export const markRemovedByHand = internalMutation({
         .query("postPublications")
         .withIndex("by_post", (q) => q.eq("postId", postId))
         .collect()
-    ).filter((r) => !DELETABLE.has(r.platform));
+    ).filter(markableByHand);
     for (const r of rows) await ctx.db.patch(r._id, done);
     if (!rows.length && post.linkedinUrl) {
       // postedAt: it went out when the post was made (so removeLatest still counts it).

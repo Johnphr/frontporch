@@ -131,3 +131,23 @@ test("renderPostsPage: Threads and X rows show their name, status and link", () 
   assert.match(html, /<strong>X<\/strong>: <span class="pstatus s-failed">Partly posted \(1 post out\)<\/span>/);
   assert.match(html, /publish:retryPublication &#39;\{&quot;publicationId&quot;:&quot;x1&quot;\}&#39;/);
 });
+
+test("taken-down posts: 'Removed' or 'Held by him on the call', with the undo status and command", async () => {
+  const { statusLabel, undoBlock } = await import("../convex/lib/postsPage.ts");
+  const at = Date.UTC(2026, 9, 24, 19, 0);
+  const pubs = [{ id: "r1", platform: "bluesky", status: "removed" }];
+  const removed = { ...post, status: "removed", removedAt: at, removedReason: "family request", publications: pubs };
+  assert.equal(statusLabel(removed), "Removed");
+  const held = { ...post, status: "removed", removedAt: at, removedReason: "held: he asked on this call", publications: [] };
+  assert.equal(statusLabel(held), "Held by him on the call");
+  const html = renderPostsPage([removed, held], { key: "k" });
+  assert.match(html, /Taken down 2026-10-24 19:00 UTC \(family request\)/);
+  assert.ok(!html.includes("publish:approvePost"), "no post-it command on a taken-down post");
+  // Live: the undo command is shown; never posted and not taken down: nothing.
+  const live = { ...post, status: "published", publications: [{ id: "r2", platform: "bluesky", status: "posted", url: "https://bsky.app/x" }] };
+  assert.match(undoBlock(live), /Up\. To take it down:.*undo:removePost/);
+  assert.equal(undoBlock({ ...post, status: "pending", publications: [{ id: "r3", platform: "bluesky", status: "pending" }] }), "");
+  // Partly down: what's still up, and the retry command.
+  const partlyDown = { ...live, removedAt: at, publications: [...pubs, { id: "r4", platform: "linkedin", status: "posted", url: "https://www.linkedin.com/feed/update/1" }] };
+  assert.match(undoBlock(partlyDown), /still up: linkedin: remove by hand/);
+});

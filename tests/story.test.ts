@@ -92,10 +92,22 @@ test("reserveDecision: refuses when the kind changed since startCall planned it"
   });
 });
 
-test("parseAutoPost: on by default, off only when asked", () => {
-  assert.equal(parseAutoPost(undefined), true);
-  assert.equal(parseAutoPost(""), true);
-  assert.equal(parseAutoPost("on"), true);
-  assert.equal(parseAutoPost("true"), true);
+test("parseAutoPost: on when unset or on/true/1/yes; off for anything else (one warning)", async () => {
+  for (const on of [undefined, "", "  ", "on", "ON", " true ", "1", "yes"]) assert.equal(parseAutoPost(on), true, String(on));
   for (const off of ["off", "OFF", " false ", "0", "no"]) assert.equal(parseAutoPost(off), false, off);
+  const warnings: unknown[][] = [];
+  const warn = console.warn;
+  console.warn = (...a: unknown[]) => void warnings.push(a);
+  try {
+    for (const odd of ["of", "maybe", "disabled", "enabled", "onn"]) assert.equal(parseAutoPost(odd), false, odd);
+  } finally {
+    console.warn = warn;
+  }
+  assert.ok(warnings.length <= 1, "warned once at most");
+  assert.ok(warnings.every((w) => !String(w[0]).includes("maybe")), "fixed text, not the value");
+  // Every caller agrees: an odd value is off for the loop's safety check too.
+  const { postingMayBeLive, loopInterval } = await import("../convex/lib/callLoop.ts");
+  assert.equal(postingMayBeLive({ AUTO_POST: "maybe" }), false);
+  assert.equal(postingMayBeLive({}), true);
+  assert.deepEqual(loopInterval({ CALL_INTERVAL_MINUTES: "5", AUTO_POST: "yes" }), { minutes: null, blocked: "posting_live" });
 });

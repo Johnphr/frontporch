@@ -7,19 +7,23 @@ import { blueskyDeleteOrder, deleteBlueskyThread } from "../convex/lib/blueskyDe
 import { TAKE_DOWN_LINE, KEEP_UP_LINE, TODAY_LINE } from "../convex/lib/prompts/principles.ts";
 import { canClaimReply, callLanguageOf } from "../convex/lib/threadReplies.ts";
 import {
+  BLUESKY_NOT_FOUND_NOTE,
   HOLD_REASON,
   STALE_REMOVE_MS,
   STUCK_NOTE,
   claimPatch,
   deleteRedditThing,
+  deleteUnsavedBluesky,
   detectTakeDown,
   finishPatch,
+  needsBlueskyLookup,
   ownsClaim,
   pickLatestPost,
   planPostRemoval,
   postRemovalPatch,
   postUndoInfo,
   publicationStep,
+  readElderTurn,
   redditCommentFullname,
   replyDeleteTarget,
   replyStep,
@@ -205,7 +209,8 @@ test("removePost: every platform sorted into removed / manual / waiting, post ma
   const r = await s.run(NOW, OK);
   assert.equal(s.db.post.status, "removed");
   assert.equal(s.db.post.removedAt, NOW);
-  assert.deepEqual(r.removed, ["bluesky https://bsky.app/p/1", "reddit"]);
+  assert.deepEqual(r.removed, ["bluesky https://bsky.app/p/1"]);
+  assert.deepEqual(r.cleared, ["reddit"], "never went out: cleared, not counted as removed");
   assert.deepEqual(r.manual, ["linkedin https://www.linkedin.com/feed/update/urn:li:activity:1"]);
   assert.equal(r.failed.length, 0);
   assert.equal(r.waiting.length, 1);
@@ -213,7 +218,45 @@ test("removePost: every platform sorted into removed / manual / waiting, post ma
   assert.equal(s.db.rows.get("fl")!.status, "posting", "in-flight row left alone");
   assert.equal(s.db.rows.get("li")!.status, "posted");
   assert.match(String(s.db.rows.get("li")!.error), /by hand/);
-  assert.equal(summaryLine(r), "2 removed, 1 to remove by hand, 1 waiting");
+  assert.equal(summaryLine(r), "1 removed, 1 never went out, 1 to remove by hand, 1 waiting");
+  // On a second run the cleared row stays cleared, the deleted one stays removed.
+  const again = await s.run(NOW + 1000, OK);
+  assert.deepEqual(again.cleared, ["reddit"]);
+  assert.deepEqual(again.removed, ["bluesky https://bsky.app/p/1"]);
+});
+
+test("removePost: a Bluesky row that may have gone out with no ids is looked for in his repo", async () => {
+  const s = store([{ _id: "bs", platform: "bluesky", status: "maybe_posted", _creationTime: NOW - 60_000 }]);
+  const plan = planPostRemoval({}, [{ _id: "bs", platform: "bluesky", status: "maybe_posted", _creationTime: NOW - 60_000 }], undefined, NOW);
+  assert.equal(needsBlueskyLookup(plan.entries[0]), true);
+  assert.equal(plan.entries[0].since, NOW - 60_000);
+  const texts = ["one", "two"];
+  const listed = [
+    { uri: R2, cid: "c2", text: "two", parentUri: ROOT, createdAt: NOW - 50_000 },
+    { uri: ROOT, cid: "c1", text: "one", createdAt: NOW - 55_000 },
+    { uri: R3, cid: "c3", text: "one", createdAt: NOW - 10 * DAY }, // an older post with the same text
+  ];
+  let removed: string[] = [];
+  const found = await deleteUnsavedBluesky(
+    { list: async () => listed, remove: async (uris) => ((removed = uris), { ok: true, deleted: uris.length, alreadyGone: 0 }) },
+    texts,
+    NOW - 60_000,
+  );
+  assert.equal(found.ok, true);
+  assert.deepEqual(removed, [ROOT, R2]);
+  // Not there: manual (check his profile), never a retried failure.
+  const none = await deleteUnsavedBluesky({ list: async () => [], remove: async () => assert.fail("nothing to delete") }, texts, NOW - 60_000);
+  assert.deepEqual(none, { ok: false, error: BLUESKY_NOT_FOUND_NOTE, manual: true });
+  const r = await s.run(NOW, async () => none);
+  assert.deepEqual(r.manual, ["bluesky"]);
+  assert.equal(r.failed.length, 0);
+  assert.equal(retryDelay(r, 1), null, "not retried");
+  assert.equal(s.db.rows.get("bs")!.status, "maybe_posted");
+  assert.equal(s.db.rows.get("bs")!.error, BLUESKY_NOT_FOUND_NOTE);
+  // His posts couldn't be read: a normal failure (retried).
+  const down = await deleteUnsavedBluesky({ list: async () => Promise.reject(new Error("x")), remove: OK }, texts, NOW);
+  assert.equal(down.ok, false);
+  assert.ok(!("manual" in down));
 });
 
 test("removePost: running twice is safe (no second platform delete)", async () => {
@@ -460,15 +503,26 @@ test("retries: failed or waiting runs again with backoff, 3 tries in all", () =>
   assert.equal(retryDelay({ ...done, waiting: ["bluesky (in flight)"] }, 1), 60_000);
 });
 
-test("removeLatest: a removed post counts at its creation time; a post held on its own call doesn't", () => {
-  const removedByFamily = { ...cand("fam", "c2", [{ status: "removed" }], NOW - DAY), removedAt: NOW - DAY / 2, removedReason: "family request" };
+test("removeLatest: a removed post that went out still counts; a post held on its own call doesn't", () => {
+  // Deleted rows keep postedAt / records.
+  const removedByFamily = { ...cand("fam", "c2", [{ status: "removed", postedAt: NOW - DAY, hasCopy: true }], NOW - DAY), removedAt: NOW - DAY / 2, removedReason: "family request" };
   const older = cand("older", "c1", [{ status: "posted", postedAt: NOW - 5 * DAY }]);
   assert.equal(pickLatestPost([older, removedByFamily], NOW)?.postId, "fam");
+  // A legacy post (no rows) taken down counts at its creation time.
+  const legacy = { ...cand("legacy", "c5", [], NOW - DAY), status: "removed", removedAt: NOW - DAY / 2, removedReason: "family request" };
+  assert.equal(pickLatestPost([older, legacy], NOW)?.postId, "legacy");
   const held = { ...cand("held", "c3", [{ status: "removed" }], NOW - DAY), removedAt: NOW - DAY, removedReason: HOLD_REASON };
   assert.equal(pickLatestPost([older, held], NOW)?.postId, "older", "never went out: not 'that last post'");
   // A half-posted thread (failed with records) went out.
   const partial = cand("partial", "c4", [{ status: "failed", hasCopy: true }], NOW - 2 * DAY);
   assert.equal(pickLatestPost([older, partial], NOW)?.postId, "partial");
+});
+
+test("removeLatest: a newer post removed before it ever went out is skipped (S2)", () => {
+  // B: taken down while its rows were still pending (marked removed, no postedAt, no ids).
+  const b = { ...cand("B", "c2", [{ status: "removed" }, { status: "removed" }], NOW - DAY), status: "removed", removedAt: NOW - DAY, removedReason: "family request" };
+  const a = cand("A", "c1", [{ status: "posted", postedAt: NOW - 3 * DAY, hasCopy: true }], NOW - 3 * DAY);
+  assert.equal(pickLatestPost([b, a], NOW)?.postId, "A");
 });
 
 test("bluesky: only post records are deleted (collection checked)", async () => {
@@ -496,10 +550,11 @@ test("transcript: Pip's exact take-down line right after he asks is the trigger 
   assert.equal(detectTakeDown([him("Take it down, would you?"), pip("Your most recent one?"), him("Yes."), pip(said(TAKE_DOWN_LINE.en))]).asked, true);
 });
 
-test("transcript: Pip's line doesn't count without a request right before it", () => {
-  assert.equal(detectTakeDown([him("We talked about the bridge."), pip(said(TAKE_DOWN_LINE.en))]).asked, false);
+test("transcript: Pip's line without a request right before it deletes nothing (it only holds)", () => {
+  const hold = { asked: true, how: "unconfirmed" };
+  assert.deepEqual(detectTakeDown([him("We talked about the bridge."), pip(said(TAKE_DOWN_LINE.en))]), hold);
   const farBack = [him("Delete it."), pip("Mm."), him("Anyway."), pip("Go on."), him("The bridge."), pip(said(TAKE_DOWN_LINE.en))];
-  assert.equal(detectTakeDown(farBack).asked, false, "too far back");
+  assert.deepEqual(detectTakeDown(farBack), hold, "too far back");
   // The old loose path: vague wording + any commitment from Pip is no longer enough.
   assert.equal(detectTakeDown([him("We had to pull the old shingles off."), pip("Well, we're all done for today.")]).asked, false);
   assert.equal(detectTakeDown([him("That thing you put up last week, take it down."), pip("Of course, I'll take care of it.")]).asked, false);
@@ -546,19 +601,103 @@ test("transcript: today's story only: Pip's today line holds this call's post", 
   assert.deepEqual(detectTakeDown([him("Por favor no la publique."), pip(said(TODAY_LINE.es))]), { asked: true, how: "today" });
 });
 
-test("transcript: second thoughts cancel (his words or Pip's keep-up line)", () => {
+test("transcript: second thoughts cancel (his words for an unconfirmed ask, Pip's keep-up line for a confirmed one)", () => {
   const asked = [him("Please take down that last post."), pip(said(TAKE_DOWN_LINE.en))];
-  for (const text of ["Actually I changed my mind.", "No, keep it.", "Leave it up, please.", "Never mind.", "Cambié de opinión.", "Mejor déjela.", "No la quite."]) {
-    assert.equal(detectTakeDown([...asked, him(text)]).asked, false, text);
+  const unconfirmed = [him("Please take down that last post."), pip("Mm.")];
+  const retractions = [
+    "Actually I changed my mind.",
+    "Leave it up, please.",
+    "Cambié de opinión.",
+    "Mejor déjela publicada.",
+    "No la quite.",
+    "Don't take it down.",
+  ];
+  for (const text of retractions) {
+    assert.equal(detectTakeDown([...unconfirmed, him(text)]).asked, false, text);
+    // Pip already confirmed: only his keep-up line cancels.
+    assert.deepEqual(detectTakeDown([...asked, him(text)]), { asked: true, how: "line" }, text);
+    assert.equal(detectTakeDown([...asked, him(text), pip(said(KEEP_UP_LINE.en))]).asked, false, text);
+  }
+  // In the same turn, after the ask.
+  assert.equal(detectTakeDown([him("Take down that last post. Actually, I changed my mind, leave it up.")]).asked, false);
+  // Only within his next 2 turns.
+  const late = [...unconfirmed, him("So the bridge."), pip("Go on."), him("And then the rain."), pip("Mm."), him("I changed my mind.")];
+  assert.deepEqual(detectTakeDown(late), { asked: true, how: "unconfirmed" });
+  // Bare "keep it" / "never mind" / "déjela" aren't retractions.
+  for (const text of ["No, keep it.", "Never mind.", "Mejor déjela."]) {
+    assert.deepEqual(detectTakeDown([...unconfirmed, him(text)]), { asked: true, how: "unconfirmed" }, text);
   }
   assert.equal(detectTakeDown([...asked, him("Hmm."), pip(said(KEEP_UP_LINE.en))]).asked, false);
   const es = [him("Por favor borre la última publicación."), pip(said(TAKE_DOWN_LINE.es)), him("..."), pip(said(KEEP_UP_LINE.es))];
   assert.equal(detectTakeDown(es).asked, false);
   assert.equal(detectTakeDown([him("Can you take down the post?"), pip("Of course."), him("Hmm."), pip(said(KEEP_UP_LINE.en))]).asked, false);
   // Asking again after a change of mind counts again.
-  const again = [...asked, him("Never mind."), pip("Okay."), him("No, really, take that post down."), pip(said(TAKE_DOWN_LINE.en))];
+  const again = [...asked, him("I changed my mind."), pip(said(KEEP_UP_LINE.en)), him("No, really, take that post down."), pip(said(TAKE_DOWN_LINE.en))];
   assert.deepEqual(detectTakeDown(again), { asked: true, how: "line" });
   assert.equal(detectTakeDown([]).asked, false);
+});
+
+test("transcript: Pip's today line holds wherever it comes (review examples)", () => {
+  const es = ["No publique la historia de hoy, por favor.", "Eso no lo ponga en internet.", "No quiero que publiquen esto.", "Por favor no suban esto."];
+  for (const text of es) {
+    assert.deepEqual(detectTakeDown([him(text), pip(said(TODAY_LINE.es))]), { asked: true, how: "today" }, text);
+    assert.ok(readElderTurn(text).ask >= 0, `ask: ${text}`);
+  }
+  for (const text of ["I'd rather you not post this story.", "Please don't put this on the internet."]) {
+    assert.deepEqual(detectTakeDown([him(text), pip(said(TODAY_LINE.en))]), { asked: true, how: "today" }, text);
+    assert.ok(readElderTurn(text).ask >= 0, `ask: ${text}`);
+  }
+  // No ask spotted at all: still held.
+  assert.deepEqual(detectTakeDown([him("We talked about the bridge."), pip(said(TODAY_LINE.en))]), { asked: true, how: "today" });
+  assert.equal(readElderTurn("¿No publiqué ya esa historia?").ask, -1, "past tense isn't an ask");
+});
+
+test("transcript: wider take-down asks count with Pip's line (review examples)", () => {
+  for (const text of ["Can you get rid of my last post?", "I want my last post gone."]) {
+    assert.deepEqual(detectTakeDown([him(text), pip(said(TAKE_DOWN_LINE.en))]), { asked: true, how: "line" }, text);
+    // Clear wording: held even without Pip's line.
+    assert.deepEqual(detectTakeDown([him(text), pip("Mm.")]), { asked: true, how: "unconfirmed" }, text);
+  }
+  assert.deepEqual(detectTakeDown([him("Get rid of it, please."), pip(said(TAKE_DOWN_LINE.en))]), { asked: true, how: "line" });
+  assert.deepEqual(detectTakeDown([him("Saque esa publicación, por favor."), pip(said(TAKE_DOWN_LINE.es))]), { asked: true, how: "line" });
+  // Not asks.
+  assert.deepEqual(detectTakeDown([pip("Hi."), him("I don't want my last post gone, I love it."), pip("Mm.")]), { asked: false });
+  assert.deepEqual(detectTakeDown([pip("Hi."), him("We had to get rid of the old truck."), pip("Mm.")]), { asked: false });
+  assert.deepEqual(detectTakeDown([pip("Hi."), him("Saqué la publicación del periódico."), pip("Mm.")]), { asked: false });
+});
+
+test("transcript: loose words after Pip's line don't cancel it (review examples)", () => {
+  const line = { asked: true, how: "line" };
+  assert.deepEqual(detectTakeDown([him("Please take down my last post, I'd rather keep it private."), pip(said(TAKE_DOWN_LINE.en))]), line);
+  assert.deepEqual(
+    detectTakeDown([him("Please take down my last post."), pip(said(TAKE_DOWN_LINE.en)), him("Thanks Pip, keep it up, you're doing great.")]),
+    line,
+  );
+  assert.deepEqual(
+    detectTakeDown([him("Please don't post that."), pip(said(TODAY_LINE.en)), him("Let's keep it between us.")]),
+    { asked: true, how: "today" },
+  );
+  assert.deepEqual(
+    detectTakeDown([him("Por favor borre la última publicación."), pip(said(TAKE_DOWN_LINE.es)), him("Gracias. El resto déjelo así, que está bonito.")]),
+    line,
+  );
+  assert.deepEqual(
+    detectTakeDown([
+      him("Please take down that last post."),
+      pip(said(TAKE_DOWN_LINE.en)),
+      him(`My father always told me, "déjalo, mijo," whenever I fussed over the fence.`),
+    ]),
+    line,
+  );
+  // Loose words don't cancel an unconfirmed ask either.
+  assert.deepEqual(
+    detectTakeDown([him("Please take down that last post."), pip("Mm."), him("Thanks Pip, keep it up, you're doing great.")]),
+    { asked: true, how: "unconfirmed" },
+  );
+  assert.deepEqual(
+    detectTakeDown([him("Please take down that last post."), pip("Mm."), him(`He said "I changed my mind" and left.`)]),
+    { asked: true, how: "unconfirmed" },
+  );
 });
 
 test("prompts: one strict take-down rule, no 'which one' question", async () => {

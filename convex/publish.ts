@@ -56,7 +56,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery, type ActionCtx } from "./_generated/server";
 import { sharedSessionCache, type FetchFn } from "./lib/blueskyClient";
 import { splitBlueskyThread } from "./lib/blueskyThread";
-import { blueskyLoginForElder, redditLoginForElder, reportBlueskyLoginError } from "./lib/logins";
+import { blueskyLoginForElder, blueskyLoginState, blueskyProblemReason, redditLoginForElder, reportBlueskyLoginError } from "./lib/logins";
 import { callCharacter } from "./lib/onboarding";
 import {
   buildGuardContext,
@@ -180,27 +180,35 @@ export const claimPost = internalMutation({
 export const saveGuard = internalMutation({
   args: { postId: v.id("posts"), hold: v.boolean(), issues: v.array(v.string()), summary: v.string() },
   handler: async (ctx, { postId, hold, issues, summary }) => {
+    // Taken down meanwhile: keep its "removed" status (undo owns it).
+    const removed = (await ctx.db.get(postId))?.removedAt !== undefined;
     await ctx.db.patch(postId, {
       guardIssues: issues,
       guardSummary: summary,
       ...(hold
-        ? { status: "needs_review", heldFor: "guard" as const, claimedAt: undefined, guardPassedAt: undefined }
+        ? removed
+          ? { guardPassedAt: undefined }
+          : { status: "needs_review", heldFor: "guard" as const, claimedAt: undefined, guardPassedAt: undefined }
         : { guardPassedAt: Date.now() }),
     });
   },
 });
 
-/** The row for this post + platform (created if missing). Off platforms: a pending row becomes skipped. */
+/**
+ * The row for this post + platform (created if missing). Off platforms: a pending row becomes
+ * skipped, with `reason` (else lib/postFlow.skipReason).
+ */
 export const ensurePublication = internalMutation({
-  args: { postId: v.id("posts"), platform: platformValidator, enabled: v.boolean() },
-  handler: async (ctx, { postId, platform, enabled }): Promise<{ id: Id<"postPublications"> }> => {
+  args: { postId: v.id("posts"), platform: platformValidator, enabled: v.boolean(), reason: v.optional(v.string()) },
+  handler: async (ctx, { postId, platform, enabled, reason }): Promise<{ id: Id<"postPublications"> }> => {
     const post = await ctx.db.get(postId);
     if (!post) throw new Error("Post not found");
+    const why = reason ?? skipReason(platform);
     const rows = await ctx.db.query("postPublications").withIndex("by_post", (q) => q.eq("postId", postId)).collect();
     const existing = rows.find((r) => r.platform === platform);
     if (existing) {
       if (!enabled && existing.status === "pending" && !existing.externalId) {
-        await ctx.db.patch(existing._id, { status: "skipped", error: skipReason(platform) });
+        await ctx.db.patch(existing._id, { status: "skipped", error: why });
       }
       return { id: existing._id };
     }
@@ -209,7 +217,7 @@ export const ensurePublication = internalMutation({
       elderId: post.elderId,
       platform,
       status: enabled ? "pending" : "skipped",
-      ...(enabled ? {} : { error: skipReason(platform) }),
+      ...(enabled ? {} : { error: why }),
     });
     return { id };
   },
@@ -302,27 +310,33 @@ function loadData(ctx: ActionCtx, postId: Id<"posts">) {
 }
 
 /**
- * Which platforms are on for him (lib/postFlow.enabledPlatforms). A lookup that throws (an
- * account we can't read) counts as on, so its row ends up `failed` with a clear error instead
- * of being skipped silently. X's login is only read when X_POSTING is on.
+ * Which platforms are on for him (lib/postFlow.enabledPlatforms), and why one is off when the
+ * plain skipReason would mislead. The Bluesky and Reddit lookups never throw (null = off): an
+ * account whose login can't be read (ACCOUNTS_ENC_KEY missing or rotated) is skipped with that
+ * reason, not "not connected". A Threads / X lookup that throws counts as on, so its row ends
+ * up `failed` with a clear error. X's login is only read when X_POSTING is on.
  */
-async function platformsFor(ctx: ActionCtx, elderId: Id<"elders">): Promise<Record<Platform, boolean>> {
+async function platformsFor(
+  ctx: ActionCtx,
+  elderId: Id<"elders">,
+): Promise<{ on: Record<Platform, boolean>; reasons: Partial<Record<Platform, string>> }> {
   const has = (p: Promise<unknown>) => p.then(Boolean, () => true);
   const xOn = xPostingOn(process.env);
   const [bluesky, threads, x, reddit] = await Promise.all([
-    has(blueskyLoginForElder(ctx, elderId)),
+    blueskyLoginState(ctx, elderId),
     has(threadsLoginForElder(ctx, elderId, { fetchFn: timedFetch })),
     xOn ? has(xLoginForElder(ctx, elderId, { fetchFn: timedFetch })) : Promise.resolve(false),
     has(redditLoginForElder(ctx, elderId)),
   ]);
-  return enabledPlatforms({
-    blueskyLogin: bluesky,
+  const on = enabledPlatforms({
+    blueskyLogin: bluesky.login !== null,
     threadsLogin: threads,
     xOn,
     xLogin: x,
     redditLogin: reddit,
     linkedinOn: linkedinPostingOn(process.env.LINKEDIN_POSTING),
   });
+  return { on, reasons: bluesky.problem ? { bluesky: blueskyProblemReason(bluesky.problem) } : {} };
 }
 
 /** A login lookup that throws -> null + a fixed error (nothing is posted). Never the error text. */
@@ -394,13 +408,18 @@ async function postTo(
 /** The DB + HTTP side of lib/postFlow.runPublish / publishOne for one post. */
 function depsFor(ctx: ActionCtx, postId: Id<"posts">, state: { data: PublishData | null }): PublishDeps {
   const previous = new Map<string, string | undefined>();
+  let reasons: Partial<Record<Platform, string>> = {}; // why a platform is off (platformsFor)
   return {
     load: async () => {
       state.data = await loadData(ctx, postId);
       const p = state.data?.post;
       return p ? { status: p.status, ...(p.removedAt !== undefined ? { removedAt: p.removedAt } : {}), ...(p.heldFor ? { heldFor: p.heldFor } : {}) } : null;
     },
-    platforms: () => platformsFor(ctx, state.data!.post.elderId),
+    platforms: async () => {
+      const found = await platformsFor(ctx, state.data!.post.elderId);
+      reasons = found.reasons;
+      return found.on;
+    },
     claimPost: (approve) => ctx.runMutation(internal.publish.claimPost, { postId, approve }),
     guard: async (): Promise<GuardResult> => {
       const data = state.data!;
@@ -420,7 +439,8 @@ function depsFor(ctx: ActionCtx, postId: Id<"posts">, state: { data: PublishData
     saveGuard: async (guard, hold) => {
       await ctx.runMutation(internal.publish.saveGuard, { postId, hold, issues: guard.issues, summary: guard.summary });
     },
-    ensureRow: (platform, enabled) => ctx.runMutation(internal.publish.ensurePublication, { postId, platform, enabled }),
+    ensureRow: (platform, enabled) =>
+      ctx.runMutation(internal.publish.ensurePublication, { postId, platform, enabled, ...(!enabled && reasons[platform] ? { reason: reasons[platform] } : {}) }),
     claimRow: async (id, approve) => {
       const claim = await ctx.runMutation(internal.publish.claimPublication, { publicationId: id as Id<"postPublications">, approve });
       previous.set(id, claim.ok ? claim.previous : undefined);
@@ -503,7 +523,8 @@ export const retryPublication = internalAction({
       console.log(`publish.retryPublication: linkedin row ${publicationId} re-checked: ${after?.status ?? "gone"}`);
       return { status: after?.status ?? row.status, post: settled.status };
     }
-    if (!(await platformsFor(ctx, row.elderId))[platform]) return { status: row.status, reason: skipReason(platform) };
+    const found = await platformsFor(ctx, row.elderId);
+    if (!found.on[platform]) return { status: row.status, reason: found.reasons[platform] ?? skipReason(platform) };
 
     const one = await publishOne(depsFor(ctx, row.postId, state), platform, publicationId, approve ?? false);
     const settled = await ctx.runMutation(internal.publish.settlePost, { postId: row.postId });
