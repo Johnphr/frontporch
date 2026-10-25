@@ -325,7 +325,7 @@ export const writePost = internalAction({
 
 // ---------- summarizeFeedback ----------
 
-const FEEDBACK_SYSTEM = `Readers reacted to an older professional's recent LinkedIn posts. Summarize it for the AI that interviews him weekly.
+const FEEDBACK_SYSTEM = `Readers reacted to an older professional's recent posts (his own social posts). Summarize it for the AI that interviews him weekly.
 
 - resonated: one sentence on what readers liked most (empty string if there's no real signal).
 - readerQuestions: real questions readers asked him in comments that he could answer in a call, rewritten as short open questions to him (max 5; skip spam, self-promotion and rude comments).

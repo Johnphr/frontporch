@@ -77,6 +77,25 @@ export async function postBlueskyReply(
   }
 }
 
+/** A Reddit access token (script app, password grant), or why there isn't one. Nothing is posted. */
+export async function redditToken(fetchFn: FetchFn, login: RedditLogin): Promise<{ token: string } | { error: string }> {
+  const basic = btoa(`${login.clientId}:${login.clientSecret}`); // default Convex runtime: no Buffer
+  let token: unknown;
+  try {
+    const tokenRes = await fetchFn("https://www.reddit.com/api/v1/access_token", {
+      method: "POST",
+      headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/x-www-form-urlencoded", "User-Agent": login.userAgent },
+      body: new URLSearchParams({ grant_type: "password", username: login.username, password: login.password }).toString(),
+    });
+    if (!tokenRes.ok) return { error: `Reddit token HTTP ${tokenRes.status}` };
+    token = ((await tokenRes.json().catch(() => null)) as { access_token?: unknown } | null)?.access_token;
+  } catch {
+    return { error: "Network error or timeout getting a Reddit token." };
+  }
+  if (typeof token !== "string" || !token) return { error: "Reddit returned no access token." };
+  return { token };
+}
+
 /** His comment on the Reddit post (`threadUrl`), through Reddit's API (script app, password grant). */
 export async function postRedditReply(
   fetchFn: FetchFn,
@@ -86,21 +105,9 @@ export async function postRedditReply(
   if (!login) return failed("Reddit posting is off or his Reddit login isn't set.");
   const thingId = redditThingId(a.threadUrl);
   if (!thingId) return failed("Couldn't find the Reddit post id in the thread link.");
-  const basic = btoa(`${login.clientId}:${login.clientSecret}`); // default Convex runtime: no Buffer
-
-  let token: unknown;
-  try {
-    const tokenRes = await fetchFn("https://www.reddit.com/api/v1/access_token", {
-      method: "POST",
-      headers: { Authorization: `Basic ${basic}`, "Content-Type": "application/x-www-form-urlencoded", "User-Agent": login.userAgent },
-      body: new URLSearchParams({ grant_type: "password", username: login.username, password: login.password }).toString(),
-    });
-    if (!tokenRes.ok) return failed(`Reddit token HTTP ${tokenRes.status}`);
-    token = ((await tokenRes.json().catch(() => null)) as { access_token?: unknown } | null)?.access_token;
-  } catch {
-    return failed("Network error or timeout getting a Reddit token.");
-  }
-  if (typeof token !== "string" || !token) return failed("Reddit returned no access token.");
+  const auth = await redditToken(fetchFn, login);
+  if ("error" in auth) return failed(auth.error);
+  const token = auth.token;
 
   let res: Awaited<ReturnType<FetchFn>>;
   try {
