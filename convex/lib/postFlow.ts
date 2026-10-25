@@ -81,6 +81,19 @@ export type PostState = {
 
 export type ClaimCheck = { ok: true } | { ok: false; reason: string };
 
+/** Why a `needs_review` post is held: the quality check (llm.writePost) or the fact-check (postGuard). */
+export type HeldFor = "quality" | "guard";
+
+/**
+ * Does this posting run fact-check the post? createPost: always. approvePost: only a post held
+ * for quality, because the fact-check never ran on it; a guard hold was already checked and a
+ * person approved it (so a second approvePost after a guard hold skips it, as before). Rows
+ * held before heldFor existed count as guard holds.
+ */
+export function shouldRunGuard(approve: boolean, heldFor: HeldFor | undefined): boolean {
+  return !approve || heldFor === "quality";
+}
+
 /**
  * May this run take the row and send it to LinkedAPI?
  * `approve` is a human approving it (linkedapi.approvePost).

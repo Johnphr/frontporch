@@ -24,6 +24,22 @@ export const publication = v.object({
   error: v.optional(v.string()),
 });
 
+// LinkedIn post quality (posts.quality, llm.writePost). Keep in sync with lib/postQuality.ts CRITERIA.
+export const postQuality = v.object({
+  score: v.number(), // 0-100
+  passed: v.boolean(),
+  rounds: v.number(), // critique -> rewrite rounds run
+  notes: v.array(v.string()),
+  scores: v.object({
+    hook: v.number(),
+    story: v.number(),
+    voice: v.number(),
+    lesson: v.number(),
+    question: v.number(),
+    clarity: v.number(),
+  }),
+});
+
 // What we remember about him (memories.kind). Keep in sync with lib/memoryText.ts.
 export const memoryKind = v.union(
   v.literal("fact"),
@@ -249,6 +265,12 @@ export default defineSchema({
     approvedAt: v.optional(v.number()), // epoch ms; posted via approvePost (guard skipped)
     lastPolledAt: v.optional(v.number()), // epoch ms; stale polling is restarted by createPost
     maybePosted: v.optional(v.boolean()), // LinkedAPI didn't confirm the send: check before retrying
+    // ---- post quality (lib/postQuality.ts): the judge's score for the text that was saved.
+    // Below the bar the post is saved as needs_review with a one-line guardSummary; the notes stay here.
+    quality: v.optional(postQuality),
+    // Why a needs_review post is held. "quality": never fact-checked yet, so approvePost runs
+    // the guard first. "guard" (or missing, on older rows): approvePost skips it.
+    heldFor: v.optional(v.union(v.literal("quality"), v.literal("guard"))),
   })
     .index("by_elder", ["elderId"])
     .index("by_url", ["linkedinUrl"])

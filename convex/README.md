@@ -279,6 +279,27 @@ The AI-disclosure footer follows the elder's language: Spanish (`es-*`) elders g
 `SPANISH_DISCLOSURE`, everyone else the English line (`lib/linkedinPost.ts`). `previewPost`
 uses the post's elder; `previewText` takes an optional `"language":"es-MX"`.
 
+**Post quality** (`llm.writePost`, `lib/postQuality.ts`): the writer is platform-neutral: one
+short story (120-200 words, short paragraphs) whose first line works on its own as the opening
+post, so publishing can turn it into a short thread (at most 5 Bluesky posts). 3 drafts with
+different angles, a judge scores each (hook, story, voice, lesson, question, clarity, 0-10, plus
+any fact not in the call or his profile = score 0), code checks (120-200 words, under 1,250
+characters in total, hook ≤200 chars, ≤2 hashtags, stock phrases, markdown or lists, closing
+question, language), then up to 2 critique -> rewrite rounds on the best. The call is skipped
+only when most of the 3 drafts decline; failed drafts never count as a skip (too many failures
+fail the post step, which is safe to retry). A failed judge call is retried once; if it still
+fails, the post is held (fail closed). The loop is `runQualityLoop` (unit-tested with fake model
+calls).
+It passes at 75/100 with no criterion under 5. Below the bar the post is saved as
+`needs_review` with the judge's notes on `posts.quality` (shown once on `/posts`) and never
+auto-posts; after a look, post it with `npx convex run linkedapi:approvePost '{"postId":"<posts id>"}'`. Such a post
+(`heldFor: "quality"`) was never fact-checked, so approving it runs the post guard first: if the
+guard fails, it's held again as a normal fact-check hold (`heldFor: "guard"`, the guard's issues),
+and a second `approvePost` skips the guard as before. Cost: up to ~15 model calls per post.
+Time: the post step gets what's left of `processCall`'s 10-minute limit minus 60 s, capped at
+240 s (`postBudgetMs`); no model call starts past that deadline. With under 120 s left the step
+fails instead of starting (`process_failed`, retry by hand).
+
 Unit tests for the formatter and posting decisions (no Convex needed): `node --test "tests/**/*.test.ts"`.
 
 ## Memory, engagement, scheduling (Core: Data)

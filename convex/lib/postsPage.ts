@@ -13,6 +13,10 @@ export type PagePost = {
   guardSummary?: string;
   guardIssues?: string[];
   error?: string;
+  /** Post quality (lib/postQuality.ts), when writePost scored it. */
+  quality?: { score: number; passed: boolean; rounds: number; notes: string[] };
+  /** Why a needs_review post is held (posts.heldFor; missing = the fact-check). */
+  heldFor?: "quality" | "guard";
 };
 
 export type PageCheck = { postId: string; pass: boolean; summary: string; issues: string[]; mode: string } | { postId: string; error: string };
@@ -42,18 +46,32 @@ function checkBlock(check: PageCheck | undefined): string {
   return `<div class="check ${check.pass ? "good" : "bad"}"><strong>Fact-check now: ${check.pass ? "pass" : "would be held"}</strong> (${escapeHtml(check.mode)}) ${escapeHtml(check.summary)}${issuesList(check.issues)}</div>`;
 }
 
+export function statusLabel(p: Pick<PagePost, "status" | "heldFor">): string {
+  if (p.status === "needs_review" && p.heldFor === "quality") return "Held: below the quality bar";
+  return STATUS_LABEL[p.status] ?? p.status;
+}
+
+function qualityBlock(q: PagePost["quality"]): string {
+  if (!q) return "";
+  const rewrites = `${q.rounds} rewrite${q.rounds === 1 ? "" : "s"}`;
+  return `<div class="check ${q.passed ? "good" : "bad"}"><strong>Quality: ${q.score}/100 (${q.passed ? "passed" : "below the bar"})</strong>, ${rewrites}${issuesList(q.notes)}</div>`;
+}
+
 function card(p: PagePost, key: string, check: PageCheck | undefined): string {
   const date = new Date(p.createdAt).toISOString().slice(0, 16).replace("T", " ");
-  const stored = p.guardSummary || p.guardIssues?.length
-    ? `<div class="check bad"><strong>Held:</strong> ${escapeHtml(p.guardSummary ?? "")}${issuesList(p.guardIssues ?? [])}</div>`
+  // A quality hold's notes are already in the quality block: show its summary only (older
+  // rows also copied the notes into guardIssues).
+  const heldIssues = p.heldFor === "quality" && p.quality ? [] : (p.guardIssues ?? []);
+  const stored = p.guardSummary || heldIssues.length
+    ? `<div class="check bad"><strong>Held:</strong> ${escapeHtml(p.guardSummary ?? "")}${issuesList(heldIssues)}</div>`
     : "";
   const href = `?key=${encodeURIComponent(key)}&check=${encodeURIComponent(p.id)}#${encodeURIComponent(p.id)}`;
   return `<article id="${escapeHtml(p.id)}">
-  <header><span class="who">${escapeHtml(p.elderFirstName)}</span><span class="badge s-${escapeHtml(p.status)}">${escapeHtml(STATUS_LABEL[p.status] ?? p.status)}</span><time>${date} UTC</time></header>
+  <header><span class="who">${escapeHtml(p.elderFirstName)}</span><span class="badge s-${escapeHtml(p.status)}">${escapeHtml(statusLabel(p))}</span><time>${date} UTC</time></header>
   ${p.question ? `<p class="q">Call question: ${escapeHtml(p.question)}</p>` : ""}
   <div class="post">${escapeHtml(p.text)}</div>
   ${p.error ? `<p class="err">${escapeHtml(p.error)}</p>` : ""}
-  ${stored}${checkBlock(check?.postId === p.id ? check : undefined)}
+  ${qualityBlock(p.quality)}${stored}${checkBlock(check?.postId === p.id ? check : undefined)}
   <footer><a href="${href}">Fact-check now</a> <span class="id">${escapeHtml(p.id)}</span></footer>
 </article>`;
 }

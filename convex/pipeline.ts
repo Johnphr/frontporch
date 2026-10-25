@@ -11,7 +11,9 @@
 //        story (slices 2-3), each step isolated (lib/planner.runSteps):
 //          memories  llm.extractKnowledge -> memories.addMany (+ resolve the open threads he
 //                    finished; only thread ids we sent are passed back)
-//          post      llm.writePost (may decline: no post) -> one posts row per call
+//          post      llm.writePost, given the time left of the 10-min action limit
+//                    (lib/postQuality.postBudgetMs; may decline: no post; below the quality bar -> saved as
+//                    needs_review, not posted) -> one posts row per call
 //                    (posts.by_call) -> linkedapi.createPost, scheduled only for a new row
 //                    and only when AUTO_POST isn't "off" (off = preview-only, for tests)
 //          plan      conversation.refreshQuestionBank (scheduled)
@@ -35,6 +37,8 @@ import { inboundPlanToMark } from "./lib/inbound";
 import { canClaimProcessing, finishPatch, isProfileUsable, mergeProfile, type Profile } from "./lib/onboarding";
 import { runSteps, type StepReport } from "./lib/planner";
 import { parseAutoPost } from "./lib/postFlow";
+import { MIN_POST_BUDGET_MS, holdDecision, postBudgetMs } from "./lib/postQuality";
+import { postQuality } from "./schema";
 
 // Convex exposes env vars on process.env (declared so we don't need @types/node).
 declare const process: { env: Record<string, string | undefined> };
@@ -98,7 +102,15 @@ export const saveProfile = internalMutation({
 
 /** One post per call: returns the existing row if this call already has one. */
 export const insertPost = internalMutation({
-  args: { elderId: v.id("elders"), callId: v.id("calls"), text: v.string() },
+  args: {
+    elderId: v.id("elders"),
+    callId: v.id("calls"),
+    text: v.string(),
+    // Post quality (lib/postQuality.ts): below the bar it's saved held. The judge's notes stay on
+    // `quality` only (shown once on /posts); guardIssues is left for the fact-check.
+    quality: v.optional(postQuality),
+    hold: v.optional(v.object({ summary: v.string() })),
+  },
   handler: async (ctx, args): Promise<{ postId: Id<"posts">; created: boolean }> => {
     const existing = await ctx.db
       .query("posts")
@@ -109,7 +121,9 @@ export const insertPost = internalMutation({
       elderId: args.elderId,
       callId: args.callId,
       text: args.text,
-      status: "pending",
+      status: args.hold ? "needs_review" : "pending",
+      ...(args.quality ? { quality: args.quality } : {}),
+      ...(args.hold ? { heldFor: "quality" as const, guardSummary: args.hold.summary } : {}),
     });
     return { postId, created: true };
   },
@@ -160,6 +174,7 @@ async function runStoryCall(
   callId: Id<"calls">,
   elder: { _id: Id<"elders">; profile?: Profile },
   turns: Turn[],
+  startedAt: number, // when processCall started: the post step stays inside the 10-min action limit
 ): Promise<StepReport[]> {
   const profile = elder.profile;
   return runSteps([
@@ -206,18 +221,28 @@ async function runStoryCall(
         if (already) return `post ${already.postId} already exists (${already.status})`;
         const saved = await ctx.runQuery(internal.conversation.getSavedFeedback, { elderId: elder._id });
         const feedback = saved?.resonated || saved?.feedbackLine || "";
+        // What's left of processCall's 10 minutes (lib/postQuality.ts, "Time"). Too little:
+        // fail the step (process_failed) rather than be cut off mid-write; a retry is safe.
+        const budgetMs = postBudgetMs(startedAt, Date.now());
+        if (budgetMs < MIN_POST_BUDGET_MS) throw new Error("not enough time left in this run for the post step");
         const post = await ctx.runAction(internal.llm.writePost, {
           turns,
           ...(profile ? { profile } : {}),
           ...(feedback ? { feedback } : {}),
+          budgetMs,
         });
         if (post.skip) return `no post: ${post.reason}`;
+        // Below the quality bar: saved as needs_review (shown on /posts), never auto-posted.
+        const hold = holdDecision(post.quality);
         const { postId, created } = await ctx.runMutation(internal.pipeline.insertPost, {
           elderId: elder._id,
           callId,
           text: post.text,
+          quality: post.quality,
+          ...(hold ? { hold: { summary: hold.summary } } : {}),
         });
         if (!created) return `post ${postId} already exists`;
+        if (hold) return `post ${postId} held for review (quality ${post.quality.score}/100); post it with linkedapi:approvePost`;
         // AUTO_POST=off (tests): keep the row `pending`; preview with linkedapi:previewPost,
         // post on purpose with linkedapi:createPost.
         if (!parseAutoPost(process.env.AUTO_POST)) {
@@ -241,6 +266,7 @@ async function runStoryCall(
 export const processCall = internalAction({
   args: { callId: v.id("calls") },
   handler: async (ctx, { callId }): Promise<{ status: string; reason?: string }> => {
+    const startedAt = Date.now();
     const claim = await ctx.runMutation(internal.pipeline.claimProcessing, { callId });
     if (!claim.ok) return { status: "skipped", reason: claim.reason };
     const { call, elder } = claim;
@@ -253,7 +279,7 @@ export const processCall = internalAction({
         return { status: "no_conversation" };
       }
       if (call.kind === "story") {
-        const steps = await runStoryCall(ctx, callId, elder, turns);
+        const steps = await runStoryCall(ctx, callId, elder, turns, startedAt);
         // Memories are best effort (e.g. no OPENAI_API_KEY yet): only the post and the plan refresh
         // decide on a retry; a lost memories step stays visible as a fixed marker on the `done` row.
         const failed = steps.filter((s) => s.status === "failed" && s.step !== "memories");
