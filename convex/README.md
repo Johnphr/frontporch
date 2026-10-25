@@ -2,8 +2,10 @@
 
 All of Front Porch's backend: tables, vector memory, crons, the question
 planner, the post writer, and the actions that call OpenAI, Cartesia,
-LinkedAPI and Apify. See `../ARCHITECTURE.md` for the loop,
-contracts and who owns which file.
+Bluesky, Threads, X, Reddit, LinkedAPI and Apify. See `../ARCHITECTURE.md` for the loop,
+contracts and who owns which file. Where posts go (and each switch):
+[`../README.md` → Where posts go](../README.md#where-posts-go); every env var:
+[`../ARCHITECTURE.md` → Env vars](../ARCHITECTURE.md#env-vars-all-in-convex).
 
 ## Run
 
@@ -56,9 +58,12 @@ Local backend + `"use node"` files need Node 20–24: `npx -p node@24 -c 'npx co
 | `CARTESIA_VOICE_ID_DIANA` | Diana's Spanish voice; required before syncing her |
 | `OPENAI_API_KEY` | LLM jobs (profile, memories, post, planner) + memory embeddings; `OPENAI_MODEL` optional (default `gpt-6-luna`) |
 | `APIFY_TOKEN` | optional: prefill his LinkedIn background (needs `linkedinUrl` on the elder) |
-| `AUTO_POST` | optional, default `on`. `off` = story posts are saved but not sent to LinkedIn (preview only, for tests) |
-| `PUBLIC_CALLS` | optional, default off. Lets the sign-up page start his first call (`signup:requestCall`; max 3 a day, 10 min apart). `on` = only `CALL_ALLOWLIST` numbers; `all` = anyone (only once SMS is real) |
+| `AUTO_POST` | optional, default `on`. `off` = story posts are saved but not posted anywhere (for tests); post one with `publish:publishPost` |
+| `LINKEDIN_POSTING` | optional, default off. `on` also posts to LinkedIn through LinkedAPI (needs the LinkedAPI tokens) |
+| `PUBLIC_CALLS` | optional, default off. Lets the sign-up page start his first call (`signup:requestCall`; max 3 a day, 10 min apart), and lets the hourly cron call a website sign-up still in onboarding. `on` = only `CALL_ALLOWLIST` numbers; `all` = anyone (only once SMS is real) |
 | `CALL_ALLOWLIST` | comma-separated E.164 test numbers the sign-up page may call when `PUBLIC_CALLS=on` |
+| `ACCOUNTS_ENC_KEY` | encrypts connected Bluesky app passwords (`accounts.ts`, `lib/accountCrypto.ts`). Base64 of 32 bytes: `openssl rand -base64 32` |
+| `DEMO_ACCOUNT_FALLBACK` | optional, default off. `on` = elders who never connected an account use the env demo account (`BLUESKY_HANDLE` / `BLUESKY_APP_PASSWORD`); an invalid or disconnected account of his never does |
 
 Agent ids are not env vars: `syncAgent` saves one row per character in the `characterAgents`
 table (`characterId`, `agentId`, `syncedAt`), and `startCall` reads it. If his character has no
@@ -86,7 +91,8 @@ npx convex env remove CALL_INTERVAL_MINUTES       # stop
 - After 3 missed calls in a row (no answer, voicemail, busy...) it stops calling that number until a
   real conversation happens (start one by hand). Our own failures (busy lines, config) don't count.
 - Off with an interval under a day unless `AUTO_POST=off` (posts and thread replies could go out
-  on his real accounts every few minutes). Set `npx convex env set AUTO_POST off` to loop.
+  on his real accounts every few minutes). Set `npx convex env set AUTO_POST off` to loop. While
+  it's blocked, `callLoop.tick` logs a warning once an hour (minute 0) saying so.
 - Numbers it covers are skipped by the weekly `schedule.tick`. No quiet hours: keep the list small.
 
 **Sign-up page call status:** after "Call me now" the page shows what is happening in plain words
@@ -96,7 +102,8 @@ npx convex env remove CALL_INTERVAL_MINUTES       # stop
 
 ## Review generated posts (temporary page)
 
-Read every post as it would be published, before LinkedIn is connected:
+Read every post as it would be published, and where each platform stands (Bluesky, Threads, X,
+Reddit, LinkedIn: status + link):
 
 ```bash
 npx convex env set POSTS_PAGE_KEY <long random string>   # off without it
@@ -106,14 +113,13 @@ npx convex env get POSTS_PAGE_KEY                        # then open:
 
 Newest first, with the call's question and why the fact-check held a post. "Fact-check now"
 reruns the check (nothing is posted). Temporary: remove `postsPage.ts`, `lib/postsPage.ts` and the
-route in `http.ts` once posts are reviewed on LinkedIn.
+route in `http.ts` once posts are reviewed on the platforms themselves.
 
 ## Try the after-call flow without a phone
 
 Fixtures in `../tests/fixtures/`. Use a throwaway seeded elder: fixture facts merge into his
-profile and memories. A story fixture ends in a post, so `seedEndedCall` refuses it while posting
-is live (both LinkedAPI tokens set and `AUTO_POST` on) unless you pass `"allowPost": true`;
-`npx convex env set AUTO_POST off` keeps the post `pending`.
+profile and memories. A story fixture ends in a post, so `seedEndedCall` refuses it unless `AUTO_POST=off`
+(or you pass `"allowPost": true`); `npx convex env set AUTO_POST off` keeps the post `pending`.
 
 ```bash
 ID=$(npx convex run elders:seed '{"name":"Test Walter","phone":"+15550001111","profile":{"industry":"Baking","specialty":"Bread"}}' | tr -d '"')
@@ -135,7 +141,7 @@ For an elder who already did the onboarding call (his row has `stage: "active"` 
 
    ```bash
    npx convex run cartesiaAgents:syncAgent   # same agent per character for onboarding and story calls
-   npx convex env set AUTO_POST off          # posts stay `pending`, nothing goes to LinkedIn
+   npx convex env set AUTO_POST off          # posts stay `pending`, nothing is posted
    ```
 
    Also needed: `OPENAI_API_KEY` (planning, memories, post, memory search).
@@ -170,14 +176,15 @@ For an elder who already did the onboarding call (his row has `stage: "active"` 
    - `memories`: new facts, people, open threads from this call (`callId` = this call).
    - `posts`: one row for the call, `status: "pending"` (with `AUTO_POST=off`).
 
-6. Preview the post (formatting + fact-check, nothing is posted):
+6. Preview the post: the `/posts` page shows the Bluesky thread split; the fact-check alone
+   (nothing is posted, LinkedAPI isn't called):
 
    ```bash
    npx convex run linkedapi:previewPost '{"postId":"<posts id>"}'
    ```
 
-   Post it on purpose later with `npx convex run linkedapi:createPost '{"postId":"<posts id>"}'`
-   (or `linkedapi:approvePost` if the fact-check held it). Turn auto-posting back on with
+   Post it on purpose later with `npx convex run publish:publishPost '{"postId":"<posts id>"}'`
+   (or `publish:approvePost` if it was held). Turn auto-posting back on with
    `npx convex env set AUTO_POST on`.
 
 ## Test an inbound call (he calls the Front Porch number; `inbound.ts`)
@@ -230,7 +237,7 @@ with a plain equality check.
 
 | Function | Run it | What it does |
 |---|---|---|
-| `apify.scrapeEngagement({ elderId, linkedinUrl?, maxPosts? })` | daily | his recent posts' reaction counts + reader comments → `engagement:upsert` |
+| `apify.scrapeEngagement({ elderId, linkedinUrl?, maxPosts? })` | daily, only with `LINKEDIN_POSTING=on` (otherwise returns `skipped`) | his recent LinkedIn posts' reaction counts + reader comments → `engagement:upsert` |
 | `apify.scrapeProfile({ elderId, linkedinUrl? })` | once, before onboarding | returns `{ knownBackground }` (work history as plain text) |
 | `apify.findAudienceQuestions({ elderId, keywords?, sources? })` | weekly | real questions people in his field ask → `audienceQuestions` |
 | `apify.topAudienceQuestions({ elderId, limit? })` | from the planner | best unused questions, highest priority first |
@@ -248,7 +255,42 @@ npx convex run apify:findAudienceQuestions '{"elderId":"<id>","keywords":["baker
 
 Pure logic is unit-tested without Convex: `npm test` (Node's test runner, files in `../tests/`).
 
-## LinkedIn posting + post guard (Integrations)
+## Publishing story posts (Integrations)
+
+`publish.publishPost({ postId })` (scheduled by `pipeline.insertPost` in the same mutation
+that saves the post) fact-checks the post once, then posts it to each platform that's on, in
+this order, one `postPublications` row per platform: Bluesky as a 3-5 post thread (his login),
+Threads as a 2-5 post thread (when he connected Threads), X as a self-thread (only with
+`X_POSTING=on` and his X login; `X_THREAD=off` = one post), Reddit on his profile (only with
+`REDDIT_POSTING=on`), LinkedIn (only with `LINKEDIN_POSTING=on`, below). Off platforms get a
+`skipped` row.
+Row statuses: `pending` → `posting` → `posted` | `failed` (nothing went out, unless `records`
+is set: a thread that stopped partway) | `maybe_posted` (unclear: check his profile
+first) | `skipped`; undo adds `removing` / `removed`. A Threads, X, Reddit or LinkedIn run that
+stopped mid-post (claim older than 15 min) becomes `maybe_posted`; Bluesky retries look in his
+repo first (only posts made after the row existed count), Threads retries in his recent posts.
+A Threads / X retry continues after the posts in `records`.
+`posts.status`: `published` (a platform posted) | `partly_posted` (only part of a thread is
+out, any platform) | `failed` (nothing went out) | `needs_review` (`heldFor`: `quality`,
+`thread_fit` or `guard`). The disclosure language is decided once, on `posts.language`.
+A Bluesky login that's refused marks his account invalid (`lib/logins.reportBlueskyLoginError`).
+
+```bash
+npx convex run publish:approvePost '{"postId":"<posts id>"}'                       # post a held post (fact-checked first unless the fact-check held it)
+npx convex run publish:retryPublication '{"publicationId":"<row id>"}'             # retry a failed platform (or re-check a stuck LinkedIn one)
+npx convex run publish:retryPublication '{"publicationId":"<row id>","approve":true}'  # after checking a maybe_posted one
+```
+
+A retry needs a post the fact-check cleared (`guardPassedAt`); one that never got checked
+(nothing was set up when it ran) is refused: run `publish:publishPost`, which checks it first.
+The old `linkedapi:createPost` / `approvePost` / `checkPostStatus` refuse posts that have
+`postPublications` rows.
+
+## LinkedIn posting (off) + post guard (Integrations)
+
+LinkedIn is switched off: nothing calls LinkedAPI unless `LINKEDIN_POSTING=on`. With it on,
+`publish.ts` posts through `linkedapi.startPublication` + `checkPublicationStatus`. The older
+one-platform flow below is kept (also gated).
 
 `linkedapi.createPost({ postId, context? })` claims the row (so it can't be posted
 twice), formats the post for LinkedIn, fact-checks it against the whole call plus his
@@ -271,6 +313,7 @@ npx convex run linkedapi:checkPostStatus '{"postId":"<posts id>"}'  # resume sta
 
 | Env var | Purpose |
 |---|---|
+| `LINKEDIN_POSTING` | default off; `on` lets anything here call LinkedAPI |
 | `LINKEDAPI_TOKEN`, `LINKEDAPI_ID_TOKEN` | LinkedAPI account + grandpa's connected LinkedIn |
 | `OPENAI_API_KEY` | Shared with Brain; the guard calls the LLM (`lib/openai.ts`) |
 | `POST_GUARD_MODE` | `enforce` (default: failing posts become `needs_review`, not posted) · `warn` (post anyway, keep issues) · `off` |
@@ -282,9 +325,11 @@ npx convex run linkedapi:previewText '{"text":"My first job...","turns":[{"role"
 npx convex run linkedapi:previewPost '{"postId":"<posts id>"}'
 ```
 
-The AI-disclosure footer follows the elder's language: Spanish (`es-*`) elders get
-`SPANISH_DISCLOSURE`, everyone else the English line (`lib/linkedinPost.ts`). `previewPost`
-uses the post's elder; `previewText` takes an optional `"language":"es-MX"`.
+The AI-disclosure footer follows the post's language (`posts.language`, set once when the post
+is saved: the language his calls run in, `callCharacter(elder).language`; older rows fall back
+to that): Spanish gets `SPANISH_DISCLOSURE`, everyone else the English
+line (`lib/linkedinPost.ts`). `previewPost` uses the post's elder; `previewText` takes an
+optional `"language":"es-MX"`.
 
 **Post quality** (`llm.writePost`, `lib/postQuality.ts`): the writer is platform-neutral: one
 short story (120-200 words, short paragraphs) whose first line works on its own as the opening
@@ -299,10 +344,12 @@ fails, the post is held (fail closed). The loop is `runQualityLoop` (unit-tested
 calls).
 It passes at 75/100 with no criterion under 5. Below the bar the post is saved as
 `needs_review` with the judge's notes on `posts.quality` (shown once on `/posts`) and never
-auto-posts; after a look, post it with `npx convex run linkedapi:approvePost '{"postId":"<posts id>"}'`. Such a post
-(`heldFor: "quality"`) was never fact-checked, so approving it runs the post guard first: if the
-guard fails, it's held again as a normal fact-check hold (`heldFor: "guard"`, the guard's issues),
-and a second `approvePost` skips the guard as before. Cost: up to ~15 model calls per post.
+auto-posts; after a look, post it with `npx convex run publish:approvePost '{"postId":"<posts id>"}'`. Such a post
+(`heldFor: "quality"`, or `"thread_fit"` when it's too long for a 5-post Bluesky thread: shorten
+`posts.text` first, approve refuses it until it fits) was never fact-checked, so approving it
+runs the post guard first: if the guard fails, it's held again as a normal fact-check hold
+(`heldFor: "guard"`, the guard's issues), and a second `approvePost` skips the guard. Approving
+anything else (a `pending` post with `AUTO_POST=off`, a `failed` one) runs the guard too. Cost: up to ~15 model calls per post.
 Time: the post step gets what's left of `processCall`'s 10-minute limit minus 60 s, capped at
 240 s (`postBudgetMs`); no model call starts past that deadline. With under 120 s left the step
 fails instead of starting (`process_failed`, retry by hand).
@@ -362,12 +409,18 @@ clear error without it).
 | `memories.addMany({ elderId, callId?, items, resolveThreadIds? })` | `pipeline.processCall` | embed + store what he said; merges near-duplicates, resolves finished open threads |
 | `memories.search({ elderId, text, k, kinds? })` | `conversation.planNextCall` | memories closest to a text (e.g. the next question) |
 | `memories.listForElder({ elderId, kinds?, status?, limit? })` | planner | e.g. all active open threads |
-| `engagement.upsert(...)` | `apify.scrapeEngagement` | latest reactions + comments per post; schedules a question-bank refresh when something changed |
+| `blueskyEngagement.scrapeForElder({ elderId })` | `schedule.dailyEngagement` | his Bluesky threads from the last 30 days: likes + reposts on the root post, replies by others (oldest 20, not hidden or labelled) → `engagement:upsert`; a deleted thread → `engagement:markGone` (his session if connected, else the public AppView). Returns `{ threads, upserted, likes, reposts, replies, gone, errors }` |
+| `threadsEngagement.scrapeForElder({ elderId })` | `schedule.dailyEngagement` (always) | his Threads threads from the last 30 days: likes + reposts on the root, replies by others → `engagement:upsert` (`platform: "threads"`). Nothing to do without Threads posts |
+| `xEngagement.scrapeForElder({ elderId })` | `schedule.dailyEngagement` (only `X_READ_FEEDBACK=on`) | his X posts from the last 30 days: likes + retweets + quotes; reply texts only with `X_READ_REPLIES=on` → `engagement:upsert` (`platform: "x"`). Logs `estimatedReads` |
+| `engagement.upsert(...)` | the three scrapers above, `apify.scrapeEngagement` | latest reactions + comments per post per platform (`platform`: bluesky / threads / x / linkedin, default linkedin; only LinkedIn links get the LinkedIn URL cleanup); schedules a question-bank refresh when something changed |
 | `engagement.recentFeedback({ elderId, sinceDays? })` | planner | posts with reactions + comments, newest first |
 | `schedule.tick` | hourly cron | `conversation.prepareCall` ~1h before his call, `cartesia.startCall` at the call hour |
 
 Crons (`crons.ts`, UTC): hourly `schedule.tick`; daily 13:15 `schedule.dailyEngagement`
-(→ `apify.scrapeEngagement` per active elder with a `linkedinUrl`); weekly Monday 14:30
+(→ per active elder `blueskyEngagement.scrapeForElder`, `threadsEngagement.scrapeForElder`
+10 s later, `xEngagement.scrapeForElder` 20 s later only with `X_READ_FEEDBACK=on`; then
+`apify.scrapeEngagement` per active elder with a `linkedinUrl` only when `LINKEDIN_POSTING=on`,
+after the whole batch); weekly Monday 14:30
 `schedule.weeklyAudienceQuestions` (→ `apify.findAudienceQuestions`). `tick` only acts
 on elders with `stage`, `timezone`, `callDay` and `callHour` set, and skips a target
 that isn't deployed yet (that slot is NOT retried: start that week's call by hand).
@@ -385,14 +438,19 @@ npx convex run schedule:tick '{"now": 1792944000000}'   # Sunday 2026-10-25 09:0
 
 ## Notes
 
-- Calls run on Cartesia Managed Agents; transcripts are polled, so `http.ts` has no routes yet.
+- Calls run on Cartesia Managed Agents; transcripts are polled. `http.ts` serves the inbound
+  lookup tool, the temporary `/posts` page and the OAuth callbacks (`/oauth/threads/callback`,
+  `/oauth/x/callback`: one per platform).
 - `http.ts` and `crons.ts` must keep their default exports, even when empty.
 - Vector search (`ctx.vectorSearch`) only works inside actions.
 - Files with `"use node"` at the top may only export actions.
-- Only `signup.ts` is public (the sign-up page); everything else is `internal*` (run it with
-  `npx convex run`). Public Convex functions are callable by anyone with the deployment URL;
-  the deleted v1 dashboard queries exposed call transcripts that way. Public functions return
-  ids and ok/reason only, never elder rows or transcripts.
+- Only `signup.ts` and `account.ts` are public (the web app: sign-up, and his page); everything
+  else is `internal*` (run it with `npx convex run`). Public Convex functions are callable by
+  anyone with the deployment URL; the deleted v1 dashboard queries exposed call transcripts that
+  way. After `register`, every public function needs his sign-up token (hashed in an action,
+  checked in an internal query or mutation). `signup.*` return ids and ok/reason only;
+  `account.*` return only his name, host, call slot and posts that went out, never elder rows,
+  his phone, transcripts or held drafts.
 - v1 leftovers are deleted (`questions.ts`, `answers.ts`, `replies.ts`, `calls.ts`,
   `lib/auth.ts`); `elders.ts` keeps only `seed`. The v1 `questions`, `answers` and `replies`
   tables stay in `schema.ts` until they're empty.

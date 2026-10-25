@@ -1,7 +1,7 @@
-// Step 6: everything at a glance, "Change" links back to each step, the phone edited in place, and
-// one "Finish and call now" button (finish.js) with a heads-up that the phone rings right away.
-// The phone editor starts open, empty, when there is no phone yet (email sign-in) or when a helper
-// would otherwise have their own sign-in number called; Finish then needs a valid number.
+// Step 5: everything at a glance, "Change" links back to each step, the phone edited in place, and
+// one button that saves the sign-up (finish.js saveSetup) and goes on to the accounts step. With no
+// phone yet (email sign-in), or when a helper would otherwise have their own sign-in number called, the
+// phone editor starts open and empty, and the button needs a valid number.
 import { useEffect, useRef, useState } from 'react'
 import { HOSTS, dayName, errorText, formatHour } from '../../copy'
 import { SETUP, zoneName } from '../../copy/setup'
@@ -9,7 +9,7 @@ import { showPhone } from '../../copy/signin'
 import { COUNTRIES, digitsOf, formatNational, splitE164, toE164 } from '../../phone'
 import { ClipboardArt } from '../../art/setup'
 import { Button, ErrorText, SelectField, TextField } from '../../ui/controls'
-import { finishSetup } from './finish'
+import { saveSetup } from './finish'
 import { ART, StepCard } from './steps'
 
 const R = SETUP.review
@@ -38,7 +38,7 @@ function ChangeLink({ label = R.change, what, ...rest }) {
   )
 }
 
-export default function Review({ data, set, words, headingRef, signedInPhone, onGoto, onDone }) {
+export default function Review({ data, set, words, lang = 'en', headingRef, signedInPhone, onGoto, onDone }) {
   // A helper signed in with their own number: ask for the other person's instead of calling it.
   const helperOwnPhone = data.who === 'helper' && data.phone === signedInPhone && !data.phoneChecked
   const [editing, setEditing] = useState(!data.phone || helperOwnPhone)
@@ -58,8 +58,6 @@ export default function Review({ data, set, words, headingRef, signedInPhone, on
   const hostId = data.host
   const day = dayName(data.callDay)
   const time = formatHour(data.callHour)
-  const linkedinUrl = data.liStatus === 'url' ? `https://${data.linkedin.trim().replace(/^https?:\/\//i, '')}` : ''
-  const linkedinText = linkedinUrl ? linkedinUrl.replace(/^https:\/\//, '') : data.liStatus === 'none' ? R.noLinkedin : R.laterLinkedin
 
   function openEditor() {
     const saved = splitE164(data.phone)
@@ -100,18 +98,17 @@ export default function Review({ data, set, words, headingRef, signedInPhone, on
     setBusy(true)
     setError(null)
     try {
-      const result = await finishSetup({
+      const signup = await saveSetup({
         name: data.name,
         phone,
         language: data.language,
         hostId,
         callDay: data.callDay,
         callHour: data.callHour,
-        linkedinUrl,
       })
-      onDone({ ...result, phone })
+      onDone({ ...signup, phone })
     } catch (e) {
-      console.error('Finishing setup failed', e)
+      console.error('Saving setup failed', e.code || 'error')
       setError(e)
       setBusy(false)
     }
@@ -119,14 +116,14 @@ export default function Review({ data, set, words, headingRef, signedInPhone, on
 
   return (
     <StepCard
-      step={6}
+      step={5}
       art={<ClipboardArt className={ART} />}
       title={words.reviewTitle}
       headingRef={headingRef}
       onSubmit={finish}
-      nextLabel={words.finishLabel}
+      nextLabel={R.saveAll}
       busy={busy}
-      busyLabel={R.finishing}
+      busyLabel={R.saving}
     >
       <p>{words.reviewIntro}</p>
       <dl className="w-full">
@@ -203,12 +200,8 @@ export default function Review({ data, set, words, headingRef, signedInPhone, on
         <Row label={R.when} value={words.reviewWhen(day, time, zoneName())}>
           <ChangeLink what="when" onClick={() => onGoto(4)} />
         </Row>
-        <Row label={R.linkedin} value={linkedinText}>
-          <ChangeLink what="linkedin" onClick={() => onGoto(5)} />
-        </Row>
       </dl>
-      <p className="w-full rounded-inset bg-wash px-5 py-4">{words.callHeadsUp}</p>
-      <ErrorText id="finish-error">{errorText(error)}</ErrorText>
+      <ErrorText id="finish-error">{errorText(error, lang)}</ErrorText>
     </StepCard>
   )
 }

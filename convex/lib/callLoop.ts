@@ -108,8 +108,10 @@ export type LoopEnv = {
 };
 
 /**
- * Could a finished call post anywhere public? Yes unless AUTO_POST=off: logins are per elder
- * (Bluesky, Reddit) and thread replies post too, so env keys can't tell us it's safe.
+ * Could a finished call post anywhere public? Yes when AUTO_POST is on (lib/postFlow.parseAutoPost:
+ * unset, empty, on/true/1/yes): logins are per elder and thread replies post too, so env keys
+ * can't tell us it's safe. Any other value is off for every poster (insertPost, threadReplies),
+ * so it's off here too.
  */
 export function postingMayBeLive(env: { AUTO_POST?: string }): boolean {
   return parseAutoPost(env.AUTO_POST);
@@ -125,6 +127,15 @@ export function loopInterval(env: LoopEnv): { minutes: number | null; blocked?: 
   const postingLive = postingMayBeLive(env);
   if (postingLive && minutes < 24 * 60) return { minutes: null, blocked: "posting_live" };
   return { minutes };
+}
+
+export const BLOCKED_WARNING =
+  "callLoop.tick: loop is off: CALL_INTERVAL_MINUTES is under a day and AUTO_POST isn't off. Set AUTO_POST=off to loop.";
+
+/** The warning to log while the loop is blocked: once an hour (minute 0, UTC), else null. */
+export function blockedWarning(blocked: string | undefined, nowMs: number): string | null {
+  if (blocked !== "posting_live") return null;
+  return new Date(nowMs).getUTCMinutes() === 0 ? BLOCKED_WARNING : null;
 }
 
 /** Does the loop handle this number? (Then the weekly schedule leaves him alone.) */

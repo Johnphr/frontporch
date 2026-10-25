@@ -18,7 +18,7 @@ function convex() {
   return client
 }
 
-function coded(code, message) {
+export function coded(code, message) {
   const e = new Error(message || code)
   e.code = code
   return e
@@ -28,8 +28,6 @@ function coded(code, message) {
 const KNOWN = [
   [/enter your name/i, 'NAME_INVALID'],
   [/phone number/i, 'PHONE_INVALID'],
-  [/linkedin profile link/i, 'LINKEDIN_INVALID'],
-  [/linkedin is already set up/i, 'LINKEDIN_LOCKED'],
   [/sign-up not found/i, 'NOT_FOUND'],
   [/unknown character/i, 'CHARACTER_UNKNOWN'],
   [/choose a day and a time/i, 'SCHEDULE_INVALID'],
@@ -56,43 +54,72 @@ async function call(kind, name, args, module = 'signup') {
   }
 }
 
+/** His zone for the weekly call (the backend checks it, and falls back to his phone's country). */
+function browserTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined
+  } catch {
+    return undefined
+  }
+}
+
 export const signupApi = {
   /** [{ id, name, language: 'en' | 'es', description }] */
   listCharacters: () => call('query', 'listCharacters', {}),
-  /** New elder (or the existing one for this phone) -> elderId. */
-  register: (name, phone, language) => call('mutation', 'register', { name, phone, language }),
-  setCharacter: (elderId, characterId) => call('mutation', 'setCharacter', { elderId, characterId }),
-  setLinkedin: (elderId, url) => call('mutation', 'setLinkedin', { elderId, url }),
+  /**
+   * New elder -> { ok: true, elderId, token } | { ok: false, reason: 'already_signed_up' }.
+   * The token proves this browser made the sign-up: every later call needs it.
+   */
+  register: (name, phone, language) => call('action', 'register', { name, phone, language, timeZone: browserTimeZone() }),
+  setCharacter: (elderId, token, characterId) => call('action', 'setCharacter', { elderId, token, characterId }),
+  /**
+   * { ok: true, handle } | { ok: false, error } with error one of: invalid_handle, not_app_password,
+   * privileged_app_password, not_found, locked, rate_limited, busy, wrong_password, account_unavailable,
+   * bluesky_busy, failed.
+   * The app password is sent once and never kept here.
+   */
+  connectBluesky: (elderId, token, handle, appPassword) => call('action', 'connectBluesky', { elderId, token, handle, appPassword }),
+  /**
+   * OAuth connect (Threads, X): { ok: true, url } (send the browser there) | { ok: false, error }
+   * with error one of: not_found, locked, rate_limited, not_configured, failed.
+   */
+  startOAuthConnect: (elderId, token, platform) => call('action', 'startOAuthConnect', { elderId, token, platform }),
   /** { ok: true, callId } | { ok: false, reason: 'disabled' | 'rate_limited' | 'already_onboarded' | 'failed', message, callId? } */
-  requestCall: (elderId) => call('action', 'requestCall', { elderId }),
+  requestCall: (elderId, token) => call('action', 'requestCall', { elderId, token }),
   /** { state, canRetry, retryAt? } for the call requestCall placed (convex/lib/callStatus.ts states) */
   callStatus: (callId) => call('query', 'callStatus', { callId }),
 }
 
-/** His page (convex/account.ts). Host changes use signupApi.setCharacter. */
+/** His page (convex/account.ts). All need the sign-up token. Host changes use signupApi.setCharacter. */
 export const accountApi = {
-  /** { name, characterId, callDay?, callHour?, timezone? } | null */
-  getProfile: (elderId) => call('query', 'getProfile', { elderId }, 'account'),
-  setSchedule: (elderId, callDay, callHour, timezone) =>
-    call('mutation', 'setSchedule', { elderId, callDay, callHour, timezone }, 'account'),
-  /** [{ id, text, linkedinUrl?, postedAt, reactions, comments }] newest first */
-  listPosts: (elderId) => call('query', 'listPosts', { elderId }, 'account'),
+  /** { name, characterId, callDay?, callHour?, timezone? } | null (unknown elder or wrong token) */
+  getProfile: (elderId, token) => call('action', 'getProfile', { elderId, token }, 'account'),
+  setSchedule: (elderId, token, callDay, callHour, timezone) =>
+    call('action', 'setSchedule', { elderId, token, callDay, callHour, timezone }, 'account'),
+  /** [{ id, text, postedAt, reactions, comments, links: [{ platform, url }], linkedinUrl? }] newest first */
+  listPosts: (elderId, token) => call('action', 'listPosts', { elderId, token }, 'account'),
 }
 
 /**
- * Same rule as convex/lib/signupRules.ts canonicalLinkedInProfileUrl, so the form can say
- * "check the link" before sending. The backend still decides.
+ * Same rules as convex/lib/signupRules.ts (normalizeBlueskyHandle, normalizeAppPassword), so the
+ * form can say "check this" before sending. The backend still decides.
  */
-export function looksLikeLinkedInProfile(raw) {
-  const text = (raw || '').trim()
-  if (!text || text.length > 300) return false
-  let url
-  try {
-    url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : `https://${text}`)
-  } catch {
-    return false
-  }
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') return false
-  if (!/^(?:(?:www|[a-z]{2,3})\.)?linkedin\.com$/i.test(url.hostname)) return false
-  return /^\/in\/([A-Za-z0-9_%-]{2,100})(?:\/|$)/.test(url.pathname)
+export function tidyBlueskyHandle(raw) {
+  let text = (raw || '').trim().toLowerCase()
+  if (!text || text.length > 300) return ''
+  text = text.replace(/^(?:https?:\/\/)?(?:www\.)?bsky\.app\/profile\//, '').replace(/\/.*$/, '')
+  text = text.replace(/^@/, '').replace(/\.$/, '')
+  if (!text) return ''
+  if (!text.includes('.')) text = `${text}.bsky.social`
+  const labels = text.split('.')
+  const ok =
+    text.length <= 253 &&
+    labels.length >= 2 &&
+    labels.every((l) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(l)) &&
+    /^[a-z]/.test(labels[labels.length - 1])
+  return ok ? text : ''
+}
+
+export function looksLikeAppPassword(raw) {
+  return /^[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}$/.test((raw || '').replace(/\s+/g, '').toLowerCase())
 }

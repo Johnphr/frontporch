@@ -3,8 +3,13 @@
 //   tick                      hourly: for each elder whose weekly call is about an hour
 //                             away -> conversation.prepareCall; whose call hour has
 //                             started -> cartesia.startCall. Each call slot is handled once.
-//   dailyEngagement           daily: apify.scrapeEngagement for every active elder
-//                             with a linkedinUrl (staggered)
+//                             Website sign-ups still in onboarding only when PUBLIC_CALLS
+//                             allows the number (lib/signupRules.cronMayCall).
+//   dailyEngagement           daily, per active elder: blueskyEngagement.scrapeForElder,
+//                             threadsEngagement.scrapeForElder (always; a no-op without
+//                             Threads posts), xEngagement.scrapeForElder (X_READ_FEEDBACK=on
+//                             only); then apify.scrapeEngagement (LinkedIn) for those with a
+//                             linkedinUrl, only when LINKEDIN_POSTING=on (all staggered)
 //   weeklyAudienceQuestions   weekly: apify.findAudienceQuestions for every active elder
 //
 // Time math (timezones, DST) lives in lib/schedule.ts.
@@ -16,7 +21,10 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation } from "./_generated/server";
 import { loopCovers, type LoopEnv } from "./lib/callLoop";
+import { linkedinEngagementOn, planDailyEngagement, type EngagementJob } from "./lib/engagementRules";
+import { xFeedbackOn } from "./lib/xEngagement";
 import { PREPARE_CALL_FN, START_CALL_FN, dueActions } from "./lib/schedule";
+import { cronMayCall } from "./lib/signupRules";
 
 // Convex exposes env vars on process.env (declared so we don't need @types/node).
 declare const process: { env: Record<string, string | undefined> };
@@ -26,7 +34,7 @@ declare const process: { env: Record<string, string | undefined> };
 const prepareCall = makeFunctionReference<"action">(PREPARE_CALL_FN);
 const startCall = makeFunctionReference<"action">(START_CALL_FN);
 
-/** Space out Apify runs so they don't all start at once. */
+/** Space out scrape runs (Apify, Bluesky) so they don't all start at once. */
 const STAGGER_MS = 30 * 1000;
 
 type TickResult = {
@@ -49,6 +57,11 @@ export const runTick = internalMutation({
     for (const elder of elders) {
       if (elder.stage !== "active" && elder.stage !== "onboarding") continue;
       result.checked += 1;
+      // Website sign-ups in onboarding ring only when PUBLIC_CALLS allows the number.
+      if (!cronMayCall(elder, process.env)) {
+        result.skipped.push({ elderId: elder._id, reason: "sign-up not allowed by PUBLIC_CALLS" });
+        continue;
+      }
       const due = dueActions(elder, now);
       if (due.skipReason) {
         result.skipped.push({ elderId: elder._id, reason: due.skipReason });
@@ -90,19 +103,27 @@ export const tick = internalAction({
   },
 });
 
+// One scrape action per job kind (lib/engagementRules.planDailyEngagement).
+const SCRAPERS = {
+  bluesky: internal.blueskyEngagement.scrapeForElder,
+  threads: internal.threadsEngagement.scrapeForElder,
+  x: internal.xEngagement.scrapeForElder,
+  linkedin: internal.apify.scrapeEngagement,
+} as const;
+
+type EngagementCounts = Record<EngagementJob["kind"], number> & { scheduled: number };
+
 export const dailyEngagement = internalMutation({
   args: {},
-  handler: async (ctx): Promise<{ scheduled: number }> => {
+  handler: async (ctx): Promise<EngagementCounts> => {
     const elders = await ctx.db.query("elders").collect();
-    let scheduled = 0;
-    for (const elder of elders) {
-      if (elder.stage !== "active" || !elder.linkedinUrl) continue;
-      await ctx.scheduler.runAfter(scheduled * STAGGER_MS, internal.apify.scrapeEngagement, {
-        elderId: elder._id,
-      });
-      scheduled += 1;
+    const jobs = planDailyEngagement(elders, linkedinEngagementOn(process.env), STAGGER_MS, xFeedbackOn(process.env));
+    const counts: EngagementCounts = { scheduled: jobs.length, bluesky: 0, threads: 0, x: 0, linkedin: 0 };
+    for (const job of jobs) {
+      await ctx.scheduler.runAfter(job.delayMs, SCRAPERS[job.kind], { elderId: job.elderId });
+      counts[job.kind] += 1;
     }
-    return { scheduled };
+    return counts;
   },
 });
 

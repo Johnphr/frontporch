@@ -6,18 +6,21 @@
 //                              Reddit AND that platform is set up. One reply per thread:
 //                              replyWriter.writeReply -> disclosure line -> postGuard.checkPost
 //                              -> row: draft | needs_review
-//                              -> postReply scheduled for "draft" when AUTO_POST isn't off
+//                              -> postReply scheduled for "draft" when AUTO_POST is on
 //   postReply({ replyId, approve? })   claim (no double replies) -> Bluesky / Reddit -> posted
 //                              (+ link) | failed (nothing went out) | maybe_posted (unclear:
 //                              check the thread, then approve:true). approve:true also posts a
 //                              reply the fact-check held. Bluesky first looks for his existing
 //                              reply under the post, so a retry never answers twice.
+//   Undo (undo.ts): a reply that was taken down, or whose call's post was, is never posted;
+//   one taken down mid-post is removed as soon as the post finishes (finishReply).
 //   postDrafts({ maxAgeDays? })   posts every "draft" reply newer than maxAgeDays (default 7):
 //                              the way to send drafts written while AUTO_POST was off.
 //
 // Platform rules: lib/threadReplies.ts (Bluesky auto with his app password; Reddit auto only
 // when REDDIT_POSTING=on + credentials; every other source gets no reply). HTTP side:
-// lib/replyPosting.ts. His logins come ONLY from lib/logins.ts.
+// lib/replyPosting.ts. His logins come ONLY from lib/logins.ts (null, never a throw, when
+// unreadable). A refused Bluesky login marks his account invalid (logins.markBlueskyLoginInvalid).
 // Never log tokens, keys, reply text or transcripts; ids and statuses only.
 // Env: AUTO_POST, POST_GUARD_MODE (+ the login variables listed in lib/logins.ts).
 // Owner: Integrations.
@@ -25,13 +28,14 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { internalAction, internalMutation, internalQuery, type QueryCtx } from "./_generated/server";
 import { sharedSessionCache, type FetchFn } from "./lib/blueskyClient";
-import { blueskyLoginForElder, redditLoginForElder, type LoginCtx } from "./lib/logins";
+import { blueskyLoginForElder, redditLoginForElder, markBlueskyLoginInvalid, type LoginCtx } from "./lib/logins";
 import { parseAutoPost } from "./lib/postFlow";
 import { postBlueskyReply, postRedditReply, runPostReply, type PostOutcome } from "./lib/replyPosting";
 import {
   audienceIdForCall,
+  callLanguageOf,
   canClaimReply,
   draftCutoff,
   draftStatus,
@@ -73,6 +77,7 @@ export const getDraftContext = internalQuery({
   handler: async (ctx, { callId }) => {
     const call = await ctx.db.get(callId);
     if (!call || call.kind !== "story") return null;
+    if (call.takeDown) return null; // he asked to take a post down on this call: no reply
     const bankId = (call.plan as { bankId?: unknown } | undefined)?.bankId;
     const bankDocId = typeof bankId === "string" ? ctx.db.normalizeId("questionBank", bankId) : null;
     const bankRow = bankDocId ? await ctx.db.get(bankDocId) : null;
@@ -87,7 +92,7 @@ export const getDraftContext = internalQuery({
       .first();
     return {
       elderId: call.elderId,
-      callLanguage: elder?.language ?? "en",
+      callLanguage: callLanguageOf(elder), // the character's language: what the call ran in
       turns: call.transcript,
       question: {
         _id: question._id,
@@ -146,14 +151,26 @@ export const getReplyForPosting = internalQuery({
   },
 });
 
-/** Atomic claim: only one run moves a reply to `posting`. */
+/** Was the post from this call taken down (undo.ts)? Then its replies never post. */
+async function postRemovedForCall(ctx: { db: QueryCtx["db"] }, callId: Id<"calls">): Promise<boolean> {
+  // He asked on this call to take a post down (undo.ts): no reply from this call either.
+  if ((await ctx.db.get(callId))?.takeDown) return true;
+  const post = await ctx.db
+    .query("posts")
+    .withIndex("by_call", (q) => q.eq("callId", callId))
+    .first();
+  return post?.removedAt !== undefined;
+}
+
+/** Atomic claim: only one run moves a reply to `posting` (never once it or its post was taken down). */
 export const claimReply = internalMutation({
   args: { replyId: v.id("threadReplies"), approve: v.boolean() },
   handler: async (ctx, { replyId, approve }): Promise<{ ok: boolean; reason?: string }> => {
     const reply = await ctx.db.get(replyId);
     if (!reply) return { ok: false, reason: "Reply not found." };
     const now = Date.now();
-    const check = canClaimReply({ status: reply.status, claimedAt: reply.claimedAt }, now, approve);
+    const removed = reply.removedAt !== undefined || (await postRemovedForCall(ctx, reply.callId));
+    const check = canClaimReply({ status: reply.status, claimedAt: reply.claimedAt, removed }, now, approve);
     if (!check.ok) return { ok: false, reason: check.reason };
     await ctx.db.patch(replyId, {
       status: "posting",
@@ -170,15 +187,22 @@ export const finishReply = internalMutation({
     replyId: v.id("threadReplies"),
     status: v.union(v.literal("posted"), v.literal("failed"), v.literal("maybe_posted")),
     postedUrl: v.optional(v.string()),
+    postedUri: v.optional(v.string()), // Bluesky at:// uri of his reply (undo deletes by it)
     error: v.optional(v.string()),
   },
-  handler: async (ctx, { replyId, status, postedUrl, error }) => {
+  handler: async (ctx, { replyId, status, postedUrl, postedUri, error }) => {
     await ctx.db.patch(replyId, {
       status,
       claimedAt: undefined,
       ...(postedUrl ? { postedUrl } : {}),
+      ...(postedUri ? { postedUri } : {}),
       ...(status === "posted" ? { postedAt: Date.now(), error: undefined } : { error: error ?? "Posting failed." }),
     });
+    // Taken down while it was being posted: take this one down too.
+    const reply = await ctx.db.get(replyId);
+    if (status !== "failed" && reply && (reply.removedAt !== undefined || (await postRemovedForCall(ctx, reply.callId)))) {
+      await ctx.scheduler.runAfter(0, internal.undo.removeReply, { replyId });
+    }
   },
 });
 
@@ -311,7 +335,12 @@ export const postReply = internalAction({
         post: async (reply) => {
           if (reply.platform === "bluesky") {
             const login = await blueskyLoginForElder(ctx, elderId);
-            return postBlueskyReply(timedFetch, sharedSessionCache(), login, { threadRef: reply.threadRef, text: reply.text, lang: reply.language });
+            const outcome = await postBlueskyReply(timedFetch, sharedSessionCache(), login, { threadRef: reply.threadRef, text: reply.text, lang: reply.language });
+            // Bluesky refused his app password: mark his account invalid until he reconnects.
+            if (outcome.status === "failed" && outcome.loginRefused) {
+              await markBlueskyLoginInvalid(ctx, elderId, outcome.error);
+            }
+            return outcome;
           }
           if (reply.platform === "reddit") {
             return postRedditReply(timedFetch, await redditLoginForElder(ctx, elderId), { threadUrl: reply.threadUrl, text: reply.text });
@@ -322,7 +351,7 @@ export const postReply = internalAction({
           await ctx.runMutation(
             internal.threadReplies.finishReply,
             outcome.status === "posted"
-              ? { replyId, status: "posted", ...(outcome.url ? { postedUrl: outcome.url } : {}) }
+              ? { replyId, status: "posted", ...(outcome.url ? { postedUrl: outcome.url } : {}), ...(outcome.uri ? { postedUri: outcome.uri } : {}) }
               : { replyId, status: outcome.status, error: outcome.error },
           );
         },

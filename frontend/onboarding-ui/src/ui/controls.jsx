@@ -11,7 +11,7 @@ const BUTTON = {
 }
 
 /** Pill button. `busy` disables it and shows `busyLabel`. Pass `href` for a link that looks like a button. */
-export function Button({ variant = 'primary', small, busy, busyLabel, className, href, children, ...rest }) {
+export function Button({ variant = 'primary', small, busy, busyLabel, disabled, className, href, children, ...rest }) {
   const classes = cx(
     'inline-flex items-center justify-center gap-3 rounded-full font-bold no-underline transition-[color,background-color,box-shadow,transform] duration-200 ease-out active:scale-[0.97] active:duration-150 disabled:cursor-not-allowed disabled:opacity-60 disabled:active:scale-100',
     small ? 'min-h-touch-sm px-6 text-sm' : 'min-h-touch px-9 text-base',
@@ -27,7 +27,7 @@ export function Button({ variant = 'primary', small, busy, busyLabel, className,
     )
   }
   return (
-    <button type="button" className={classes} disabled={busy || rest.disabled} aria-busy={busy || undefined} {...rest}>
+    <button type="button" {...rest} className={classes} disabled={Boolean(busy || disabled)} aria-busy={busy || undefined}>
       {busy && busyLabel ? busyLabel : children}
     </button>
   )

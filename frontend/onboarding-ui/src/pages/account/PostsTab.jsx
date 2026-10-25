@@ -1,4 +1,5 @@
-// Posts tab: his published posts, newest first, with reactions and comments counts.
+// Posts tab: his posts that went out, newest first, a link per platform, and reactions and
+// comments summed across platforms.
 import { useEffect, useState } from 'react'
 import { accountApi } from '../../api'
 import { errorText } from '../../copy'
@@ -43,6 +44,8 @@ function postedDate(ms) {
 }
 
 function Post({ post }) {
+  // Older pages of this API sent only linkedinUrl.
+  const links = post.links || (post.linkedinUrl ? [{ platform: 'linkedin', url: post.linkedinUrl }] : [])
   return (
     <Card as="article">
       <p className="text-sm text-muted">{POSTS.posted(postedDate(post.postedAt))}</p>
@@ -51,34 +54,40 @@ function Post({ post }) {
         <span>{POSTS.reactions(post.reactions)}</span>
         <span>{POSTS.comments(post.comments)}</span>
       </p>
-      {post.linkedinUrl && (
-        <a href={post.linkedinUrl} target="_blank" rel="noopener" className="inline-flex min-h-touch-sm items-center">
-          {POSTS.view}
-          <span className="sr-only"> {POSTS.newTab}</span>
-        </a>
+      {links.length > 0 && (
+        <ul className="m-0 flex list-none flex-wrap gap-x-6 gap-y-1 p-0">
+          {links.map((link) => (
+            <li key={link.platform}>
+              <a href={link.url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-touch-sm items-center">
+                {POSTS.view(POSTS.platforms[link.platform] || link.platform)}
+                <span className="sr-only"> {POSTS.newTab}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
       )}
     </Card>
   )
 }
 
-export default function PostsTab({ elderId }) {
+export default function PostsTab({ elderId, token }) {
   const [state, setState] = useState({ status: 'loading' })
   const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let live = true
     setState({ status: 'loading' })
-    accountApi.listPosts(elderId).then(
+    accountApi.listPosts(elderId, token).then(
       (posts) => live && setState({ status: 'ready', posts: posts || [] }),
       (error) => {
-        console.error('listPosts failed', error)
+        console.error('listPosts failed', error.code || 'error')
         if (live) setState({ status: 'error', error })
       },
     )
     return () => {
       live = false
     }
-  }, [elderId, attempt])
+  }, [elderId, token, attempt])
 
   return (
     <>

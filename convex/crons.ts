@@ -4,7 +4,8 @@ import { internal } from "./_generated/api";
 // Scheduled jobs. Convex crons run in UTC; per-elder local times are handled in
 // schedule.ts (lib/schedule.ts does the timezone math):
 //   hourly  prepare calls ~1h ahead + start calls whose hour began -> internal.cartesia.startCall
-//   daily   scrape his LinkedIn posts' reactions + comments         -> internal.apify.scrapeEngagement
+//   daily   likes, reposts + replies on his Bluesky threads         -> internal.blueskyEngagement.scrapeForElder
+//           (+ LinkedIn reactions/comments if LINKEDIN_POSTING=on)  -> internal.apify.scrapeEngagement
 //   weekly  find audience questions for each active elder           -> internal.apify.findAudienceQuestions
 //   10 min  record inbound calls the lookup tool missed             -> internal.inbound.syncInboundCalls
 //   1 min   repeat calls every CALL_INTERVAL_MINUTES (testing)      -> internal.callLoop.tick
@@ -15,8 +16,10 @@ const crons = cronJobs();
 // calls whose hour has begun (cartesia.startCall).
 crons.hourly("weekly calls", { minuteUTC: 0 }, internal.schedule.tick, {});
 
-// Daily: reactions + comments on his LinkedIn posts (feeds the question bank).
-crons.daily("scrape LinkedIn engagement", { hourUTC: 13, minuteUTC: 15 }, internal.schedule.dailyEngagement, {});
+// Daily: likes, reposts + replies on his Bluesky threads, and LinkedIn reactions + comments
+// when LINKEDIN_POSTING=on (feeds the question bank). Renamed from "scrape LinkedIn
+// engagement": on deploy Convex drops the old job and registers this one.
+crons.daily("scrape reader engagement", { hourUTC: 13, minuteUTC: 15 }, internal.schedule.dailyEngagement, {});
 
 // Every minute: repeat calls CALL_INTERVAL_MINUTES after the last one ended (callLoop.ts). Does
 // nothing until CALL_INTERVAL_MINUTES is set.

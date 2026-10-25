@@ -5,7 +5,7 @@ import { accountApi } from '../../api'
 import { NAV } from '../../copy'
 import { ACCOUNT } from '../../copy/account'
 import { go } from '../../lib/route'
-import { clearSession, loadSession } from '../../lib/session'
+import { clearSession, forgetDevice, loadSession } from '../../lib/session'
 import { Button, cx } from '../../ui/controls'
 import { Header, NAV_ITEM } from '../../ui/Header'
 import HomeTab from './HomeTab'
@@ -59,7 +59,7 @@ function Tabs({ tab, label }) {
 
 function SignOut() {
   const signOut = () => {
-    clearSession()
+    clearSession() // keeps { phone, elderId, token } as a known device, so the same phone can sign in again
     go('/')
   }
   return (
@@ -70,29 +70,30 @@ function SignOut() {
 }
 
 export default function Account({ tab }) {
-  const [elderId] = useState(() => loadSession().elderId)
+  const [{ elderId, token }] = useState(() => loadSession())
   const [state, setState] = useState({ status: 'loading' }) // loading | ready | error | missing
   const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let live = true
     setState({ status: 'loading' })
-    accountApi.getProfile(elderId).then(
+    accountApi.getProfile(elderId, token).then(
       (profile) => {
         if (!live) return
         if (profile) return setState({ status: 'ready', profile })
-        clearSession() // unknown id: this device's sign-in is stale
+        forgetDevice(elderId) // unknown id or wrong token: this device's sign-in is stale
+        clearSession()
         setState({ status: 'missing' })
       },
       (error) => {
-        console.error('getProfile failed', error)
+        console.error('getProfile failed', error.code || 'error')
         if (live) setState({ status: 'error', error })
       },
     )
     return () => {
       live = false
     }
-  }, [elderId, attempt])
+  }, [elderId, token, attempt])
 
   if (state.status === 'missing') {
     return (
@@ -118,8 +119,8 @@ export default function Account({ tab }) {
         <section id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`} className="flex flex-col gap-8">
           {state.status === 'loading' && <Loading label={ACCOUNT.loading} cards={3} />}
           {state.status === 'error' && <LoadError error={state.error} onRetry={() => setAttempt((a) => a + 1)} />}
-          {state.status === 'ready' && tab === 'home' && <HomeTab elderId={elderId} profile={profile} onChange={onChange} />}
-          {state.status === 'ready' && tab === 'posts' && <PostsTab elderId={elderId} />}
+          {state.status === 'ready' && tab === 'home' && <HomeTab elderId={elderId} token={token} profile={profile} onChange={onChange} />}
+          {state.status === 'ready' && tab === 'posts' && <PostsTab elderId={elderId} token={token} />}
         </section>
       </main>
     </>

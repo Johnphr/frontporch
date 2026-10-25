@@ -1,0 +1,127 @@
+{
+  "thread": {
+    "$type": "app.bsky.feed.defs#threadViewPost",
+    "post": {
+      "uri": "at://did:plc:walt123/app.bsky.feed.post/3lroot",
+      "cid": "bafyroot",
+      "author": { "did": "did:plc:walt123", "handle": "walt.bsky.social", "displayName": "Walt Becker", "labels": [] },
+      "record": { "$type": "app.bsky.feed.post", "text": "In 1962 I opened my first bakery on Elm Street. (1/3)", "createdAt": "2026-10-20T15:00:00.000Z", "langs": ["en"] },
+      "replyCount": 3,
+      "repostCount": 3,
+      "likeCount": 12,
+      "quoteCount": 1,
+      "indexedAt": "2026-10-20T15:00:01.000Z",
+      "viewer": {},
+      "labels": []
+    },
+    "replies": [
+      {
+        "$type": "app.bsky.feed.defs#threadViewPost",
+        "post": {
+          "uri": "at://did:plc:walt123/app.bsky.feed.post/3lpost2",
+          "cid": "bafy2",
+          "author": { "did": "did:plc:walt123", "handle": "walt.bsky.social", "displayName": "Walt Becker" },
+          "record": { "$type": "app.bsky.feed.post", "text": "We sold bread for a dime a loaf. (2/3)", "createdAt": "2026-10-20T15:00:02.000Z", "reply": { "root": { "uri": "at://did:plc:walt123/app.bsky.feed.post/3lroot", "cid": "bafyroot" }, "parent": { "uri": "at://did:plc:walt123/app.bsky.feed.post/3lroot", "cid": "bafyroot" } } },
+          "replyCount": 2,
+          "repostCount": 1,
+          "likeCount": 4,
+          "indexedAt": "2026-10-20T15:00:03.000Z"
+        },
+        "replies": [
+          {
+            "$type": "app.bsky.feed.defs#threadViewPost",
+            "post": {
+              "uri": "at://did:plc:ana456/app.bsky.feed.post/3lana",
+              "cid": "bafyana",
+              "author": { "did": "did:plc:ana456", "handle": "ana.example.com" },
+              "record": { "$type": "app.bsky.feed.post", "text": "How did you price bread back then?\n\nDid flour costs change it?", "createdAt": "2026-10-21T09:00:00.000Z" },
+              "replyCount": 1,
+              "repostCount": 0,
+              "likeCount": 2
+            },
+            "replies": [
+              {
+                "$type": "app.bsky.feed.defs#threadViewPost",
+                "post": {
+                  "uri": "at://did:plc:bo789/app.bsky.feed.post/3lbo",
+                  "cid": "bafybo",
+                  "author": { "did": "did:plc:bo789", "handle": "bo.bsky.social", "displayName": "Bo" },
+                  "record": { "$type": "app.bsky.feed.post", "text": "Same question!", "createdAt": "2026-10-21T10:00:00.000Z" },
+                  "replyCount": 0,
+                  "repostCount": 0,
+                  "likeCount": 0
+                },
+                "replies": []
+              }
+            ]
+          },
+          {
+            "$type": "app.bsky.feed.defs#threadViewPost",
+            "post": {
+              "uri": "at://did:plc:walt123/app.bsky.feed.post/3lpost3",
+              "cid": "bafy3",
+              "author": { "did": "did:plc:walt123", "handle": "walt.bsky.social", "displayName": "Walt Becker" },
+              "record": { "$type": "app.bsky.feed.post", "text": "And on Sundays we gave the rest away. (3/3)", "createdAt": "2026-10-20T15:00:04.000Z" },
+              "replyCount": 0,
+              "repostCount": 0,
+              "likeCount": 2
+            },
+            "replies": []
+          }
+        ]
+      },
+      {
+        "$type": "app.bsky.feed.defs#threadViewPost",
+        "post": {
+          "uri": "at://did:plc:carol000/app.bsky.feed.post/3lcarol",
+          "cid": "bafycarol",
+          "author": { "did": "did:plc:carol000", "handle": "carol.bsky.social", "displayName": "Carol Diaz" },
+          "record": { "$type": "app.bsky.feed.post", "text": "Lovely story. My grandfather was a baker too.", "createdAt": "2026-10-20T18:00:00.000Z" },
+          "replyCount": 1,
+          "repostCount": 0,
+          "likeCount": 5
+        },
+        "replies": [
+          {
+            "$type": "app.bsky.feed.defs#threadViewPost",
+            "post": {
+              "uri": "at://did:plc:walt123/app.bsky.feed.post/3lwaltreply",
+              "cid": "bafywr",
+              "author": { "did": "did:plc:walt123", "handle": "walt.bsky.social", "displayName": "Walt Becker" },
+              "record": { "$type": "app.bsky.feed.post", "text": "Thank you, Carol!", "createdAt": "2026-10-21T08:00:00.000Z" },
+              "replyCount": 0,
+              "repostCount": 0,
+              "likeCount": 1
+            },
+            "replies": []
+          }
+        ]
+      },
+      {
+        "$type": "app.bsky.feed.defs#blockedPost",
+        "uri": "at://did:plc:troll/app.bsky.feed.post/3ltroll",
+        "blocked": true,
+        "author": { "did": "did:plc:troll", "viewer": { "blockedBy": true } }
+      },
+      {
+        "$type": "app.bsky.feed.defs#notFoundPost",
+        "uri": "at://did:plc:gone/app.bsky.feed.post/3lgone",
+        "notFound": true
+      },
+      {
+        "$type": "app.bsky.feed.defs#threadViewPost",
+        "post": {
+          "uri": "at://did:plc:pics/app.bsky.feed.post/3lpic",
+          "cid": "bafypic",
+          "author": { "did": "did:plc:pics", "handle": "pics.bsky.social" },
+          "record": { "$type": "app.bsky.feed.post", "text": "", "embed": { "$type": "app.bsky.embed.images", "images": [] }, "createdAt": "2026-10-22T08:00:00.000Z" },
+          "replyCount": 0,
+          "repostCount": 0,
+          "likeCount": 0
+        },
+        "replies": []
+      }
+    ]
+  },
+  "threadgate": null
+}

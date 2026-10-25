@@ -1,7 +1,8 @@
 // LinkedIn + audience-question scraping via Apify (and two free public APIs).
 //
-//   scrapeEngagement       daily: reactions + reader comments on his LinkedIn posts
-//                          -> engagement:upsert (Core: Data) per post
+//   scrapeEngagement       daily, only when LINKEDIN_POSTING=on: reactions + reader comments
+//                          on his LinkedIn posts -> engagement:upsert (Core: Data) per post
+//                          (Bluesky threads: blueskyEngagement.scrapeForElder)
 //   scrapeProfile          once before onboarding: his work history as plain text
 //                          -> { knownBackground } for conversation.planNextCall
 //   findAudienceQuestions  weekly: real questions people in his field ask online
@@ -17,9 +18,10 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { errorMessage, runActor, sleep } from "./lib/apifyClient";
+import { linkedinEngagementOn } from "./lib/engagementRules";
 import { blueskySearchPlan } from "./lib/bluesky";
 import { searchPosts, sharedSessionCache, withSession, type FetchFn } from "./lib/blueskyClient";
-import { blueskyLoginForElder, type BlueskyLogin } from "./lib/logins";
+import { blueskyLoginForElder, isBlueskyLoginRefused, reportBlueskyLoginError, type BlueskyLogin } from "./lib/logins";
 import {
   type AudienceQuestion,
   type SourceConfig,
@@ -84,6 +86,8 @@ type EngagementResult = {
   comments: number;
   upserted: number;
   errors: string[];
+  /** set when the run did nothing on purpose */
+  skipped?: string;
 };
 
 export const scrapeEngagement = internalAction({
@@ -93,6 +97,10 @@ export const scrapeEngagement = internalAction({
     maxPosts: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<EngagementResult> => {
+    // Posts moved to Bluesky: don't pay for LinkedIn runs unless LinkedIn is switched on.
+    if (!linkedinEngagementOn(process.env)) {
+      return { actor: "", posts: 0, comments: 0, upserted: 0, errors: [], skipped: "LINKEDIN_POSTING is off" };
+    }
     const elder = await ctx.runQuery(internal.apify.getElderForScrape, { elderId: args.elderId });
     const profileUrl = args.linkedinUrl ?? elder?.linkedinUrl;
     if (!profileUrl) throw new Error("No LinkedIn URL: pass linkedinUrl or set it on the elder");
@@ -194,11 +202,21 @@ type SourceReport = {
   error?: string;
   /** some requests failed; what the others fetched is still kept */
   errors?: string[];
+  /** not run (e.g. Bluesky: his account isn't connected) */
+  skipped?: string;
 };
 
 type Fetched = { items: unknown[]; errors: string[] };
 
-async function fetchSource(source: SourceConfig, keywords: string[], bluesky: BlueskyLogin | null): Promise<Fetched> {
+/** Called when Bluesky refuses his login (revoked app password): marks his account invalid. */
+type OnLoginRefused = (error: unknown) => Promise<unknown>;
+
+async function fetchSource(
+  source: SourceConfig,
+  keywords: string[],
+  bluesky: BlueskyLogin | null,
+  onLoginRefused: OnLoginRefused,
+): Promise<Fetched> {
   if (source.kind === "apify") {
     if (!source.actor) throw new Error(`source ${source.name} has no actor`);
     const items = await runActor(source.actor, buildApifyInput(source, keywords), {
@@ -237,6 +255,11 @@ async function fetchSource(source: SourceConfig, keywords: string[], bluesky: Bl
         items.push(...found);
       } catch (error) {
         errors.push(`Bluesky "${query}": ${errorMessage(error)}`);
+        // Login refused: the other keywords would fail the same way.
+        if (isBlueskyLoginRefused(error)) {
+          await onLoginRefused(error);
+          break;
+        }
       }
     }
     return { items, errors };
@@ -285,18 +308,22 @@ export const findAudienceQuestions = internalAction({
 
     // Bluesky needs his login: skip it unless it's configured (or asked for by name).
     const bluesky = await blueskyLoginForElder(ctx, args.elderId);
-    const sources = enabledSources(args.sources).filter(
-      (s) => s.kind !== "bluesky_search" || bluesky !== null || Boolean(args.sources?.includes(s.name)),
-    );
+    const reports: Record<string, SourceReport> = {};
+    const sources = enabledSources(args.sources).filter((s) => {
+      if (s.kind !== "bluesky_search" || bluesky !== null || args.sources?.includes(s.name)) return true;
+      reports[s.name] = { fetched: 0, kept: 0, dropped: {}, skipped: "not connected" };
+      return false;
+    });
     if (sources.length === 0) throw new Error("No audience-question sources enabled or matched");
 
-    const reports: Record<string, SourceReport> = {};
     const found: AudienceQuestion[] = [];
     let working = 0;
     await Promise.all(
       sources.map(async (source) => {
         try {
-          const { items, errors } = await fetchSource(source, keywords, bluesky);
+          const { items, errors } = await fetchSource(source, keywords, bluesky, (error) =>
+            reportBlueskyLoginError(ctx, args.elderId, error),
+          );
           const result = processItems(items, source, keywords, now);
           reports[source.name] = {
             fetched: items.length,
@@ -316,7 +343,7 @@ export const findAudienceQuestions = internalAction({
     // Every source failed: throw so the cron run shows up as an error in the logs.
     if (working === 0) {
       const details = Object.entries(reports)
-        .map(([name, r]) => `${name}: ${r.error ?? (r.errors ?? []).join("; ")}`)
+        .map(([name, r]) => `${name}: ${r.error ?? r.skipped ?? (r.errors ?? []).join("; ")}`)
         .join(" | ");
       throw new Error(`findAudienceQuestions: every source failed. ${details}`);
     }

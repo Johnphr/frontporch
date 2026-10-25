@@ -19,6 +19,10 @@ export const HOME = {
   greeting: (name, hour) => `Good ${partOfDay(hour)}, ${name}.`,
   callsEvery: (host, day, time) => `${host} calls you every ${day} at ${time}.`,
   noSchedule: (host) => `Choose when ${host} should call.`,
+  // Setup stopped at step 6 (where stories go) on this device: a way back to it.
+  finishSetupTitle: 'Setup is not finished',
+  finishSetupLead: 'Choose where the stories go, then get the first call.',
+  finishSetup: 'Finish setup',
   hostTitle: 'Your host',
   chooseHost: 'Choose your host',
   callsIn: (language) => `Calls in ${language}`,
@@ -44,6 +48,7 @@ export const POSTS = {
   posted: (date) => `Posted ${date}`,
   reactions: (n) => `${n} ${n === 1 ? 'reaction' : 'reactions'}`,
   comments: (n) => `${n} ${n === 1 ? 'comment' : 'comments'}`,
-  view: 'View on LinkedIn',
+  view: (platform) => `View on ${platform}`,
+  platforms: { bluesky: 'Bluesky', threads: 'Threads', x: 'X', linkedin: 'LinkedIn', reddit: 'Reddit' },
   newTab: '(opens in a new tab)',
 }

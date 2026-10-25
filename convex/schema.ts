@@ -82,7 +82,48 @@ export default defineSchema({
     lastBankRefreshAt: v.optional(v.number()), // epoch ms, debounces question-bank refreshes
     characterId: v.optional(v.string()), // who calls him (lib/characters.ts); missing = default for his language
     loopRequestedAt: v.optional(v.number()), // epoch ms; when callLoop last scheduled a call (may be ahead)
+    signupTokenHash: v.optional(v.string()), // SHA-256 hex of the sign-up page's token (signup.register)
   }).index("by_phone", ["phone"]),
+
+  // His own social accounts, connected at sign-up (convex/accounts.ts). The app password is
+  // AES-GCM encrypted (lib/accountCrypto.ts, key ACCOUNTS_ENC_KEY) and only decrypted inside
+  // actions (lib/logins.ts). One row per elder + platform.
+  elderAccounts: defineTable({
+    elderId: v.id("elders"),
+    platform: v.union(v.literal("bluesky"), v.literal("reddit"), v.literal("threads"), v.literal("x")),
+    handle: v.optional(v.string()), // Bluesky handle, Reddit / Threads / X username
+    did: v.optional(v.string()), // Bluesky DID, e.g. did:plc:...
+    secret: v.optional(v.object({ ciphertext: v.string(), iv: v.string() })), // base64; removed on disconnect
+    status: v.union(v.literal("connected"), v.literal("invalid"), v.literal("disconnected")),
+    connectedAt: v.optional(v.number()), // epoch ms
+    lastCheckedAt: v.optional(v.number()), // epoch ms, last time the login was verified
+    lastError: v.optional(v.string()), // short, never a secret
+    attemptTimes: v.optional(v.array(v.number())), // recent connect attempts (rate limit)
+    // OAuth platforms (threads, x): `secret` holds the encrypted token JSON
+    // {accessToken, refreshToken?}; these say who he is and when the access token expires.
+    externalUserId: v.optional(v.string()), // Threads user id / X user id
+    tokenExpiresAt: v.optional(v.number()), // epoch ms
+    scopes: v.optional(v.array(v.string())),
+  }).index("by_elder_platform", ["elderId", "platform"]),
+
+  // One row per OAuth "Connect" click (Threads, X): the random state we check on the callback,
+  // plus the PKCE verifier (X). Single use; expires after 15 minutes. Never returned to the site.
+  oauthStates: defineTable({
+    state: v.string(), // random, base64url
+    elderId: v.id("elders"),
+    platform: v.union(v.literal("threads"), v.literal("x")),
+    codeVerifier: v.optional(v.string()), // PKCE (X)
+    returnTo: v.optional(v.string()), // website URL to send him back to
+    createdAt: v.number(), // epoch ms
+    usedAt: v.optional(v.number()),
+  }).index("by_state", ["state"]),
+
+  // Connect-attempt caps across sign-ups (accounts.reserveConnect): one row per Bluesky handle
+  // ("bluesky:<handle>") plus one "global" row. Only the last hour's times are kept.
+  connectAttempts: defineTable({
+    key: v.string(),
+    times: v.array(v.number()), // epoch ms
+  }).index("by_key", ["key"]),
 
   // One Cartesia agent per character (lib/characters.ts), written by cartesiaAgents.syncAgent.
   characterAgents: defineTable({
@@ -138,6 +179,21 @@ export default defineSchema({
     cartesiaConversationId: v.optional(v.string()),
     // The exact answer the lookup tool gave this call: a repeated lookup gets it back unchanged.
     inboundLookup: v.optional(v.any()),
+    // ---- undo (undo.ts) ----
+    // He asked on this call to take a post down (lib/undo.detectTakeDown). how: "line" (Pip
+    // confirmed: his latest earlier post comes down), "today" (don't post today's story),
+    // "unconfirmed" (his words only: nothing deleted, this call's post held, check with him).
+    // note: one line for family (no words from the call). postId: the earlier post removeLatest
+    // picked (picked = it already chose, maybe none), reused on any re-run.
+    takeDown: v.optional(
+      v.object({
+        how: v.union(v.literal("line"), v.literal("today"), v.literal("unconfirmed")),
+        note: v.string(),
+        at: v.number(),
+        picked: v.optional(v.boolean()),
+        postId: v.optional(v.id("posts")),
+      }),
+    ),
   })
     .index("by_sid", ["callSid"])
     .index("by_cartesia", ["cartesiaCallId"])
@@ -171,18 +227,22 @@ export default defineSchema({
       filterFields: ["elderId", "kind", "elderKind"],
     }),
 
-  // ---- Data: reader engagement on his LinkedIn posts ----
-  // One row per post (latest snapshot), written by apify.scrapeEngagement via
-  // engagement.upsert. linkedinUrl is canonical (lib/linkedinUrl.ts) so it matches
-  // posts.linkedinUrl with a plain equality check.
+  // ---- Data: reader engagement on his posts (Bluesky threads, LinkedIn) ----
+  // One row per post per platform (latest snapshot), written via engagement.upsert by
+  // blueskyEngagement.scrapeForElder and apify.scrapeEngagement.
+  // linkedinUrl is the post's link on its platform (the name predates Bluesky):
+  //   linkedin (or missing platform): canonical (lib/linkedinUrl.ts), matches posts.linkedinUrl
+  //   bluesky: the thread's bsky.app link (postPublications.url); postId comes from that row
   engagement: defineTable({
     elderId: v.id("elders"),
     postId: v.optional(v.id("posts")),
+    platform: v.optional(v.union(v.literal("linkedin"), v.literal("bluesky"), v.literal("threads"), v.literal("x"))), // missing = linkedin
     linkedinUrl: v.string(),
-    reactions: v.number(),
-    comments: v.array(v.object({ author: v.string(), text: v.string() })),
+    reactions: v.number(), // Bluesky: likes + reposts on the thread's root post
+    comments: v.array(v.object({ author: v.string(), text: v.string() })), // Bluesky: replies by others
     scrapedAt: v.number(), // epoch ms, last scrape
     changedAt: v.optional(v.number()), // epoch ms, last time reactions/comments changed
+    goneAt: v.optional(v.number()), // epoch ms: the post was deleted on its platform (kept out of recentFeedback)
   })
     .index("by_elder", ["elderId"])
     .index("by_url", ["linkedinUrl"])
@@ -249,9 +309,10 @@ export default defineSchema({
   // ---- Integrations: posts (Data: review/replace) ----
   // ARCHITECTURE.md draft, plus optional fields used by linkedapi.ts / postGuard.ts.
   // status: pending (written, or sent to LinkedAPI when workflowId is set)
-  //       | posting (claimed by a run, about to be sent) | needs_review (post guard
-  //       failed, not posted) | published | failed | needs_attention (sent, but
-  //       status checks stopped; see error)
+  //       | posting (claimed by a run, about to be sent) | needs_review (held: see heldFor;
+  //       not posted) | published (a platform posted) | partly_posted (only part of a Bluesky
+  //       thread went out; a retry continues it) | failed (nothing went out)
+  //       | needs_attention (old LinkedIn flow: sent, but status checks stopped; see error)
   // linkedinUrl is canonical (lib/linkedinUrl.ts) so engagement rows match it.
   posts: defineTable({
     elderId: v.id("elders"),
@@ -265,15 +326,22 @@ export default defineSchema({
     guardSummary: v.optional(v.string()),
     pollAttempts: v.optional(v.number()),
     claimedAt: v.optional(v.number()), // epoch ms; stale claims (>15 min) can be retaken
-    approvedAt: v.optional(v.number()), // epoch ms; posted via approvePost (guard skipped)
+    approvedAt: v.optional(v.number()), // epoch ms; a person ran approvePost
+    // epoch ms; the fact-check cleared it (passed, or warn/off mode), or a person approved its
+    // hold. publish:retryPublication needs it (lib/postFlow.guardCleared).
+    guardPassedAt: v.optional(v.number()),
     lastPolledAt: v.optional(v.number()), // epoch ms; stale polling is restarted by createPost
     maybePosted: v.optional(v.boolean()), // LinkedAPI didn't confirm the send: check before retrying
     // ---- post quality (lib/postQuality.ts): the judge's score for the text that was saved.
     // Below the bar the post is saved as needs_review with a one-line guardSummary; the notes stay here.
     quality: v.optional(postQuality),
-    // Why a needs_review post is held. "quality": never fact-checked yet, so approvePost runs
-    // the guard first. "guard" (or missing, on older rows): approvePost skips it.
-    heldFor: v.optional(v.union(v.literal("quality"), v.literal("guard"))),
+    // Why a needs_review post is held. "quality" (below the bar) and "thread_fit" (too long for
+    // a Bluesky thread): never fact-checked yet, so approvePost runs the guard first.
+    // "guard" (or missing, on older rows): the fact-check held it; approvePost skips it.
+    heldFor: v.optional(v.union(v.literal("quality"), v.literal("thread_fit"), v.literal("guard"))),
+    // Disclosure + fact-check language, decided once when the post is saved (pipeline.insertPost:
+    // the language his calls run in). Missing on older rows: publish.postLanguage(elder).
+    language: v.optional(v.union(v.literal("en"), v.literal("es"))),
     // ---- undo (undo.ts): set the moment someone asks to take the post down. Publishing
     // never posts a post with removedAt set; undo removes it from every platform it reached.
     removedAt: v.optional(v.number()), // epoch ms
@@ -285,13 +353,16 @@ export default defineSchema({
 
   // ---- Integrations: where each post went (publish.ts writes; undo.ts and
   // blueskyEngagement.ts read). One row per post per platform.
-  // status: pending | posting (claimed) | posted | failed (nothing went out)
-  //       | maybe_posted (unclear: check before retrying) | skipped (platform off / no account)
+  // status: pending | posting (claimed) | posted
+  //       | failed (didn't finish: nothing went out, unless `records` is set: a Bluesky thread
+  //         that stopped partway, those posts are live and a retry continues it)
+  //       | maybe_posted (unclear: check before retrying; `records` = posts known to be out)
+  //       | skipped (platform off / no account)
   //       | removing (undo claimed it) | removed (taken down)
   postPublications: defineTable({
     postId: v.id("posts"),
     elderId: v.id("elders"),
-    platform: v.union(v.literal("bluesky"), v.literal("reddit"), v.literal("linkedin")),
+    platform: v.union(v.literal("bluesky"), v.literal("reddit"), v.literal("linkedin"), v.literal("threads"), v.literal("x")),
     status: v.union(
       v.literal("pending"),
       v.literal("posting"),

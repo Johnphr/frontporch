@@ -55,7 +55,7 @@
 - R2 Loop safety: the loop calls only numbers in CALL_ALLOWLIST unless `CALL_LOOP=all` (Twilio trial =
   verified numbers anyway). Due elders are staggered `runAfter(i * 30 s)`. No quiet hours (iteration
   tool; documented). Stop someone: remove his number from CALL_ALLOWLIST.
-- R3 Posting: loop is off (one log line per tick) while AUTO_POST is on and the interval is under 1 day.
+- R3 Posting: loop is off while AUTO_POST isn't off and the interval is under 1 day (see R3').
 - R4 No-row failures (startCall throws before reserving / refused): the cooldown is
   max(3 min, interval), so a broken agent retries once per interval, not every minute.
 - R5 schedule.runTick skips `due.call` while the loop is on (prepare still runs; harmless).
@@ -86,5 +86,6 @@
   neither counting nor resetting; a conversation (done / process_failed) ends the streak. 3 → paused.
 - R2/R4' Stamp `loopRequestedAt = now + i * 30 s` (the staggered start time); skip while
   `now < loopRequestedAt + max(3 min, interval)`.
-- R3' Posting gate = the pipeline's own check (AUTO_POST on AND both LinkedAPI tokens set) with an
-  interval under 1 day → loop off. No per-minute logs at all; the tick returns counts (dashboard logs).
+- R3' Posting gate: anything but `AUTO_POST=off` (lib/callLoop.postingMayBeLive: logins are per elder,
+  so env keys can't prove nothing posts) with an interval under 1 day → loop off. While blocked, the
+  tick logs one fixed warning per hour (minute 0) saying to set AUTO_POST=off; otherwise it returns counts.
