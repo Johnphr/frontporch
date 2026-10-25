@@ -61,6 +61,32 @@ row yet, `startCall` throws before any row is written. From the hourly cron that
 week's call (`schedule.tick` records the slot first), so sync every character first. Add a
 character: `../voice/README.md`.
 
+## Repeat calls fast (iterate on calls) + what the sign-up page shows
+
+```
+call ends ──► wait CALL_INTERVAL_MINUTES ──► next call ──► call ends ──► wait ...
+   ▲ still ringing / talking / being written up? the clock hasn't started yet
+```
+
+```bash
+npx convex env set CALL_INTERVAL_MINUTES 5        # next call 5 min after the last one ENDS
+npx convex env set CALL_ALLOWLIST "+1...,+52..."  # only these numbers are repeated (Twilio-verified ones)
+npx convex env remove CALL_INTERVAL_MINUTES       # stop
+```
+
+- Change the number any time (dashboard → Settings → Environment Variables); it applies within a
+  minute (`callLoop.tick`, every minute). Set `CALL_LOOP=all` to repeat everyone (not for now).
+- Never the first call: that's "Call me now" (or `cartesia:startCall` by hand).
+- After 3 missed calls in a row (no answer, voicemail, busy...) it stops calling that number until a
+  real conversation happens (start one by hand). Our own failures (busy lines, config) don't count.
+- Off while real posting is live (`AUTO_POST` on + LinkedAPI tokens) with an interval under a day.
+- Numbers it covers are skipped by the weekly `schedule.tick`. No quiet hours: keep the list small.
+
+**Sign-up page call status:** after "Call me now" the page shows what is happening in plain words
+(dialing, on the call, no answer, busy, voicemail, wrong number, cut short, our trouble...) from
+`signup:callStatus({ callId })`, and offers "Try again" only when `requestCall` would accept it
+(10 min apart, 3 a day). States: `convex/lib/callStatus.ts`; copy: `frontend/onboarding-ui/src/i18n.js`.
+
 ## Review generated posts (temporary page)
 
 Read every post as it would be published, before LinkedIn is connected:

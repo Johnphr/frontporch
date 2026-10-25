@@ -15,10 +15,11 @@ import {
   TalaveraBand,
   TextField,
 } from './ui'
-import { BigMarigold, Scene, SvgDefs } from './Scene'
+import { DoneStep } from './DoneStep'
+import { Scene, SvgDefs } from './Scene'
 
 // Flow (convex/signup.ts): 1 name + language -> 2 phone (register) -> 3 character (setCharacter)
-// -> 4 LinkedIn, optional (setLinkedin) -> done: "Call me now" (requestCall).
+// -> 4 LinkedIn, optional (setLinkedin) -> done: "Call me now" (requestCall) + call status (DoneStep.jsx).
 //
 // The backend has no SMS verification yet, so the 6-digit code screen is skipped. Turn this on
 // (and replace phoneVerification in api.js with a real provider) once it exists.
@@ -47,6 +48,7 @@ const save = (state) => {
 const clearSaved = () => {
   try {
     sessionStorage.removeItem(KEY)
+    sessionStorage.removeItem('onboarding-v2-call') // DoneStep's call
   } catch {
     /* ignore */
   }
@@ -112,7 +114,6 @@ function Onboarding() {
   const [characterName, setCharacterName] = useState(saved.characterName || '')
   const [linkedinUrl, setLinkedinUrl] = useState('')
   const [linkedin, setLinkedin] = useState(saved.linkedin || null) // 'saved' | 'skipped' | null
-  const [callResult, setCallResult] = useState(null) // i18n key in t.done once requested
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null) // { code, message }
   const [fieldErrors, setFieldErrors] = useState({})
@@ -314,19 +315,6 @@ function Onboarding() {
     clearMessages()
     setLinkedin('skipped')
     setStep('done')
-  }
-
-  /* ----- done: call me now ----- */
-  async function onCall() {
-    setCallResult(null)
-    await run(async () => {
-      const res = await signupApi.requestCall(elderId)
-      if (res?.ok) return setCallResult('callOk')
-      if (res?.reason === 'disabled') return setCallResult('callDisabled')
-      if (res?.reason === 'rate_limited') return setCallResult('callRateLimited')
-      if (/first call is done/i.test(res?.message || '')) return setCallResult('callAlreadyDone')
-      return setCallResult('callFailed')
-    })
   }
 
   function goBack() {
@@ -574,30 +562,19 @@ function Onboarding() {
           </>
         )}
 
-        {/* ---------- Done: call me now ---------- */}
+        {/* ---------- Done: call me now + what happens with the call (DoneStep.jsx) ---------- */}
         {step === 'done' && (
-          <>
-            <BigMarigold className="h-24 w-24 self-center" />
-            <header className="flex flex-col gap-3">
-              <h1 ref={headingRef} tabIndex={-1} className={heading}>
-                {t.done.title}
-              </h1>
-              <p>{name ? t.done.lead(name) : t.done.leadNoName}</p>
-            </header>
-            {characterName && <Note>{t.done.character(characterName)}</Note>}
-            <Note>{linkedin === 'saved' ? t.done.linkedinYes : t.done.linkedinNo}</Note>
-            <div aria-live="polite" className="flex flex-col gap-4">
-              {callResult && (callResult === 'callOk' ? <Note>{t.done[callResult]}</Note> : <ErrorBanner>{t.done[callResult]}</ErrorBanner>)}
-              <ErrorBanner>{errorText(error)}</ErrorBanner>
-            </div>
-            <div className="flex-1" />
-            <Button onClick={onCall} disabled={busy || callResult === 'callOk'}>
-              {busy ? t.done.calling : t.done.call}
-            </Button>
-            <Button variant="quiet" onClick={startOver}>
-              {t.done.startOver}
-            </Button>
-          </>
+          <DoneStep
+            t={t}
+            name={name}
+            characterName={characterName}
+            linkedin={linkedin}
+            elderId={elderId}
+            headingRef={headingRef}
+            headingClass={heading}
+            errorText={errorText}
+            onStartOver={startOver}
+          />
         )}
 
         {lostSignup && step !== 'done' && (

@@ -15,7 +15,11 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation } from "./_generated/server";
+import { loopCovers, type LoopEnv } from "./lib/callLoop";
 import { PREPARE_CALL_FN, START_CALL_FN, dueActions } from "./lib/schedule";
+
+// Convex exposes env vars on process.env (declared so we don't need @types/node).
+declare const process: { env: Record<string, string | undefined> };
 
 // Implemented by Core: Brain (conversation.ts, cartesia.ts). Referenced by name so
 // this file doesn't depend on their generated types while all are in flight.
@@ -63,7 +67,8 @@ export const runTick = internalMutation({
           result.skipped.push({ elderId: elder._id, reason: `prepareCall: ${String(error)}` });
         }
       }
-      if (due.call) {
+      // The repeating-call loop (callLoop.ts) owns his calls while it covers him.
+      if (due.call && !loopCovers(process.env as LoopEnv, elder.phone)) {
         try {
           await ctx.scheduler.runAfter(0, startCall, { elderId: elder._id });
           await ctx.db.patch(elder._id, { lastCallSlot: due.call.slot });

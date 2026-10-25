@@ -17,8 +17,9 @@ export const RINGING_TIMEOUT_SECONDS = 60;
 export const INACTIVITY_CHECK_IN_SECS = 30;
 export const INACTIVITY_END_CALL_SECS = 120;
 
-/** Poll budget: first check after 2 min, then every minute, ~61 min in total. */
-export const MAX_POLL_ATTEMPTS = 60;
+/** Poll budget: every 20 s for the first 3 min (so a failed dial shows fast), then every minute, ~61 min in total. */
+export const MAX_POLL_ATTEMPTS = 67;
+const FAST_POLLS = 9;
 /** Fewer words than this from him is a voicemail greeting or a dropped call, not an interview. */
 export const MIN_ELDER_WORDS = 30;
 const MAX_STORED_ERROR = 300;
@@ -99,7 +100,7 @@ export function isNoConversation(endReason: string | undefined, turns: Turn[]): 
 }
 
 export function nextPollDelayMs(attempt: number): number {
-  return attempt <= 0 ? 120_000 : 60_000;
+  return attempt < FAST_POLLS ? 20_000 : 60_000;
 }
 
 export function shouldGiveUp(attempt: number): boolean {
@@ -211,7 +212,7 @@ export function startFailureStatus(httpStatus: number): "failed" | "start_unknow
 }
 
 export type PollOutcome =
-  | { kind: "pending" }
+  | { kind: "pending"; liveStatus?: string }
   | { kind: "fatal"; error: string }
   | { kind: "timeout" }
   | { kind: "finished"; transcript: Turn[]; summary?: string; endReason?: string; error?: string };
@@ -234,14 +235,18 @@ export function planPollUpdate(
   if (call.status !== "in_progress" || (call.pollAttempts ?? 0) !== seenAttempts) return null;
   const base = { pollAttempts: seenAttempts + 1, lastPolledAt: now };
   switch (outcome.kind) {
-    case "pending":
-      return { patch: base, next: "poll", delayMs: nextPollDelayMs(seenAttempts + 1) };
+    case "pending": {
+      // Cartesia's documented live statuses only (shown on the sign-up page: dialing vs on the call).
+      const live = outcome.liveStatus === "created" || outcome.liveStatus === "started" ? { liveStatus: outcome.liveStatus } : {};
+      return { patch: { ...base, ...live }, next: "poll", delayMs: nextPollDelayMs(seenAttempts + 1) };
+    }
     case "fatal":
-      return { patch: { ...base, status: "poll_error", error: outcome.error }, next: null, delayMs: 0 };
+      return { patch: { ...base, status: "poll_error", error: outcome.error, endedAt: now }, next: null, delayMs: 0 };
     case "timeout":
-      return { patch: { ...base, status: "poll_timeout", error: POLL_TIMEOUT_ERROR }, next: null, delayMs: 0 };
+      return { patch: { ...base, status: "poll_timeout", error: POLL_TIMEOUT_ERROR, endedAt: now }, next: null, delayMs: 0 };
     case "finished": {
-      const patch: Record<string, unknown> = { ...base, status: "ended", transcript: outcome.transcript };
+      // endedAt: the repeating-call loop counts its interval from here (lib/callLoop.ts).
+      const patch: Record<string, unknown> = { ...base, status: "ended", transcript: outcome.transcript, endedAt: now };
       for (const key of ["summary", "endReason", "error"] as const) {
         if (outcome[key] !== undefined) patch[key] = outcome[key];
       }

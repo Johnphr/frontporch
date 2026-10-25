@@ -35,7 +35,7 @@ No family, no SMS. One small onboarding UI (`frontend/onboarding-ui/`); everythi
 | Decision | Choice |
 |---|---|
 | Backend | Everything in Convex: tables, crons, actions, HTTP actions. No separate server |
-| UI | One onboarding UI (`frontend/onboarding-ui/`, design by Mafer): name + language, phone, who calls, LinkedIn URL, "Call me now". No phone verification for now (code screen off; anyone can be called once `PUBLIC_CALLS=all`, so keep the link private). Call time is still set by hand in the Convex dashboard. Temporary: a key-protected `/posts` review page (`convex/postsPage.ts`) to iterate on post content |
+| UI | One onboarding UI (`frontend/onboarding-ui/`, design by Mafer): name + language, phone, who calls, LinkedIn URL, "Call me now". No phone verification for now (code screen off; anyone can be called once `PUBLIC_CALLS=all`, so keep the link private). Call time is still set by hand in the Convex dashboard; for testing, `CALL_INTERVAL_MINUTES` repeats calls. After "Call me now" the page shows the call's live status (`signup:callStatus`). Temporary: a key-protected `/posts` review page (`convex/postsPage.ts`) to iterate on post content |
 | Phone calls | **Cartesia Managed Agents** run the whole call: phone number, speech-to-text, in-call LLM, voice. No Vapi; no Twilio in our code |
 | Agent config | Lives in code (`convex/lib/prompts/`), pushed to Cartesia with `npx convex run cartesiaAgents:syncAgent` |
 | Characters | One Cartesia agent per character (`convex/lib/characters.ts`: voice, language, personality): **Pip** in English, **Juanito** (Latin American Spanish, "usted"). He picks one (`elders.characterId`), else the default for `elders.language`. All call from one number; the call's goal + context are per-call variables |
@@ -343,6 +343,8 @@ tests/                          node --test + fixtures/
 | `OPENAI_MODEL` | optional, default `gpt-6-luna` |
 | `PUBLIC_CALLS` | optional, default off. Lets the sign-up page start his first call (`signup:requestCall`; max 3 a day, 10 min apart). `on` = only `CALL_ALLOWLIST` numbers; `all` = anyone (only once SMS is real) |
 | `CALL_ALLOWLIST` | comma-separated E.164 test numbers the sign-up page may call when `PUBLIC_CALLS=on` |
+| `CALL_INTERVAL_MINUTES` | optional, default off. Repeat calls this many minutes after the last call ENDS (`callLoop.tick`, every minute); covers only `CALL_ALLOWLIST` numbers unless `CALL_LOOP=all` |
+| `CALL_LOOP` | optional. `all` = the repeating loop covers every elder (default: only `CALL_ALLOWLIST`) |
 
 Share keys through a password manager, never the repo or chat.
 

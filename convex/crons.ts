@@ -7,6 +7,7 @@ import { internal } from "./_generated/api";
 //   daily   scrape his LinkedIn posts' reactions + comments         -> internal.apify.scrapeEngagement
 //   weekly  find audience questions for each active elder           -> internal.apify.findAudienceQuestions
 //   10 min  record inbound calls the lookup tool missed             -> internal.inbound.syncInboundCalls
+//   1 min   repeat calls every CALL_INTERVAL_MINUTES (testing)      -> internal.callLoop.tick
 // Owner: Core: Data. This file must keep a default-exported cronJobs().
 const crons = cronJobs();
 
@@ -16,6 +17,10 @@ crons.hourly("weekly calls", { minuteUTC: 0 }, internal.schedule.tick, {});
 
 // Daily: reactions + comments on his LinkedIn posts (feeds the question bank).
 crons.daily("scrape LinkedIn engagement", { hourUTC: 13, minuteUTC: 15 }, internal.schedule.dailyEngagement, {});
+
+// Every minute: repeat calls CALL_INTERVAL_MINUTES after the last one ended (callLoop.ts). Does
+// nothing until CALL_INTERVAL_MINUTES is set.
+crons.interval("call loop", { minutes: 1 }, internal.callLoop.tick, {});
 
 // Every 10 min: inbound calls the lookup tool never recorded (inbound.syncInboundCalls).
 // Does nothing until CARTESIA_INBOUND_AGENT_ID is set.

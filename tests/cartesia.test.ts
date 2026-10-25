@@ -94,9 +94,10 @@ test("clip keeps stored error text short", () => {
   assert.equal(clip("short"), "short");
 });
 
-test("nextPollDelayMs: first check after 2 min, then every minute, about an hour in total", () => {
-  assert.equal(nextPollDelayMs(0), 120_000);
-  assert.equal(nextPollDelayMs(1), 60_000);
+test("nextPollDelayMs: every 20 s for the first 3 min, then every minute, about an hour in total", () => {
+  assert.equal(nextPollDelayMs(0), 20_000);
+  assert.equal(nextPollDelayMs(8), 20_000);
+  assert.equal(nextPollDelayMs(9), 60_000);
   assert.equal(nextPollDelayMs(30), 60_000);
   const total = Array.from({ length: MAX_POLL_ATTEMPTS }, (_, i) => nextPollDelayMs(i)).reduce((a, b) => a + b, 0);
   assert.ok(total >= 55 * 60_000 && total <= 65 * 60_000, `total ${total / 60_000} min`);
@@ -181,10 +182,13 @@ test("planPollUpdate: only the chain that saw the current attempt count may writ
   assert.deepEqual(planPollUpdate(live, 3, { kind: "pending" }, 1000), {
     patch: { pollAttempts: 4, lastPolledAt: 1000 },
     next: "poll",
-    delayMs: 60_000,
+    delayMs: 20_000,
   });
+  // Cartesia's live status is kept only when it's a documented one
+  assert.equal(planPollUpdate(live, 3, { kind: "pending", liveStatus: "started" }, 1)?.patch.liveStatus, "started");
+  assert.equal(planPollUpdate(live, 3, { kind: "pending", liveStatus: "<weird>" }, 1)?.patch.liveStatus, undefined);
   assert.deepEqual(planPollUpdate({ status: "in_progress" }, 0, { kind: "fatal", error: "Cartesia HTTP 404" }, 5), {
-    patch: { pollAttempts: 1, lastPolledAt: 5, status: "poll_error", error: "Cartesia HTTP 404" },
+    patch: { pollAttempts: 1, lastPolledAt: 5, status: "poll_error", error: "Cartesia HTTP 404", endedAt: 5 },
     next: null,
     delayMs: 0,
   });
@@ -194,7 +198,7 @@ test("planPollUpdate: only the chain that saw the current attempt count may writ
 
   const turns = [{ role: "elder" as const, text: "hi" }];
   assert.deepEqual(planPollUpdate(live, 3, { kind: "finished", transcript: turns, endReason: "agent_hangup" }, 9), {
-    patch: { pollAttempts: 4, lastPolledAt: 9, status: "ended", transcript: turns, endReason: "agent_hangup" },
+    patch: { pollAttempts: 4, lastPolledAt: 9, status: "ended", transcript: turns, endReason: "agent_hangup", endedAt: 9 },
     next: "process",
     delayMs: 0,
   });
