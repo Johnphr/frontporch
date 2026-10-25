@@ -70,3 +70,5 @@ hash-based, so `vercel.json` needs no rewrites.
 - `src/copy.js`: shared copy and error messages (EN + ES). `src/copy/<page>.js` holds each page's copy
 - `src/ui/`: header, buttons, fields, choice cards, toast. `src/art/`: the SVG illustrations
 - `src/pages/`: `Landing`, `SignIn`, `setup/*` (onboarding; `Accounts.jsx` + `OAuthConnect.jsx` = step 6), `account/*` (Home + Posts)
+
+<!-- deploy trigger: 2026-10-25T07:12Z -->
