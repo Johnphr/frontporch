@@ -5,7 +5,7 @@ import { accountApi } from '../../api'
 import { NAV } from '../../copy'
 import { ACCOUNT } from '../../copy/account'
 import { go } from '../../lib/route'
-import { clearSession, loadSession } from '../../lib/session'
+import { clearSession, forgetDevice, loadSession } from '../../lib/session'
 import { Button, cx } from '../../ui/controls'
 import { Header } from '../../ui/Header'
 import HomeTab from './HomeTab'
@@ -59,7 +59,7 @@ function Tabs({ tab, label }) {
 
 function SignOut() {
   const signOut = () => {
-    clearSession()
+    clearSession() // keeps { phone, elderId, token } as a known device, so the same phone can sign in again
     go('/')
   }
   return (
@@ -81,7 +81,8 @@ export default function Account({ tab }) {
       (profile) => {
         if (!live) return
         if (profile) return setState({ status: 'ready', profile })
-        clearSession() // unknown id or wrong token: this device's sign-in is stale
+        forgetDevice(elderId) // unknown id or wrong token: this device's sign-in is stale
+        clearSession()
         setState({ status: 'missing' })
       },
       (error) => {
