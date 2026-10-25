@@ -27,7 +27,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { sharedSessionCache, type FetchFn } from "./lib/blueskyClient";
-import { blueskyLoginForElder, redditLoginForElder } from "./lib/logins";
+import { blueskyLoginForElder, redditLoginForElder, type LoginCtx } from "./lib/logins";
 import { parseAutoPost } from "./lib/postFlow";
 import { postBlueskyReply, postRedditReply, runPostReply, type PostOutcome } from "./lib/replyPosting";
 import {
@@ -48,8 +48,8 @@ declare const process: { env: Record<string, string | undefined> };
 const HTTP_TIMEOUT_MS = 20_000;
 
 /** Which platforms he can reply on, from his logins (lib/logins.ts). */
-async function replyEnvFor(elderId: Id<"elders">): Promise<ReplyEnv> {
-  const [bluesky, reddit] = await Promise.all([blueskyLoginForElder(elderId), redditLoginForElder(elderId)]);
+async function replyEnvFor(ctx: LoginCtx, elderId: Id<"elders">): Promise<ReplyEnv> {
+  const [bluesky, reddit] = await Promise.all([blueskyLoginForElder(ctx, elderId), redditLoginForElder(ctx, elderId)]);
   return {
     blueskyHandle: bluesky?.identifier,
     blueskyPassword: bluesky?.password,
@@ -234,7 +234,7 @@ export const draftForCall = internalAction({
     if (data.existingReplyId) return { status: "exists", replyId: data.existingReplyId };
     const { question } = data;
     // No reply (and no row) where we can't post: other sources, or Bluesky/Reddit not set up.
-    const target = replyTarget(question, await replyEnvFor(data.elderId));
+    const target = replyTarget(question, await replyEnvFor(ctx, data.elderId));
     if (!target.ok) return { status: "none", reason: target.reason };
     const { platform } = target;
     const base = {
@@ -310,11 +310,11 @@ export const postReply = internalAction({
         claim: (ok) => ctx.runMutation(internal.threadReplies.claimReply, { replyId, approve: ok }),
         post: async (reply) => {
           if (reply.platform === "bluesky") {
-            const login = await blueskyLoginForElder(elderId);
+            const login = await blueskyLoginForElder(ctx, elderId);
             return postBlueskyReply(timedFetch, sharedSessionCache(), login, { threadRef: reply.threadRef, text: reply.text, lang: reply.language });
           }
           if (reply.platform === "reddit") {
-            return postRedditReply(timedFetch, await redditLoginForElder(elderId), { threadUrl: reply.threadUrl, text: reply.text });
+            return postRedditReply(timedFetch, await redditLoginForElder(ctx, elderId), { threadUrl: reply.threadUrl, text: reply.text });
           }
           return { status: "failed", error: `No posting integration for ${reply.platform}.` } satisfies PostOutcome;
         },

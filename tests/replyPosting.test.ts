@@ -272,12 +272,12 @@ test("draftCutoff: default 7 days, clamped to 1-60", () => {
 
 test("logins: env for now, null when missing; Reddit only when REDDIT_POSTING is on", async () => {
   const env = { BLUESKY_HANDLE: "walter.bsky.social", BLUESKY_APP_PASSWORD: "p", REDDIT_CLIENT_ID: "a", REDDIT_CLIENT_SECRET: "b", REDDIT_USERNAME: "w", REDDIT_PASSWORD: "c" };
-  assert.deepEqual(await blueskyLoginForElder("e1", env), { service: "https://bsky.social", identifier: "walter.bsky.social", password: "p" });
-  assert.equal(await blueskyLoginForElder("e1", { BLUESKY_HANDLE: "x" }), null);
-  assert.equal(await redditLoginForElder("e1", env), null, "off by default");
-  const on = await redditLoginForElder("e1", { ...env, REDDIT_POSTING: "on" });
+  assert.deepEqual(await blueskyLoginForElder(null, "e1", env), { service: "https://bsky.social", identifier: "walter.bsky.social", password: "p" });
+  assert.equal(await blueskyLoginForElder(null, "e1", { BLUESKY_HANDLE: "x" }), null);
+  assert.equal(await redditLoginForElder(null, "e1", env), null, "off by default");
+  const on = await redditLoginForElder(null, "e1", { ...env, REDDIT_POSTING: "on" });
   assert.equal(on?.userAgent, "web:frontporch:v1 (by /u/w)");
-  assert.equal(await redditLoginForElder("e1", { ...env, REDDIT_POSTING: "on", REDDIT_PASSWORD: undefined }), null);
+  assert.equal(await redditLoginForElder(null, "e1", { ...env, REDDIT_POSTING: "on", REDDIT_PASSWORD: undefined }), null);
 });
 
 test("review page: maybe_posted says to check the thread first, with the approve command", () => {
