@@ -7,6 +7,8 @@
 //     2. the fact-check, once (postGuard.checkPost; lib/postFlow.shouldRunGuard)
 //          fail + POST_GUARD_MODE=enforce -> needs_review (heldFor "guard"), posted nowhere
 //          cleared -> guardPassedAt
+//          FAST_POST=on: it starts while the logins are read, with an 8 s timeout; if that
+//          times out, the normal check runs (slower, never skipped)
 //     3. each platform in order, each with its own row: claim -> post -> finish -> re-read the
 //        post; if it was taken down meanwhile (removedAt), schedule undo:removePost and stop
 //          bluesky   his login (lib/logins.ts): the post as a 3-5 post thread
@@ -23,6 +25,8 @@
 //        an unclear failure (timeout after the request went out, 5xx, or a Threads / X /
 //        Reddit / LinkedIn run that stopped mid-post) -> maybe_posted: never retried on its own; a person checks
 //        his profile, then retryPublication approve:true
+//        posts.timings: checkedAt (fact-check answered), postedAt (first platform posted);
+//        one log line per run with the seconds per stage (lib/fastPost.timingLine, no text)
 //     4. posts.status: published (any platform posted; linkedinUrl only from LinkedIn) |
 //        partly_posted (only part of a thread is out, any platform) | failed (nothing went out) |
 //        needs_review (held)
@@ -45,7 +49,7 @@
 // Disclosure + fact-check language: posts.language, decided once when the post is saved
 // (postLanguage: the language his calls run in). Older rows: postLanguage(elder).
 // Never log tokens, passwords or post text: ids and statuses only.
-// Env: AUTO_POST, POST_GUARD_MODE, LINKEDIN_POSTING, X_POSTING, X_THREAD (+ the login variables
+// Env: AUTO_POST, POST_GUARD_MODE, FAST_POST, LINKEDIN_POSTING, X_POSTING, X_THREAD (+ the login variables
 // in lib/logins.ts, lib/threadsLogin.ts, lib/xLogin.ts).
 // Owner: Integrations.
 
@@ -56,6 +60,8 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalAction, internalMutation, internalQuery, type ActionCtx } from "./_generated/server";
 import { sharedSessionCache, type FetchFn } from "./lib/blueskyClient";
 import { splitBlueskyThread } from "./lib/blueskyThread";
+import { fastPostOn, timingLine, type PostTimings } from "./lib/fastPost";
+import { FAST_GUARD_TIMEOUT_MS } from "./lib/postQuality";
 import { blueskyLoginForElder, blueskyLoginState, blueskyProblemReason, redditLoginForElder, reportBlueskyLoginError } from "./lib/logins";
 import { callCharacter } from "./lib/onboarding";
 import {
@@ -67,6 +73,7 @@ import {
   linkedinPostingOn,
   overallPostStatus,
   publishOne,
+  quickThenFullGuard,
   runPublish,
   shouldRecover,
   shouldRunGuard,
@@ -141,6 +148,11 @@ export const getForPublish = internalQuery({
   },
 });
 
+export const getTimings = internalQuery({
+  args: { postId: v.id("posts") },
+  handler: async (ctx, { postId }): Promise<PostTimings | null> => (await ctx.db.get(postId))?.timings ?? null,
+});
+
 export const isRemoved = internalQuery({
   args: { postId: v.id("posts") },
   handler: async (ctx, { postId }): Promise<boolean> => (await ctx.db.get(postId))?.removedAt !== undefined,
@@ -181,10 +193,12 @@ export const saveGuard = internalMutation({
   args: { postId: v.id("posts"), hold: v.boolean(), issues: v.array(v.string()), summary: v.string() },
   handler: async (ctx, { postId, hold, issues, summary }) => {
     // Taken down meanwhile: keep its "removed" status (undo owns it).
-    const removed = (await ctx.db.get(postId))?.removedAt !== undefined;
+    const post = await ctx.db.get(postId);
+    const removed = post?.removedAt !== undefined;
     await ctx.db.patch(postId, {
       guardIssues: issues,
       guardSummary: summary,
+      timings: { ...(post?.timings ?? {}), checkedAt: Date.now() },
       ...(hold
         ? removed
           ? { guardPassedAt: undefined }
@@ -258,7 +272,13 @@ export const finishPublication = internalMutation({
       ...("records" in outcome && outcome.records?.length ? { records: outcome.records } : {}),
       ...("externalId" in outcome && outcome.externalId ? { externalId: outcome.externalId } : {}),
     };
-    if (outcome.status === "posted") await ctx.db.patch(publicationId, { ...base, postedAt: Date.now(), error: undefined });
+    if (outcome.status === "posted") {
+      const now = Date.now();
+      await ctx.db.patch(publicationId, { ...base, postedAt: now, error: undefined });
+      // posts.timings.postedAt: the first platform that finished (Bluesky, in order).
+      const post = await ctx.db.get(row.postId);
+      if (post && post.timings?.postedAt === undefined) await ctx.db.patch(row.postId, { timings: { ...(post.timings ?? {}), postedAt: now } });
+    }
     else if (outcome.status === "pending") await ctx.db.patch(publicationId, { ...base, error: undefined });
     else await ctx.db.patch(publicationId, { ...base, error: outcome.error.slice(0, 500) });
   },
@@ -408,6 +428,7 @@ async function postTo(
 /** The DB + HTTP side of lib/postFlow.runPublish / publishOne for one post. */
 function depsFor(ctx: ActionCtx, postId: Id<"posts">, state: { data: PublishData | null }): PublishDeps {
   const previous = new Map<string, string | undefined>();
+  const fast = fastPostOn(process.env);
   let reasons: Partial<Record<Platform, string>> = {}; // why a platform is off (platformsFor)
   return {
     load: async () => {
@@ -421,15 +442,21 @@ function depsFor(ctx: ActionCtx, postId: Id<"posts">, state: { data: PublishData
       return found.on;
     },
     claimPost: (approve) => ctx.runMutation(internal.publish.claimPost, { postId, approve }),
+    guardEarly: fast,
     guard: async (): Promise<GuardResult> => {
       const data = state.data!;
       const split = splitBlueskyThread(data.post.text, data.lang);
+      const args = {
+        postText: split.ok ? split.body : data.post.text, // our disclosure line isn't a claim from the call
+        turns: data.turns,
+        ...(data.context.trim() ? { context: data.context } : {}),
+      };
       try {
-        return await ctx.runAction(internal.postGuard.checkPost, {
-          postText: split.ok ? split.body : data.post.text, // our disclosure line isn't a claim from the call
-          turns: data.turns,
-          ...(data.context.trim() ? { context: data.context } : {}),
-        });
+        const full = () => ctx.runAction(internal.postGuard.checkPost, args);
+        if (!fast) return await full();
+        const out = await quickThenFullGuard(() => ctx.runAction(internal.postGuard.checkPost, { ...args, timeoutMs: FAST_GUARD_TIMEOUT_MS }), full);
+        if (out.slow) console.warn(`publish: post ${postId} fast fact-check didn't answer in time; ran the normal check`);
+        return out;
       } catch (err) {
         // Fail closed: if the check itself crashed, hold the post. Fixed text only.
         const what = err instanceof Error && /^[\w .:()-]{1,120}$/.test(err.message) ? err.message : "error";
@@ -466,6 +493,12 @@ function depsFor(ctx: ActionCtx, postId: Id<"posts">, state: { data: PublishData
 async function publish(ctx: ActionCtx, postId: Id<"posts">, approve: boolean): Promise<PublishResult> {
   const result = await runPublish(depsFor(ctx, postId, { data: null }), approve);
   console.log(`publish: post ${postId} ${result.status}`, JSON.stringify(Object.entries(result.platforms ?? {}).map(([p, s]) => `${p}:${s.split(":")[0]}`)));
+  try {
+    const timings = await ctx.runQuery(internal.publish.getTimings, { postId });
+    if (timings) console.log(`publish: post ${postId} timings: ${timingLine(timings)}`);
+  } catch {
+    // only a log line
+  }
   return result;
 }
 

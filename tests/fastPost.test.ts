@@ -17,6 +17,7 @@ import {
   type DraftResult,
   type WrittenPost,
 } from "../convex/lib/postQuality.ts";
+import { overallPostStatus, quickThenFullGuard, runPublish, type GuardResult, type Platform, type PublishDeps } from "../convex/lib/postFlow.ts";
 import { renderPostsPage, type PagePost } from "../convex/lib/postsPage.ts";
 
 const words = (n: number, w: string) => Array.from({ length: n }, () => w).join(" ");
@@ -227,4 +228,64 @@ test("/posts shows 'posted N s after hang-up' and the fast-mode marker", () => {
   assert.match(html, /detect 2s, write 9s, check 5s, post 4\.5s/);
   assert.match(html, /Fast mode: one draft, no judge/);
   assert.doesNotMatch(html, /0\/100/);
+});
+
+// ---------- publishing in fast mode ----------
+
+function publishDeps(o: { guard: GuardResult; guardEarly?: boolean }) {
+  const log: string[] = [];
+  let status = "pending";
+  const rows = new Map<string, { platform: Platform; status: string }>();
+  const deps: PublishDeps = {
+    load: async () => ({ status }),
+    platforms: async () => {
+      log.push("platforms");
+      return { bluesky: true, threads: false, x: false, reddit: false, linkedin: false };
+    },
+    claimPost: async () => ((status = "posting"), { ok: true }),
+    guard: async () => (log.push("guard"), o.guard),
+    saveGuard: async (_g, hold) => void log.push(`saveGuard:${hold}`),
+    ensureRow: async (platform, enabled) => {
+      const id = `row-${platform}`;
+      if (!rows.has(id)) rows.set(id, { platform, status: enabled ? "pending" : "skipped" });
+      return { id };
+    },
+    claimRow: async (id) => ((rows.get(id)!.status = "posting"), { ok: true }),
+    post: async (platform) => (log.push(`post:${platform}`), { status: "posted", url: "https://bsky.example/p" }),
+    finishRow: async (id, outcome) => void (rows.get(id)!.status = outcome.status),
+    isRemoved: async () => false,
+    scheduleUndo: async () => {},
+    settle: async () => overallPostStatus([...rows.values()]),
+    ...(o.guardEarly ? { guardEarly: true } : {}),
+  };
+  return { deps, log };
+}
+
+const PASS: GuardResult = { pass: true, issues: [], summary: "ok", mode: "enforce" };
+const FAIL: GuardResult = { pass: false, issues: ["He never said 1971"], summary: "no", mode: "enforce" };
+
+test("runPublish with guardEarly: the fact-check starts before the logins are read, and still holds", async () => {
+  const fast = publishDeps({ guard: PASS, guardEarly: true });
+  assert.equal((await runPublish(fast.deps, false)).status, "published");
+  assert.deepEqual(fast.log, ["guard", "platforms", "saveGuard:false", "post:bluesky"]);
+  const held = publishDeps({ guard: FAIL, guardEarly: true });
+  assert.equal((await runPublish(held.deps, false)).status, "needs_review");
+  assert.ok(!held.log.includes("post:bluesky"));
+  const normal = publishDeps({ guard: PASS });
+  await runPublish(normal.deps, false);
+  assert.deepEqual(normal.log, ["platforms", "guard", "saveGuard:false", "post:bluesky"]);
+});
+
+test("quickThenFullGuard: a quick timeout runs the normal check; a quick fail stands", async () => {
+  let fulls = 0;
+  const full = async () => (fulls++, PASS);
+  const crashed: GuardResult = { pass: false, issues: ["Fact-check failed to run: OpenAI did not answer (timeout or network)"], summary: "Fact-check error.", mode: "enforce", crashed: true };
+  assert.deepEqual(await quickThenFullGuard(async () => PASS, full), PASS);
+  assert.deepEqual(await quickThenFullGuard(async () => FAIL, full), FAIL);
+  assert.equal(fulls, 0);
+  assert.deepEqual(await quickThenFullGuard(async () => crashed, full), { ...PASS, slow: true });
+  assert.equal(fulls, 1);
+  // the normal check failing to run too: still a fail (held), never posted unchecked
+  const out = await quickThenFullGuard(async () => crashed, async () => crashed);
+  assert.equal(out.pass, false);
 });

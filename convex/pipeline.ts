@@ -8,17 +8,21 @@
 //        elders.profile; stage -> "active" once the profile is usable, else he gets
 //        another onboarding call. No post from onboarding (team default 3). Then a
 //        question-bank refresh is scheduled (best effort) so the first story call has one.
-//        story (slices 2-3), each step isolated (lib/planner.runSteps):
+//        story (slices 2-3), each step isolated (lib/fastPost.runStepGroups): memories and
+//        post run at the same time (the post reads the transcript, his profile and saved
+//        reader feedback, never this call's new memories); then reply and plan.
 //          memories  llm.extractKnowledge -> memories.addMany (+ resolve the open threads he
 //                    finished; only thread ids we sent are passed back)
-//          post      llm.writePost, given the time left of the 10-min action limit
+//          post      llm.writePost (FAST_POST=on: one draft, no judge, falls back to the full
+//                    loop), given the time left of the 10-min action limit
 //                    (lib/postQuality.postBudgetMs; may decline: no post; opens with the question
 //                    when an audience / reader question started the call: getAskedQuestion) -> insertPost: one
 //                    posts row per call (posts.by_call) with its language; below the quality
 //                    bar (heldFor "quality") or too long for a 5-post Bluesky thread ("thread_fit")
 //                    -> needs_review, not posted; else publish.publishPost (Bluesky thread,
-//                    Reddit when on, LinkedIn when on) is scheduled in the same mutation, only
-//                    for a new row and only when AUTO_POST is on (else saved, not posted)
+//                    Reddit when on, LinkedIn when on) is scheduled at once in the same mutation,
+//                    only for a new row and only when AUTO_POST is on (else saved, not posted).
+//                    posts.timings starts here (hang-up, detected, written)
 //          reply     threadReplies.draftForCall (scheduled; only when the question came from
 //                    a Bluesky thread, or Reddit once REDDIT_POSTING is on)
 //          plan      conversation.refreshQuestionBank (scheduled)
@@ -47,7 +51,8 @@ import { markBankRowUsed } from "./conversation";
 import { postingMayBeLive } from "./lib/callLoop";
 import { inboundPlanToMark } from "./lib/inbound";
 import { canClaimProcessing, finishPatch, isProfileUsable, mergeProfile, type Profile } from "./lib/onboarding";
-import { runSteps, type StepReport } from "./lib/planner";
+import { fastPostOn, initialTimings, runStepGroups } from "./lib/fastPost";
+import type { Step, StepReport } from "./lib/planner";
 import { threadFitProblem } from "./lib/blueskyThread";
 import { parseAutoPost } from "./lib/postFlow";
 import { MIN_POST_BUDGET_MS, askedQuestionForCall, holdDecision, postBudgetMs, type AskedQuestion } from "./lib/postQuality";
@@ -145,7 +150,8 @@ export const insertPost = internalMutation({
     const hold = holdDecision(args.quality, threadFitProblem(args.text, language));
     // He asked for a take-down on this call (calls.takeDown): saved already held, never scheduled.
     // holdOwnPost stays as the backstop.
-    const takeDown = (await ctx.db.get(args.callId))?.takeDown;
+    const call = await ctx.db.get(args.callId);
+    const takeDown = call?.takeDown;
     const postId = await ctx.db.insert("posts", {
       elderId: args.elderId,
       callId: args.callId,
@@ -153,6 +159,7 @@ export const insertPost = internalMutation({
       language,
       status: hold ? "needs_review" : "pending",
       ...(args.quality ? { quality: args.quality } : {}),
+      timings: initialTimings(call, Date.now()),
       ...(hold ? { heldFor: hold.heldFor, guardSummary: hold.summary } : {}),
       ...(takeDown ? postRemovalPatch({}, holdReason(takeDown.how), Date.now()) : {}),
     });
@@ -235,105 +242,111 @@ async function runStoryCall(
   startedAt: number, // when processCall started: the post step stays inside the 10-min action limit
 ): Promise<StepReport[]> {
   const profile = elder.profile;
-  return runSteps([
-    {
-      step: "memories",
-      run: async () => {
-        let open: MemoryDoc[] = [];
-        try {
-          open = await ctx.runQuery(internal.memories.listForElder, {
-            elderId: elder._id,
-            kinds: ["open_thread"],
-            status: "active",
-            limit: 20,
-          });
-        } catch {
-          // memories.listForElder unavailable: extract without open threads
-        }
-        const knowledge = await ctx.runAction(internal.llm.extractKnowledge, {
-          turns,
-          ...(profile ? { profile } : {}),
-          openThreads: open.map((m) => ({ id: m._id, text: m.text })),
-        });
-        // Only ids we actually sent: a garbled id from the model would fail
-        // addMany's v.id("memories") validator and lose the whole batch.
-        const openIds = new Map(open.map((m) => [String(m._id), m._id]));
-        const resolveThreadIds = knowledge.resolvedThreadIds
-          .map((id) => openIds.get(id))
-          .filter((id): id is Id<"memories"> => id !== undefined);
-        if (knowledge.items.length === 0 && resolveThreadIds.length === 0) return "nothing new";
-        const saved = await ctx.runAction(internal.memories.addMany, {
+  const fast = fastPostOn(process.env);
+  const memories: Step = {
+    step: "memories",
+    run: async () => {
+      let open: MemoryDoc[] = [];
+      try {
+        open = await ctx.runQuery(internal.memories.listForElder, {
           elderId: elder._id,
-          callId,
-          items: knowledge.items,
-          ...(resolveThreadIds.length ? { resolveThreadIds } : {}),
+          kinds: ["open_thread"],
+          status: "active",
+          limit: 20,
         });
-        return `${saved.inserted} new, ${saved.merged} merged, ${saved.resolved} threads resolved`;
-      },
+      } catch {
+        // memories.listForElder unavailable: extract without open threads
+      }
+      const knowledge = await ctx.runAction(internal.llm.extractKnowledge, {
+        turns,
+        ...(profile ? { profile } : {}),
+        openThreads: open.map((m) => ({ id: m._id, text: m.text })),
+      });
+      // Only ids we actually sent: a garbled id from the model would fail
+      // addMany's v.id("memories") validator and lose the whole batch.
+      const openIds = new Map(open.map((m) => [String(m._id), m._id]));
+      const resolveThreadIds = knowledge.resolvedThreadIds
+        .map((id) => openIds.get(id))
+        .filter((id): id is Id<"memories"> => id !== undefined);
+      if (knowledge.items.length === 0 && resolveThreadIds.length === 0) return "nothing new";
+      const saved = await ctx.runAction(internal.memories.addMany, {
+        elderId: elder._id,
+        callId,
+        items: knowledge.items,
+        ...(resolveThreadIds.length ? { resolveThreadIds } : {}),
+      });
+      return `${saved.inserted} new, ${saved.merged} merged, ${saved.resolved} threads resolved`;
     },
-    {
-      step: "post",
-      run: async () => {
-        // A retry reuses the call's post instead of writing another.
-        const already = await ctx.runQuery(internal.pipeline.findPostForCall, { callId });
-        if (already) return `post ${already.postId} already exists (${already.status})`;
-        const saved = await ctx.runQuery(internal.conversation.getSavedFeedback, { elderId: elder._id });
-        const feedback = saved?.resonated || saved?.feedbackLine || "";
-        // What's left of processCall's 10 minutes (lib/postQuality.ts, "Time"). Too little:
-        // fail the step (process_failed) rather than be cut off mid-write; a retry is safe.
-        const budgetMs = postBudgetMs(startedAt, Date.now());
-        if (budgetMs < MIN_POST_BUDGET_MS) throw new Error("not enough time left in this run for the post step");
-        // The language it goes out in (the same one insertPost saves), for the writer's fit check.
-        const language = await ctx.runQuery(internal.publish.languageForElder, { elderId: elder._id });
-        // A question a real person asked (audience / reader): the post opens with it. Best effort.
-        let askedQuestion: AskedQuestion | null = null;
-        try {
-          askedQuestion = await ctx.runQuery(internal.pipeline.getAskedQuestion, { callId });
-        } catch {
-          // usual hooks
-        }
-        const post = await ctx.runAction(internal.llm.writePost, {
-          turns,
-          ...(profile ? { profile } : {}),
-          ...(feedback ? { feedback } : {}),
-          budgetMs,
-          language,
-          ...(askedQuestion ? { askedQuestion } : {}),
-        });
-        if (post.skip) return `no post: ${post.reason}`;
-        // insertPost holds it (below the quality bar, or too long for a Bluesky thread: shown on
-        // /posts, never auto-posted) or schedules publish.publishPost, in one mutation.
-        const inserted = await ctx.runMutation(internal.pipeline.insertPost, {
-          elderId: elder._id,
-          callId,
-          text: post.text,
-          quality: post.quality,
-        });
-        const { postId } = inserted;
-        if (!inserted.created) return `post ${postId} already exists`;
-        if (inserted.held === "thread_fit") return `post ${postId} held: too long for a Bluesky thread; shorten it, then publish:approvePost`;
-        if (inserted.held) return `post ${postId} held for review (quality ${post.quality.score}/100); post it with publish:approvePost`;
-        if (!inserted.scheduled) {
-          return `post ${postId} saved, not posted (AUTO_POST=off); post it with: npx convex run publish:publishPost '{"postId":"${postId}"}'`;
-        }
-        return `post ${postId} scheduled`;
-      },
+  };
+  const postStep: Step = {
+    step: "post",
+    run: async () => {
+      // A retry reuses the call's post instead of writing another.
+      const already = await ctx.runQuery(internal.pipeline.findPostForCall, { callId });
+      if (already) return `post ${already.postId} already exists (${already.status})`;
+      // What's left of processCall's 10 minutes (lib/postQuality.ts, "Time"). Too little:
+      // fail the step (process_failed) rather than be cut off mid-write; a retry is safe.
+      const budgetMs = postBudgetMs(startedAt, Date.now());
+      if (budgetMs < MIN_POST_BUDGET_MS) throw new Error("not enough time left in this run for the post step");
+      // Read together: saved reader feedback; the language it goes out in (the same one
+      // insertPost saves), for the writer's fit check; a question a real person asked
+      // (audience / reader, best effort), which the post opens with.
+      const [saved, language, askedQuestion] = await Promise.all([
+        ctx.runQuery(internal.conversation.getSavedFeedback, { elderId: elder._id }),
+        ctx.runQuery(internal.publish.languageForElder, { elderId: elder._id }),
+        ctx.runQuery(internal.pipeline.getAskedQuestion, { callId }).catch((): AskedQuestion | null => null),
+      ]);
+      const feedback = saved?.resonated || saved?.feedbackLine || "";
+      const post = await ctx.runAction(internal.llm.writePost, {
+        turns,
+        ...(profile ? { profile } : {}),
+        ...(feedback ? { feedback } : {}),
+        budgetMs,
+        language,
+        ...(askedQuestion ? { askedQuestion } : {}),
+        ...(fast ? { fast: true } : {}),
+      });
+      if (post.fallback) console.log(`pipeline.processCall: call ${callId} fast post fell back to the full loop (${post.fallback})`);
+      if (post.skip) return `no post: ${post.reason}`;
+      // insertPost holds it (below the quality bar, or too long for a Bluesky thread: shown on
+      // /posts, never auto-posted) or schedules publish.publishPost, in one mutation.
+      const inserted = await ctx.runMutation(internal.pipeline.insertPost, {
+        elderId: elder._id,
+        callId,
+        text: post.text,
+        quality: post.quality,
+      });
+      const { postId } = inserted;
+      if (!inserted.created) return `post ${postId} already exists`;
+      if (inserted.held === "thread_fit") return `post ${postId} held: too long for a Bluesky thread; shorten it, then publish:approvePost`;
+      if (inserted.held) return `post ${postId} held for review (quality ${post.quality.score}/100); post it with publish:approvePost`;
+      if (!inserted.scheduled) {
+        return `post ${postId} saved, not posted (AUTO_POST=off); post it with: npx convex run publish:publishPost '{"postId":"${postId}"}'`;
+      }
+      return `post ${postId} scheduled${post.quality.mode === "fast" ? " (fast)" : ""}`;
     },
-    {
-      // Answer the online thread this call's question came from (threadReplies.ts; no-op otherwise).
-      step: "reply",
-      run: async () => {
-        await ctx.scheduler.runAfter(0, internal.threadReplies.draftForCall, { callId });
-        return "thread reply draft scheduled";
+  };
+  return runStepGroups([
+    // Both at once: the post doesn't read this call's new memories.
+    [memories, postStep],
+    // Then (scheduled, quick):
+    [
+      {
+        // Answer the online thread this call's question came from (threadReplies.ts; no-op otherwise).
+        step: "reply",
+        run: async () => {
+          await ctx.scheduler.runAfter(0, internal.threadReplies.draftForCall, { callId });
+          return "thread reply draft scheduled";
+        },
       },
-    },
-    {
-      step: "plan",
-      run: async () => {
-        await ctx.scheduler.runAfter(0, internal.conversation.refreshQuestionBank, { elderId: elder._id });
-        return "question bank refresh scheduled";
+      {
+        step: "plan",
+        run: async () => {
+          await ctx.scheduler.runAfter(0, internal.conversation.refreshQuestionBank, { elderId: elder._id });
+          return "question bank refresh scheduled";
+        },
       },
-    },
+    ],
   ]);
 }
 

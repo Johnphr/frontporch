@@ -349,6 +349,16 @@ export default defineSchema({
     // never posts a post with removedAt set; undo removes it from every platform it reached.
     removedAt: v.optional(v.number()), // epoch ms
     removedReason: v.optional(v.string()), // short note: "he asked on the call", "family request"
+    // ---- hang-up -> posted, epoch ms (lib/fastPost.ts; shown on /posts, logged by publish.ts)
+    timings: v.optional(
+      v.object({
+        endedAt: v.optional(v.number()), // he hung up (Cartesia's end_time, else when we saw it)
+        detectedAt: v.optional(v.number()), // our poll saw it
+        writtenAt: v.optional(v.number()), // the post was saved
+        checkedAt: v.optional(v.number()), // the fact-check answered
+        postedAt: v.optional(v.number()), // the first platform finished posting
+      }),
+    ),
   })
     .index("by_elder", ["elderId"])
     .index("by_url", ["linkedinUrl"])
