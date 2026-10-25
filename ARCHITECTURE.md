@@ -220,13 +220,29 @@ convex/README.md "Thread replies".
 
 ### ⑤ He calls in (inbound)
 Our one number routes to one Cartesia agent: the bilingual inbound agent
-(`lib/prompts/inbound.ts`). Cartesia has no pre-call hook, so it greets generically and first
-calls the `lookup_caller` webhook tool (filled from `system__caller_id` +
-`system__conversation_id`) → `POST /cartesia/inbound-lookup` (`http.ts`, bearer
-`CARTESIA_TOOL_SECRET`) → `inbound.handleLookup`: elder by phone → same plan as outbound
-(onboarding or `conversation.planNextCall`), `calls` row `direction: "inbound"`, `markPlanUsed`,
-`cartesia.pollCall` → `pipeline.processCall`. Unknown number → polite goodbye, nothing revealed,
-no row. Backstop: `inbound.syncInboundCalls` every 10 min lists the agent's recent calls
+(`lib/prompts/inbound.ts`). A Cartesia agent has **one voice** for the whole call
+(`config.audio.output.voice_id`), and there is no mid-call voice change and no hand-off to
+another agent (only `transfer_to_number`, to a phone), so the call-in line **is one host for
+everyone**: `CARTESIA_INBOUND_HOST` (a character id, default `daniel`; `diana` implies Spanish)
+sets its voice, language and persona. **For the demo, set `CARTESIA_INBOUND_HOST` to the host
+the demo elder picks, then re-sync `cartesiaAgents:syncAgent '{"inbound":true}'`.** An elder
+whose host is someone else hears that host introduce itself as his host's colleague
+("it's Daniel, Oscar's colleague at Front Porch"); it never claims to be a voice it isn't.
+
+Cartesia has no pre-call hook, so the agent greets with fixed bilingual text ("one moment while
+I pull up your notes") and first calls the `lookup_caller` webhook tool (filled from
+`system__caller_id`; `system__conversation_id` when present) → `POST /cartesia/inbound-lookup`
+(`http.ts`, bearer `CARTESIA_TOOL_SECRET`) → `inbound.handleLookup`: verify it's a live call on
+our agent from that number (by id, else by listing live calls) → elder by phone (digits compared
+with country code, so `+1…`, `1…`, `(415) …`, `tel:+1…` all match the sign-up's E.164) → same
+plan as outbound (onboarding or `conversation.planNextCall`), `calls` row `direction: "inbound"`,
+`cartesia.pollCall` → `pipeline.processCall`. The answer carries `first_name`, `goal`, `context`
+(`<memories>`, `<feedback>`, `<question>`), `his_host` and `same_host`; the prompt then greets him
+by name, recalls one memory, shares the feedback and asks the question. Unknown or withheld
+number → polite goodbye, nothing revealed, no row. Every request writes **one log line**
+(`inbound-lookup: known|unknown|error <reason>`, 401/400 included, never a number) and one
+`inboundLookups` row: `npx convex run inbound:lastLookups '{"limit":5}'` shows what the last
+calls got. Backstop: `inbound.syncInboundCalls` every 10 min lists the agent's recent calls
 (`GET /agents/calls`) and records finished ones from elders that have no row.
 
 ### ⑥ Undo: taking a post back
@@ -526,7 +542,7 @@ tests/                          node --test + fixtures/
 
 | Var | Provided by |
 |---|---|
-| `CARTESIA_API_KEY`, `CARTESIA_FROM_NUMBER_ID`, `CARTESIA_VOICE_ID` (optional, Pip), `CARTESIA_VOICE_ID_ES` (Juanito), `CARTESIA_MODEL` (optional). Agent ids live in the `characterAgents` table, not env. Inbound: `CARTESIA_INBOUND_AGENT_ID` + `CARTESIA_LOOKUP_TOOL_ID` (printed by `syncAgent '{"inbound":true}'`), `CARTESIA_TOOL_SECRET` (bearer for the lookup tool), `CARTESIA_INBOUND_LANGUAGE` (optional, default `en`), `INBOUND_SITE_URL` (only if `CONVEX_SITE_URL` isn't available) | Voice |
+| `CARTESIA_API_KEY`, `CARTESIA_FROM_NUMBER_ID`, `CARTESIA_VOICE_ID` (optional, Pip), `CARTESIA_VOICE_ID_ES` (Juanito), `CARTESIA_MODEL` (optional). Agent ids live in the `characterAgents` table, not env. Inbound: `CARTESIA_INBOUND_AGENT_ID` + `CARTESIA_LOOKUP_TOOL_ID` (printed by `syncAgent '{"inbound":true}'`), `CARTESIA_TOOL_SECRET` (bearer for the lookup tool), `CARTESIA_INBOUND_HOST` (optional character id, default `daniel`: the call-in line's voice; set it to the demo elder's host and re-sync `{inbound:true}`), `CARTESIA_INBOUND_LANGUAGE` (optional, `en`|`es`; only picks the default host when `CARTESIA_INBOUND_HOST` is unset), `INBOUND_SITE_URL` (only if `CONVEX_SITE_URL` isn't available) | Voice |
 | `ACCOUNTS_ENC_KEY`: encrypts each elder's connected account secrets: the Bluesky app password and the Threads / X tokens ([Accounts](#accounts-his-own-bluesky-from-sign-up)). Base64 of 32 random bytes: `openssl rand -base64 32`. Required before anyone connects an account; changing it makes saved accounts unreadable (they must reconnect) | Data |
 | `SIGNUP_SITE_URL`: the sign-up site; the Threads and X connect callbacks send him back there (`?connected=<platform>` / `?connect_error=<code>&platform=<platform>`) | UI + Integrations |
 | `THREADS_APP_ID`, `THREADS_APP_SECRET`: the Meta app's **Threads** id and secret ([Threads](#threads-oauth-connect)); with them set, a connected Threads account gets every story (no switch). `THREADS_REDIRECT_URI` (optional; default `CONVEX_SITE_URL` + `/oauth/threads/callback`). `THREADS_KEYWORD_SEARCH` (optional, default off; needs Meta app review) | Integrations |
