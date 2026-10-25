@@ -7,7 +7,7 @@ import { ACCOUNT } from '../../copy/account'
 import { go } from '../../lib/route'
 import { clearSession, forgetDevice, loadSession } from '../../lib/session'
 import { Button, cx } from '../../ui/controls'
-import { Header } from '../../ui/Header'
+import { Header, NAV_ITEM } from '../../ui/Header'
 import HomeTab from './HomeTab'
 import PostsTab, { LoadError, Loading } from './PostsTab'
 
@@ -44,8 +44,8 @@ function Tabs({ tab, label }) {
               onClick={() => go(`/${id}`)}
               onKeyDown={(e) => onKeyDown(e, i)}
               className={cx(
-                'min-h-touch rounded-full border-2 px-4 py-3 font-bold leading-tight transition-colors hover:bg-blush sm:rounded-b-none sm:rounded-t-inset sm:border-0 sm:border-b-4 sm:px-8',
-                on ? 'border-rose bg-blush text-rose' : 'border-line text-ink sm:border-transparent',
+                'min-h-touch rounded-full border-2 px-4 py-3 font-bold leading-tight transition-colors hover:bg-wash sm:rounded-b-none sm:rounded-t-inset sm:border-0 sm:border-b-4 sm:px-8',
+                on ? 'border-rose bg-rose-wash text-rose' : 'border-line text-ink sm:border-transparent',
               )}
             >
               {ACCOUNT.tabs[id]}
@@ -63,7 +63,7 @@ function SignOut() {
     go('/')
   }
   return (
-    <button type="button" onClick={signOut} className="inline-flex min-h-touch-sm items-center text-[1.25rem] font-bold text-rose underline underline-offset-4 hover:text-rose-dark hover:decoration-2">
+    <button type="button" onClick={signOut} className={NAV_ITEM}>
       {NAV.signOut}
     </button>
   )

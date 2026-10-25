@@ -46,12 +46,12 @@ export function LanguageStep({ data, set, words, onNext, ...frame }) {
           />
         ))}
       </fieldset>
-      <div aria-live="polite" className="grid w-full gap-x-6 gap-y-4 rounded-inset border border-line bg-blush p-6 min-[544px]:grid-cols-[7rem_minmax(0,1fr)] min-[544px]:items-start">
+      <div aria-live="polite" className="grid w-full gap-x-6 gap-y-4 rounded-inset bg-wash p-6 min-[544px]:grid-cols-[7rem_minmax(0,1fr)] min-[544px]:items-start">
         <HostAvatar id={data.host} className="h-28 w-28" />
         <div className="flex min-w-0 flex-col items-start gap-4">
           <span className="tag">{words.hostTag}</span>
           <h2 className="text-[2rem]">{host.name}</h2>
-          <p className="border-l-4 border-pink pl-5 font-display italic leading-snug">{words.hostLine}</p>
+          <p className="border-l-4 border-line pl-5 font-display italic leading-snug">{words.hostLine}</p>
           {words.hostTranslation && <p className="text-sm text-muted">{words.hostTranslation}</p>}
         </div>
       </div>

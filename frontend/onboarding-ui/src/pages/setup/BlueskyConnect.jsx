@@ -125,7 +125,7 @@ export const BlueskyConnect = forwardRef(function BlueskyConnect({ words: B, lan
           {showPassword ? B.hide : B.show}
         </Button>
       </div>
-      <p className="rounded-inset bg-sage-tint px-5 py-4 text-sm">{B.safety}</p>
+      <p className="rounded-inset bg-wash px-5 py-4 text-sm">{B.safety}</p>
       <p className="text-sm text-muted">{B.use}</p>
       <ErrorText id={`${idPrefix}-error`}>{error}</ErrorText>
       <Button variant="secondary" busy={busy} busyLabel={B.connecting} disabled={disabled} onClick={connect}>

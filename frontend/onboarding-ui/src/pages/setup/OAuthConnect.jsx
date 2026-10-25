@@ -96,7 +96,7 @@ export function OAuthConnect({ words, lang = 'en', elderId, token, beforeLeave, 
   return (
     <div className="flex w-full flex-col gap-4">
       <div aria-live="polite" className="flex w-full flex-col gap-4 empty:hidden">
-        {notice?.ok && <p className="rounded-inset bg-sage-tint px-5 py-4 text-sm">{words.connected(nameOf(notice.platform))}</p>}
+        {notice?.ok && <p className="rounded-inset bg-wash px-5 py-4 text-sm">{words.connected(nameOf(notice.platform))}</p>}
         {notice && !notice.ok && <ErrorText>{words.errors[notice.code] || words.errors.failed}</ErrorText>}
         <ErrorText>{error}</ErrorText>
       </div>

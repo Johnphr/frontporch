@@ -1,17 +1,17 @@
 // Landing page (#/), the "Large & Calm" mockup (design-mockups/landing-c-calm.html).
-// Bands alternate blush / paper / sage (DESIGN.md). Every sign-up link goes to #/signin.
-import { CallArt, CheckIcon, HeroArt, NeedArt, PostArt, PromiseArt, SignUpArt } from '../art/landing'
+// Six short chapters on white, split by hairlines; only the example post sits on the wash (DESIGN.md). Every sign-up link goes to #/signin.
+import { CallArt, CheckIcon, HeroArt, PostArt, PromiseArt, SignUpArt } from '../art/landing'
 import { NAV } from '../copy'
-import { HERO, HOW, NEED, PROMISES, TRUST } from '../copy/landing'
+import { HERO, HOW, PROMISES } from '../copy/landing'
 import { Button, cx } from '../ui/controls'
-import { Footer, Header } from '../ui/Header'
-import { Art, Band, ExamplePost, Family, FinalCta, H2, P, Questions, Quotes, Readers, Split, STACK, WRAP, Why } from './LandingSections'
+import { Footer, Header, NAV_ITEM } from '../ui/Header'
+import { Art, Band, ExamplePost, Family, FinalCta, H2, P, Split, STACK, WRAP } from './LandingSections'
 
 export default function Landing() {
   return (
     <>
       <Header>
-        <a href="#/signin" className="inline-flex min-h-touch-sm items-center text-[1.25rem] font-bold">
+        <a href="#/signin" className={NAV_ITEM}>
           {NAV.signIn}
         </a>
         {/* Hidden on narrow phones: the hero button is right below. */}
@@ -21,20 +21,10 @@ export default function Landing() {
       </Header>
       <main id="main">
         <Hero />
-        <Band tone="paper" aria-label={TRUST.label}>
-          <div className={WRAP}>
-            <p className="mx-auto max-w-[48rem] text-center font-display text-statement">{TRUST.line}</p>
-          </div>
-        </Band>
         <HowItWorks />
-        <WhatYouNeed />
-        <Promises />
-        <Questions />
         <ExamplePost />
-        <Readers />
-        <Quotes />
+        <Promises />
         <Family />
-        <Why />
         <FinalCta />
       </main>
       <Footer />
@@ -44,7 +34,7 @@ export default function Landing() {
 
 function Hero() {
   return (
-    <Band tone="blush" aria-labelledby="hero-title">
+    <Band first aria-labelledby="hero-title">
       <Split cols="even" className={WRAP}>
         <div className="flex flex-col items-start gap-7">
           <h1 id="hero-title" className="max-w-[14ch] text-display">
@@ -68,7 +58,7 @@ const STEP_ART = [SignUpArt, CallArt, PostArt]
 
 function HowItWorks() {
   return (
-    <Band tone="sage" aria-labelledby="how-title">
+    <Band aria-labelledby="how-title">
       <div className={WRAP}>
         <div className={cx(STACK, 'max-w-[47.5rem]')}>
           <h2 id="how-title" className={H2}>
@@ -83,7 +73,7 @@ function HowItWorks() {
             return (
               <Split as="li" key={step.title} cols={flip ? '5-7' : '7-5'}>
                 <div className={STACK}>
-                  <span aria-hidden="true" className="inline-grid h-[3.75rem] w-[3.75rem] place-items-center rounded-full bg-pink font-display text-[1.875rem] font-semibold leading-none text-ink">
+                  <span aria-hidden="true" className="inline-grid h-[3.75rem] w-[3.75rem] place-items-center rounded-full border-2 border-ink bg-white font-display text-[1.875rem] font-semibold leading-none text-ink">
                     {i + 1}
                   </span>
                   <h3 className="text-subhead">
@@ -104,37 +94,9 @@ function HowItWorks() {
   )
 }
 
-function WhatYouNeed() {
-  return (
-    <Band tone="blush" aria-labelledby="need-title">
-      <Split cols="5-7" className={WRAP}>
-        <div className={STACK}>
-          <h2 id="need-title" className={H2}>
-            {NEED.title}
-          </h2>
-          <p className={cx(P, 'text-lg')}>{NEED.lead}</p>
-          <ul className="w-full max-w-[32rem]">
-            {NEED.items.map((item) => (
-              <li
-                key={item}
-                className="flex items-center gap-5 border-b-2 border-pink py-4 font-display text-statement before:h-4 before:w-4 before:flex-none before:rounded-full before:bg-sage before:content-['']"
-              >
-                {item}
-              </li>
-            ))}
-          </ul>
-        </div>
-        <Art first>
-          <NeedArt />
-        </Art>
-      </Split>
-    </Band>
-  )
-}
-
 function Promises() {
   return (
-    <Band tone="paper" aria-labelledby="promise-title">
+    <Band aria-labelledby="promise-title">
       <Split className={WRAP}>
         <div className={STACK}>
           <h2 id="promise-title" className={H2}>

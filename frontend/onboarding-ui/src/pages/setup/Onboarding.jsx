@@ -67,6 +67,7 @@ export default function Onboarding() {
     return { elderId, token }
   }) // { elderId, token } once Review saved it
   const [toReview, setToReview] = useState(false)
+  const [forward, setForward] = useState(true) // which way the next step slides in
   // placeCall() + phone, for Done. After a refresh on Done: the saved result, and the callId this
   // tab is still watching (lib/useCallStatus.js).
   const [result, setResult] = useState(() =>
@@ -95,25 +96,30 @@ export default function Onboarding() {
   const lang = setupLanguage(data)
 
   function next() {
+    setForward(true)
     setToReview(false)
     setStep((s) => (toReview ? REVIEW : s + 1))
   }
   function back() {
     if (toReview) return next()
     if (step === 1) return go('/')
+    setForward(false)
     setStep((s) => s - 1)
   }
   function change(n) {
+    setForward(false)
     setToReview(true)
     setStep(n)
   }
   function onSaved(res) {
+    setForward(true)
     setSignup({ elderId: res.elderId, token: res.token })
     set({ phone: res.phone })
     setStep(ACCOUNTS)
   }
   async function finish() {
     const res = await placeCall(signup.elderId, signup.token)
+    setForward(true)
     setResult({ ...res, phone: data.phone })
     setStep(DONE_STEP)
   }
@@ -128,7 +134,7 @@ export default function Onboarding() {
   return (
     <>
       <Header />
-      <main id="main" className="mx-auto w-full max-w-[40rem] px-4 pb-16 pt-6 sm:px-6">
+      <main id="main" className="mx-auto w-full max-w-[40rem] overflow-x-clip px-4 pb-16 pt-6 sm:px-6">
         {step <= TOTAL_STEPS && (
           <>
             <div className="flex min-h-touch-sm flex-wrap items-center justify-between gap-x-4 gap-y-1">
@@ -147,7 +153,7 @@ export default function Onboarding() {
             </div>
           </>
         )}
-        <section key={step} className="motion-safe:animate-rise">
+        <section key={step} className={forward ? 'motion-safe:animate-rise' : 'motion-safe:animate-rise-back'}>
           {Step && (
             <Step
               data={data}

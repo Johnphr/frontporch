@@ -57,7 +57,7 @@ export default function AccountsStep({ data, set, words, lang = 'en', host, head
         {/* One live region, mounted from the start, so "Bluesky connected" is read out when it appears. */}
         <div aria-live="polite" className="w-full empty:hidden">
           {bluesky && (
-            <p className="flex items-center gap-3 rounded-inset bg-sage-tint px-5 py-4">
+            <p className="flex items-center gap-3 rounded-inset bg-wash px-5 py-4">
               <CheckMark className="h-8 w-8 flex-none" fill="#8FAE9B" />
               {bluesky.status === 'saved' ? B.connected(bluesky.handle) : B.locked}
             </p>

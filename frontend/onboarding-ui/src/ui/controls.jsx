@@ -6,14 +6,14 @@ export const cx = (...parts) => parts.filter(Boolean).join(' ')
 
 const BUTTON = {
   primary: 'bg-rose text-white hover:bg-rose-dark active:bg-ink',
-  secondary: 'bg-white text-rose shadow-[inset_0_0_0_2px_theme(colors.rose.DEFAULT)] hover:bg-blush hover:text-rose-dark active:bg-pink-tint',
+  secondary: 'bg-white text-rose shadow-[inset_0_0_0_2px_theme(colors.rose.DEFAULT)] hover:bg-rose-wash hover:text-rose-dark',
   link: 'min-h-touch-sm !px-1 bg-transparent text-rose underline underline-offset-4 hover:text-rose-dark hover:decoration-2',
 }
 
 /** Pill button. `busy` disables it and shows `busyLabel`. Pass `href` for a link that looks like a button. */
 export function Button({ variant = 'primary', small, busy, busyLabel, disabled, className, href, children, ...rest }) {
   const classes = cx(
-    'inline-flex items-center justify-center gap-3 rounded-full font-bold no-underline transition-colors duration-200 ease-out disabled:cursor-not-allowed disabled:opacity-60',
+    'inline-flex items-center justify-center gap-3 rounded-full font-bold no-underline transition-[color,background-color,box-shadow,transform] duration-200 ease-out active:scale-[0.97] active:duration-150 disabled:cursor-not-allowed disabled:opacity-60 disabled:active:scale-100',
     small ? 'min-h-touch-sm px-6 text-sm' : 'min-h-touch px-9 text-base',
     variant !== 'link' && !small && 'max-sm:w-full',
     BUTTON[variant],
@@ -37,7 +37,7 @@ export function Button({ variant = 'primary', small, busy, busyLabel, disabled, 
 export function ErrorText({ id, children }) {
   if (!children) return null
   return (
-    <p id={id} role="alert" className="flex items-start gap-2.5 rounded-field bg-alert-tint px-4 py-3 text-sm font-bold text-alert">
+    <p id={id} role="alert" className="flex items-start gap-2.5 rounded-field bg-alert-tint motion-safe:animate-enter px-4 py-3 text-sm font-bold text-alert">
       <span aria-hidden="true" className="mt-0.5 grid h-6 w-6 flex-none place-items-center rounded-full bg-alert text-[1rem] text-white">
         !
       </span>
@@ -64,7 +64,7 @@ export function TextField({ id, label, hint, error, className, ...input }) {
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy}
         className={cx(
-          'min-h-touch w-full rounded-field border-2 bg-paper px-5 text-lg text-ink transition-colors placeholder:text-field hover:bg-white focus:border-ink focus:bg-white',
+          'min-h-touch w-full rounded-field border-2 bg-white px-5 text-lg text-ink transition-colors placeholder:text-field hover:border-muted focus:border-ink',
           error ? 'border-[3px] border-alert' : 'border-field',
         )}
         {...input}
@@ -84,7 +84,7 @@ export function SelectField({ id, label, children, className, ...select }) {
       <div className="relative">
         <select
           id={id}
-          className="min-h-touch w-full cursor-pointer appearance-none rounded-field border-2 border-field bg-paper pl-5 pr-14 text-lg text-ink transition-colors hover:bg-white focus:border-ink focus:bg-white"
+          className="min-h-touch w-full cursor-pointer appearance-none rounded-field border-2 border-field bg-white pl-5 pr-14 text-lg text-ink transition-colors hover:border-muted focus:border-ink"
           {...select}
         >
           {children}
@@ -101,7 +101,7 @@ export function ChoiceCard({ name, value, checked, onChange, title, sub, art, in
     <label
       className={cx(
         'flex min-h-[4.5rem] cursor-pointer items-center gap-4 rounded-inset border-2 px-5 py-4 transition-colors hover:border-rose has-[:focus-visible]:outline has-[:focus-visible]:outline-4 has-[:focus-visible]:outline-offset-4 has-[:focus-visible]:outline-ink',
-        checked ? 'border-rose bg-blush shadow-[0_0_0_2px_theme(colors.rose.DEFAULT)]' : invalid ? 'border-alert bg-white' : 'border-field bg-white',
+        checked ? 'border-rose bg-rose-wash shadow-[0_0_0_2px_theme(colors.rose.DEFAULT)]' : invalid ? 'border-alert bg-white' : 'border-field bg-white',
       )}
     >
       {art}
@@ -114,7 +114,11 @@ export function ChoiceCard({ name, value, checked, onChange, title, sub, art, in
         aria-hidden="true"
         className={cx('grid h-8 w-8 flex-none place-items-center rounded-full border-2', checked ? 'border-rose bg-rose' : 'border-field bg-white')}
       >
-        {checked && <span className="mb-1 h-4 w-2 rotate-45 border-b-[3px] border-r-[3px] border-white" />}
+        {checked && (
+          <span className="motion-safe:animate-pop">
+            <span className="mb-1 block h-4 w-2 rotate-45 border-b-[3px] border-r-[3px] border-white" />
+          </span>
+        )}
       </span>
     </label>
   )
@@ -134,7 +138,7 @@ export function PillChoices({ name, legend, options, value, onChange }) {
               <span
                 className={cx(
                   'inline-flex min-h-[3.5rem] min-w-[4.75rem] items-center justify-center rounded-full border-2 px-5 font-bold transition-colors peer-focus-visible:outline peer-focus-visible:outline-4 peer-focus-visible:outline-offset-[3px] peer-focus-visible:outline-ink',
-                  on ? 'border-ink bg-ink text-white' : 'border-muted bg-white hover:border-rose hover:bg-blush',
+                  on ? 'border-ink bg-ink text-white' : 'border-muted bg-white hover:border-rose hover:bg-rose-wash',
                 )}
               >
                 {o.label}
@@ -147,7 +151,7 @@ export function PillChoices({ name, legend, options, value, onChange }) {
   )
 }
 
-/** White card on the paper canvas: hairline border, flat (add shadow-card to lift it). */
+/** White card: hairline border, flat (add shadow-card to lift it). */
 export function Card({ as: Tag = 'section', className, children, ...rest }) {
   return (
     <Tag className={cx('flex flex-col items-start gap-5 rounded-card border border-line bg-white p-6 sm:p-10', className)} {...rest}>
@@ -156,7 +160,7 @@ export function Card({ as: Tag = 'section', className, children, ...rest }) {
   )
 }
 
-/** A short message that slides up at the bottom and fades after 5 s. Read out by screen readers. */
+/** A short message that slides up from the bottom, then slides back down after 5 s. Read out by screen readers. */
 export function Toast({ message }) {
   const [shown, setShown] = useState(false)
   useEffect(() => {
@@ -170,8 +174,8 @@ export function Toast({ message }) {
       role="status"
       aria-live="polite"
       className={cx(
-        'fixed bottom-6 left-1/2 z-20 w-[min(36rem,calc(100%-2rem))] -translate-x-1/2 rounded-inset bg-ink px-6 py-5 text-base font-bold text-white shadow-overlay transition-opacity',
-        shown ? 'opacity-100' : 'pointer-events-none opacity-0',
+        'fixed bottom-6 left-1/2 z-20 w-[min(36rem,calc(100%-2rem))] -translate-x-1/2 rounded-inset bg-ink px-6 py-5 text-base font-bold text-white shadow-overlay transition-[opacity,transform] duration-[400ms] ease-[ease]',
+        shown ? 'translate-y-0 opacity-100' : 'pointer-events-none translate-y-[calc(100%+1.5rem)] opacity-0',
       )}
     >
       {message?.text}

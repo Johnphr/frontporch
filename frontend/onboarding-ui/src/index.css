@@ -3,11 +3,31 @@
 @tailwind utilities;
 
 @layer base {
+  /* Root size for the A / A+ / A++ toggle (lib/textSize.js). Desktop starts at 80% so pages
+     breathe; A+ there is the full phone size. */
   html {
     -webkit-text-size-adjust: 100%;
+    font-size: 100%;
+  }
+  html[data-text-size='b'] {
+    font-size: 115%;
+  }
+  html[data-text-size='c'] {
+    font-size: 130%;
+  }
+  @media (min-width: 1024px) {
+    html {
+      font-size: 80%;
+    }
+    html[data-text-size='b'] {
+      font-size: 100%;
+    }
+    html[data-text-size='c'] {
+      font-size: 120%;
+    }
   }
   body {
-    @apply bg-paper font-sans text-base text-ink antialiased;
+    @apply bg-white font-sans text-base text-ink antialiased;
   }
   /* Editorial serif at regular weight: size, not boldness, carries the hierarchy. */
   h1,
@@ -29,9 +49,9 @@
     outline: 4px solid theme('colors.ink');
     outline-offset: 4px;
   }
-  /* On the dark ink band the ring flips to paper so it stays visible. */
+  /* On the dark ink band the ring flips to white so it stays visible. */
   .on-ink :focus-visible {
-    outline-color: theme('colors.paper');
+    outline-color: theme('colors.white');
   }
   /* Headings get focus on each new screen (for screen readers); they aren't controls, so no ring. */
   [tabindex='-1']:focus {
@@ -42,7 +62,7 @@
 @layer components {
   /* Quiet uppercase label ("Example", "Demo", "Current host"). */
   .tag {
-    @apply inline-block self-start rounded-full border border-rose/50 bg-blush px-3.5 py-1 text-eyebrow font-bold uppercase text-rose;
+    @apply inline-block self-start rounded-full border border-line bg-white px-3.5 py-1 text-eyebrow font-bold uppercase text-muted;
   }
 }
 
