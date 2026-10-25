@@ -17,10 +17,12 @@ import {
   TextField,
 } from './ui'
 import { DoneStep } from './DoneStep'
+import { OAUTH_KEY, OAuthConnect } from './OAuthConnect'
 import { Scene, SvgDefs } from './Scene'
 
 // Flow (convex/signup.ts): 1 name + language -> 2 phone (register: elderId + sign-up token)
-// -> 3 character (setCharacter) -> 4 Bluesky, optional (connectBluesky: handle + app password) -> done: "Call me now" (requestCall) + call status (DoneStep.jsx).
+// -> 3 character (setCharacter) -> 4 Bluesky, optional (connectBluesky: handle + app password; Threads via
+// OAuthConnect.jsx -> startOAuthConnect, a round trip to Meta) -> done: "Call me now" (requestCall) + call status (DoneStep.jsx).
 //
 // The backend has no SMS verification yet, so the 6-digit code screen is skipped. Turn this on
 // (and replace phoneVerification in api.js with a real provider) once it exists.
@@ -51,6 +53,7 @@ const clearSaved = () => {
   try {
     sessionStorage.removeItem(KEY)
     sessionStorage.removeItem('onboarding-v2-call') // DoneStep's call
+    sessionStorage.removeItem(OAUTH_KEY) // connected OAuth platforms (OAuthConnect.jsx)
   } catch {
     /* ignore */
   }
@@ -609,6 +612,7 @@ function Onboarding() {
               </div>
               <section className="flex flex-col gap-3">
                 <h2 className="text-xl font-bold text-tinta-900">{t.sBsky.otherTitle}</h2>
+                <OAuthConnect t={t} elderId={elderId} token={token} />
                 <Button variant="secondary" disabled>
                   {t.sBsky.reddit}
                 </Button>
