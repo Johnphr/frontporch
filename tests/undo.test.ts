@@ -4,14 +4,17 @@ import assert from "node:assert/strict";
 
 import type { FetchFn } from "../convex/lib/blueskyClient.ts";
 import { blueskyDeleteOrder, deleteBlueskyThread } from "../convex/lib/blueskyDelete.ts";
-import { TAKE_DOWN_LINE, KEEP_UP_LINE } from "../convex/lib/prompts/principles.ts";
+import { TAKE_DOWN_LINE, KEEP_UP_LINE, TODAY_LINE } from "../convex/lib/prompts/principles.ts";
 import { canClaimReply, callLanguageOf } from "../convex/lib/threadReplies.ts";
 import {
+  HOLD_REASON,
   STALE_REMOVE_MS,
+  STUCK_NOTE,
   claimPatch,
   deleteRedditThing,
   detectTakeDown,
   finishPatch,
+  ownsClaim,
   pickLatestPost,
   planPostRemoval,
   postRemovalPatch,
@@ -20,6 +23,7 @@ import {
   redditCommentFullname,
   replyDeleteTarget,
   replyStep,
+  retryDelay,
   runRemoval,
   summaryLine,
   undoCommand,
@@ -323,46 +327,6 @@ test("removeLatest: an already-removed newest post is picked again (never reache
   assert.equal(pickLatestPost([cand("m", "c4", [{ status: "maybe_posted" }])], NOW)?.postId, "m");
 });
 
-// ---------- the phone: spotting a take-down request ----------
-
-const pip = (text: string) => ({ role: "pip", text });
-const him = (text: string) => ({ role: "elder", text });
-
-test("transcript: a clear request is enough", () => {
-  for (const text of [
-    "Pip, please take down that last post.",
-    "Oh, and can you take my story about the bridge down?",
-    "Could you delete the post from last week",
-    "I'd like that post taken down.",
-    "I don't want that story up anymore.",
-    "Juanito, ¿puede borrar la publicación de la semana pasada?",
-    "Por favor quite esa publicación.",
-    "Ya no quiero esa publicación.",
-  ]) {
-    assert.deepEqual(detectTakeDown([pip("How are you?"), him(text)]), { asked: true, how: "clear" }, text);
-  }
-});
-
-test("transcript: a vague request counts once Pip commits to it", () => {
-  const en = [him("That thing you put up last week, take it down."), pip("The one about the bridge job?"), him("Yes."), pip(`Of course. I'll have it taken down right after our call.`)];
-  assert.deepEqual(detectTakeDown(en), { asked: true, how: "confirmed" });
-  const es = [him("Lo que subieron, ¿me lo puede quitar?"), pip("Claro que sí. La quitamos en cuanto colguemos.")];
-  assert.equal(detectTakeDown(es).asked, true);
-  assert.equal(detectTakeDown([him("Take it down."), pip("Oh? Tell me more.")]).asked, false, "no commitment, no take-down");
-});
-
-test("transcript: stories, refusals and second thoughts don't count", () => {
-  assert.equal(detectTakeDown([him("We had to take the post down before the concrete set."), pip("Wow, what happened next?")]).asked, false);
-  assert.equal(detectTakeDown([him("In '72 we had to remove the posts from the old fence."), pip("Mm, go on.")]).asked, false);
-  assert.equal(detectTakeDown([him("My grandson said don't take that post down, he loved it.")]).asked, false);
-  assert.equal(detectTakeDown([him("No la borre, por favor, me gustó la publicación.")]).asked, false);
-  const changed = [him("Please take down that last post."), pip(TAKE_DOWN_LINE.en.replace(/"/g, "")), him("Actually, never mind, leave it up."), pip(KEEP_UP_LINE.en.replace(/"/g, ""))];
-  assert.equal(detectTakeDown(changed).asked, false);
-  const viaPip = [him("Can you take down the post?"), pip("Of course."), him("Hmm."), pip("No problem, I'll leave it up.")];
-  assert.equal(detectTakeDown(viaPip).asked, false);
-  assert.equal(detectTakeDown([]).asked, false);
-});
-
 // ---------- /posts helper ----------
 
 test("postUndoInfo: undo command while it's up; status once taken down", () => {
@@ -381,17 +345,6 @@ test("postUndoInfo: undo command while it's up; status once taken down", () => {
   assert.equal(partial.command, undoCommand("p1"));
 });
 
-test("transcript: the prompt's own lines (both languages) are what detection listens for", () => {
-  const vague = { en: "Take it down, would you?", es: "Quítela, por favor." } as const;
-  const clear = { en: "Please take down that last post.", es: "Por favor borre la última publicación." } as const;
-  for (const lang of ["en", "es"] as const) {
-    const line = (l: string) => l.replace(/"/g, "");
-    assert.equal(detectTakeDown([him(vague[lang]), pip(line(TAKE_DOWN_LINE[lang]))]).asked, true, lang);
-    assert.equal(detectTakeDown([him(clear[lang]), pip(line(TAKE_DOWN_LINE[lang])), him("..."), pip(line(KEEP_UP_LINE[lang]))]).asked, false, lang);
-  }
-  assert.equal(detectTakeDown([him("¿No me borra la publicación de la semana pasada?")]).asked, true, "polite Spanish question");
-});
-
 test("prompts: every character and the inbound agent carry the take-down rule", async () => {
   const { characterAgent } = await import("../convex/lib/prompts/agent.ts");
   const { inboundAgent } = await import("../convex/lib/prompts/inbound.ts");
@@ -404,4 +357,176 @@ test("prompts: every character and the inbound agent carry the take-down rule", 
   const inbound = inboundAgent().instructions;
   assert.ok(inbound.includes(TAKE_DOWN_LINE.en) && inbound.includes(TAKE_DOWN_LINE.es));
   assert.match(inbound, /never take anything down for an unknown caller/);
+});
+
+// ---------- review fixes: rows that went out partly, stale rows, retries, claims ----------
+
+test("a half-posted thread (failed, but with records) is deleted, not just marked removed", async () => {
+  assert.deepEqual(publicationStep({ platform: "bluesky", status: "failed", records: [{ uri: ROOT }] }, NOW), { kind: "delete", previous: "failed" });
+  assert.deepEqual(publicationStep({ platform: "reddit", status: "failed", externalId: "t3_abc123" }, NOW), { kind: "delete", previous: "failed" });
+  assert.deepEqual(publicationStep({ platform: "bluesky", status: "failed" }, NOW), { kind: "mark_removed" });
+  const s = store([{ _id: "bs", platform: "bluesky", status: "failed", records: [{ uri: ROOT, cid: "c" }, { uri: R2, cid: "c2" }] }]);
+  let uris: string[] = [];
+  const r = await s.run(NOW, async (e) => {
+    uris = e.uris ?? [];
+    return { ok: true, deleted: 2, alreadyGone: 0 };
+  });
+  assert.deepEqual(s.deleted, ["bs"]);
+  assert.deepEqual(uris, [ROOT, R2]);
+  assert.equal(s.db.rows.get("bs")!.status, "removed");
+  assert.deepEqual(r.removed, ["bluesky"]);
+  // A failed delete puts it back to "failed", records kept, so a retry deletes it.
+  const t = store([{ _id: "bs", platform: "bluesky", status: "failed", records: [{ uri: ROOT, cid: "c" }] }]);
+  await t.run(NOW, async () => ({ ok: false, error: "Bluesky delete HTTP 500" }));
+  assert.equal(t.db.rows.get("bs")!.status, "failed");
+});
+
+test("a stale posting row (> 15 min) is deleted when it has records, else listed as manual", () => {
+  const old = NOW - STALE_REMOVE_MS - 1;
+  assert.equal(publicationStep({ platform: "bluesky", status: "posting", claimedAt: NOW - 60_000, records: [{ uri: ROOT }] }, NOW).kind, "wait");
+  assert.deepEqual(publicationStep({ platform: "bluesky", status: "posting", claimedAt: old, records: [{ uri: ROOT }] }, NOW), { kind: "delete", previous: "maybe_posted" });
+  assert.deepEqual(publicationStep({ platform: "bluesky", status: "posting", claimedAt: old }, NOW), { kind: "manual", note: STUCK_NOTE });
+  assert.deepEqual(claimPatch({ kind: "manual", note: STUCK_NOTE }, NOW), { error: STUCK_NOTE });
+});
+
+test("platforms without a delete here (threads, x) are always manual, never marked removed", () => {
+  for (const platform of ["threads", "x"]) {
+    for (const status of ["pending", "failed", "skipped", "posted", "maybe_posted", "posting"]) {
+      assert.equal(publicationStep({ platform, status, claimedAt: NOW }, NOW).kind, "manual", `${platform} ${status}`);
+    }
+    assert.equal(publicationStep({ platform, status: "removed" }, NOW).kind, "already_removed");
+  }
+});
+
+test("finish applies only to this run's claim", () => {
+  assert.equal(ownsClaim({ status: "removing", claimedAt: NOW }, NOW), true);
+  assert.equal(ownsClaim({ status: "removing", claimedAt: NOW + 5 }, NOW), false, "retaken by another run");
+  assert.equal(ownsClaim({ status: "removed", claimedAt: NOW }, NOW), false);
+  assert.equal(ownsClaim({ status: "removing", claimedAt: NOW }, undefined), false);
+  const plan = planPostRemoval({}, [{ _id: "bs", platform: "bluesky", status: "posted", records: [{ uri: ROOT, cid: "c" }] }], "x", NOW);
+  assert.equal(plan.entries[0].claimedAt, NOW);
+});
+
+test("retries: failed or waiting runs again with backoff, 3 tries in all", () => {
+  const done = { removed: ["bluesky"], failed: [], manual: ["linkedin"], waiting: [] };
+  assert.equal(retryDelay(done, 1), null, "nothing left to retry (manual isn't retried)");
+  const failed = { ...done, failed: ["bluesky: HTTP 500"] };
+  assert.equal(retryDelay(failed, 1), 60_000);
+  assert.ok(retryDelay(failed, 2)! > STALE_REMOVE_MS, "the last try is past the stale window");
+  assert.equal(retryDelay(failed, 3), null);
+  assert.equal(retryDelay({ ...done, waiting: ["bluesky (in flight)"] }, 1), 60_000);
+});
+
+test("removeLatest: a removed post counts at its creation time; a post held on its own call doesn't", () => {
+  const removedByFamily = { ...cand("fam", "c2", [{ status: "removed" }], NOW - DAY), removedAt: NOW - DAY / 2, removedReason: "family request" };
+  const older = cand("older", "c1", [{ status: "posted", postedAt: NOW - 5 * DAY }]);
+  assert.equal(pickLatestPost([older, removedByFamily], NOW)?.postId, "fam");
+  const held = { ...cand("held", "c3", [{ status: "removed" }], NOW - DAY), removedAt: NOW - DAY, removedReason: HOLD_REASON };
+  assert.equal(pickLatestPost([older, held], NOW)?.postId, "older", "never went out: not 'that last post'");
+  // A half-posted thread (failed with records) went out.
+  const partial = cand("partial", "c4", [{ status: "failed", hasCopy: true }], NOW - 2 * DAY);
+  assert.equal(pickLatestPost([older, partial], NOW)?.postId, "partial");
+});
+
+test("bluesky: only post records are deleted (collection checked)", async () => {
+  const f = fakeFetch({ createSession: SESSION, deleteRecord: () => ({ status: 200 }) });
+  const out = await deleteBlueskyThread(f.fetchFn, new Map(), LOGIN, ["at://did:plc:him/app.bsky.actor.profile/self"]);
+  assert.equal(out.ok, false);
+  assert.equal(f.deletes().length, 0);
+});
+
+// ---------- the phone: spotting a take-down ----------
+
+const pip = (text: string) => ({ role: "pip", text });
+const him = (text: string) => ({ role: "elder", text });
+const said = (l: string) => l.replace(/"/g, "");
+
+test("transcript: Pip's exact take-down line right after he asks is the trigger (both languages)", () => {
+  assert.deepEqual(detectTakeDown([him("Can you take that post down?"), pip(said(TAKE_DOWN_LINE.en))]), { asked: true, how: "line" });
+  assert.deepEqual(detectTakeDown([him("¿Puede borrar la publicación?"), pip(said(TAKE_DOWN_LINE.es))]), { asked: true, how: "line" });
+  // Vague wording is fine once Pip said the line; Pip may drop "Of course." or say more.
+  const more = "I'll have your most recent post taken down right after our call! Now, where were we?";
+  assert.deepEqual(detectTakeDown([him("That thing you put up last week, take it down."), pip(more)]), { asked: true, how: "line" });
+  assert.deepEqual(detectTakeDown([him("Quítela, por favor."), pip(said(TAKE_DOWN_LINE.es))]), { asked: true, how: "line" });
+  assert.deepEqual(detectTakeDown([him("¿No me borra la publicación de la semana pasada?"), pip(said(TAKE_DOWN_LINE.es))]), { asked: true, how: "line" });
+  // One turn of his in between ("yes") is still right after.
+  assert.equal(detectTakeDown([him("Take it down, would you?"), pip("Your most recent one?"), him("Yes."), pip(said(TAKE_DOWN_LINE.en))]).asked, true);
+});
+
+test("transcript: Pip's line doesn't count without a request right before it", () => {
+  assert.equal(detectTakeDown([him("We talked about the bridge."), pip(said(TAKE_DOWN_LINE.en))]).asked, false);
+  const farBack = [him("Delete it."), pip("Mm."), him("Anyway."), pip("Go on."), him("The bridge."), pip(said(TAKE_DOWN_LINE.en))];
+  assert.equal(detectTakeDown(farBack).asked, false, "too far back");
+  // The old loose path: vague wording + any commitment from Pip is no longer enough.
+  assert.equal(detectTakeDown([him("We had to pull the old shingles off."), pip("Well, we're all done for today.")]).asked, false);
+  assert.equal(detectTakeDown([him("That thing you put up last week, take it down."), pip("Of course, I'll take care of it.")]).asked, false);
+});
+
+test("transcript: these are not requests (review examples)", () => {
+  for (const text of [
+    "Borré las historias clínicas viejas.",
+    "Bajé la historia del periódico al archivo.",
+    "Retiramos el post de la cerca.",
+    "No quiero que quite la publicación.",
+    "Take down that story, he said.",
+    "Can you delete posts?",
+    "Take down the post on the wall.",
+    "We had to take the post down before the concrete set.",
+    "In '72 we had to remove the posts from the old fence.",
+    "My grandson said don't take that post down, he loved it.",
+    "No la borre, por favor, me gustó la publicación.",
+    "We had to pull the old shingles off.",
+    "It was quite a day.",
+  ]) {
+    assert.deepEqual(detectTakeDown([pip("How are you?"), him(text), pip("Mm, go on.")]), { asked: false }, text);
+  }
+});
+
+test("transcript: a clear request in his words, without Pip's line, only holds (nothing deleted)", () => {
+  for (const text of [
+    "Pip, please take down that last post.",
+    "Oh, and can you take my story about the bridge down?",
+    "Could you delete the post from last week",
+    "I'd like that post taken down.",
+    "I don't want that story up anymore.",
+    "Please delete that story, I shouldn't have told you.",
+    "Juanito, ¿puede borrar la publicación de la semana pasada?",
+    "Por favor quite esa publicación.",
+    "Ya no quiero esa publicación.",
+  ]) {
+    assert.deepEqual(detectTakeDown([pip("How are you?"), him(text), pip("Mm.")]), { asked: true, how: "unconfirmed" }, text);
+  }
+});
+
+test("transcript: today's story only: Pip's today line holds this call's post", () => {
+  assert.deepEqual(detectTakeDown([him("Please don't post that, I shouldn't have told you."), pip(said(TODAY_LINE.en))]), { asked: true, how: "today" });
+  assert.deepEqual(detectTakeDown([him("Por favor no la publique."), pip(said(TODAY_LINE.es))]), { asked: true, how: "today" });
+});
+
+test("transcript: second thoughts cancel (his words or Pip's keep-up line)", () => {
+  const asked = [him("Please take down that last post."), pip(said(TAKE_DOWN_LINE.en))];
+  for (const text of ["Actually I changed my mind.", "No, keep it.", "Leave it up, please.", "Never mind.", "Cambié de opinión.", "Mejor déjela.", "No la quite."]) {
+    assert.equal(detectTakeDown([...asked, him(text)]).asked, false, text);
+  }
+  assert.equal(detectTakeDown([...asked, him("Hmm."), pip(said(KEEP_UP_LINE.en))]).asked, false);
+  const es = [him("Por favor borre la última publicación."), pip(said(TAKE_DOWN_LINE.es)), him("..."), pip(said(KEEP_UP_LINE.es))];
+  assert.equal(detectTakeDown(es).asked, false);
+  assert.equal(detectTakeDown([him("Can you take down the post?"), pip("Of course."), him("Hmm."), pip(said(KEEP_UP_LINE.en))]).asked, false);
+  // Asking again after a change of mind counts again.
+  const again = [...asked, him("Never mind."), pip("Okay."), him("No, really, take that post down."), pip(said(TAKE_DOWN_LINE.en))];
+  assert.deepEqual(detectTakeDown(again), { asked: true, how: "line" });
+  assert.equal(detectTakeDown([]).asked, false);
+});
+
+test("prompts: one strict take-down rule, no 'which one' question", async () => {
+  const { characterAgent } = await import("../convex/lib/prompts/agent.ts");
+  const { CHARACTERS } = await import("../convex/lib/characters.ts");
+  for (const c of CHARACTERS) {
+    const text = characterAgent(c).instructions;
+    assert.ok(text.includes(TODAY_LINE[c.language]) && text.includes(KEEP_UP_LINE[c.language]), c.id);
+    assert.match(text, /don't ask which one/);
+    assert.match(text, /most recent post/);
+    assert.match(text, /Say it once, and only right after they clearly asked/);
+    assert.doesNotMatch(text, /The one about the bridge job/);
+  }
 });

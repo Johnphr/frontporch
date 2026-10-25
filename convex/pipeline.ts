@@ -25,8 +25,11 @@
 //        error "memories step failed (not retried)". A retry is safe: memories.addMany skips a
 //        callId it already has and the post row is reused, so no duplicate memories or post.
 //
-// Undo: before anything else, if he asked to take a post down on this call (any kind, even a
-// short one), undo.removeLatest is scheduled (isolated; never fails the call).
+// Undo (isolated; never fails the call), before anything else so even a short call counts:
+// lib/undo.detectTakeDown reads the transcript. Pip said his exact take-down line -> the call is
+// flagged (calls.takeDown) and undo.removeLatest is scheduled for his latest earlier post. He
+// asked in his own words only, or asked not to post today's story -> flagged, nothing deleted.
+// Either way this call's own post is held (undo.holdPostForCall, again after the post step).
 //
 // Retry by hand: npx convex run pipeline:processCall '{"callId":"<id>"}'
 // Without a phone: pipeline:seedEndedCall with a tests/fixtures call (convex/README.md).
@@ -46,7 +49,7 @@ import { runSteps, type StepReport } from "./lib/planner";
 import { threadFitProblem } from "./lib/blueskyThread";
 import { parseAutoPost } from "./lib/postFlow";
 import { MIN_POST_BUDGET_MS, detectLanguage, holdDecision, postBudgetMs } from "./lib/postQuality";
-import { CALL_REASON, detectTakeDown } from "./lib/undo";
+import { CALL_REASON, detectTakeDown, type TakeDownHow } from "./lib/undo";
 import { postQuality } from "./schema";
 
 // Convex exposes env vars on process.env (declared so we don't need @types/node).
@@ -279,17 +282,36 @@ async function runStoryCall(
 }
 
 /**
- * Undo step, isolated: if he asked on this call to take a post down (lib/undo.detectTakeDown),
- * schedule undo.removeLatest for his newest post (not this call's own). Never throws.
+ * Undo step, isolated (lib/undo.detectTakeDown). Never throws. Returns how he asked, or null.
+ *   line         Pip said the exact take-down line: undo.removeLatest for his latest earlier post
+ *   today / unconfirmed   nothing deleted; the call is flagged for family (calls.takeDown)
+ * Every kind holds this call's own post (on a re-run it may already exist).
  */
-async function takeDownIfAsked(ctx: ActionCtx, callId: Id<"calls">, elderId: Id<"elders">, turns: Turn[]): Promise<void> {
+async function takeDownIfAsked(ctx: ActionCtx, callId: Id<"calls">, elderId: Id<"elders">, turns: Turn[]): Promise<TakeDownHow | null> {
   try {
     const found = detectTakeDown(turns);
-    if (!found.asked) return;
-    await ctx.scheduler.runAfter(0, internal.undo.removeLatest, { elderId, reason: CALL_REASON, askedOnCallId: callId });
-    console.log(`pipeline.processCall: call ${callId} take-down request (${found.how}); undo.removeLatest scheduled`);
+    if (!found.asked) return null;
+    await ctx.runMutation(internal.undo.recordCallTakeDown, { callId, how: found.how });
+    if (found.how === "line") {
+      await ctx.scheduler.runAfter(0, internal.undo.removeLatest, { elderId, reason: CALL_REASON, askedOnCallId: callId });
+    }
+    await ctx.runMutation(internal.undo.holdPostForCall, { callId });
+    console.log(`pipeline.processCall: call ${callId} take-down (${found.how})${found.how === "line" ? "; undo.removeLatest scheduled" : "; nothing deleted, flagged"}`);
+    return found.how;
   } catch {
     console.warn(`pipeline.processCall: call ${callId} take-down step failed`);
+    return null;
+  }
+}
+
+/** After the post step: hold this call's new post too (before publish.ts can send it). Never throws. */
+async function holdOwnPost(ctx: ActionCtx, callId: Id<"calls">, takeDown: TakeDownHow | null): Promise<void> {
+  if (!takeDown) return;
+  try {
+    const held = await ctx.runMutation(internal.undo.holdPostForCall, { callId });
+    if (held.held) console.log(`pipeline.processCall: call ${callId} own post ${held.postId} held (take-down on this call)`);
+  } catch {
+    console.warn(`pipeline.processCall: call ${callId} holding its own post failed`);
   }
 }
 
@@ -303,7 +325,7 @@ export const processCall = internalAction({
 
     try {
       const turns = call.transcript as Turn[];
-      await takeDownIfAsked(ctx, callId, elder._id, turns); // undo: before the short-call exit (a call can be just that)
+      const takeDown = await takeDownIfAsked(ctx, callId, elder._id, turns); // undo: before the short-call exit (a call can be just that)
       if (isNoConversation(call.endReason, turns)) {
         await ctx.runMutation(internal.pipeline.finishProcessing, { callId, status: "no_conversation" });
         console.log(`pipeline.processCall: call ${callId} no_conversation (${call.endReason ?? "few words"})`);
@@ -311,6 +333,7 @@ export const processCall = internalAction({
       }
       if (call.kind === "story") {
         const steps = await runStoryCall(ctx, callId, elder, turns, startedAt);
+        await holdOwnPost(ctx, callId, takeDown);
         // Memories are best effort (e.g. no OPENAI_API_KEY yet): only the post and the plan refresh
         // decide on a retry; a lost memories step stays visible as a fixed marker on the `done` row.
         const failed = steps.filter((s) => s.status === "failed" && s.step !== "memories");

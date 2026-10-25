@@ -5,8 +5,8 @@
 //   com.atproto.repo.deleteRecord  { repo, collection, rkey } -> {} (200)
 // A record that's already gone counts as deleted (404, or the XRPC error RecordNotFound).
 
-import { parseAtUri } from "./bluesky.ts";
-import { BlueskyHttpError, withSession, type BlueskySession, type FetchFn, type SessionCache } from "./blueskyClient.ts";
+import { POST_COLLECTION, parseAtUri } from "./bluesky.ts";
+import { BlueskyHttpError, httpError, withSession, type BlueskySession, type FetchFn, type SessionCache } from "./blueskyClient.ts";
 import type { BlueskyLogin } from "./logins.ts";
 
 export type DeleteOutcome = { ok: true; deleted: number; alreadyGone: number } | { ok: false; error: string };
@@ -31,19 +31,13 @@ export function isGoneError(error: unknown): boolean {
   return error.status === 404 || error.xrpcError === "RecordNotFound";
 }
 
-async function errorFrom(res: { status: number; json(): Promise<unknown> }): Promise<BlueskyHttpError> {
-  const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
-  const name = typeof body?.error === "string" && /^[A-Za-z]{1,40}$/.test(body.error) ? body.error : undefined;
-  return new BlueskyHttpError("delete", res.status, name);
-}
-
 /**
- * Delete one record of his. The repo comes from the uri and must be his session's did: we
- * never try to delete anyone else's post. Returns "gone" when it was already deleted.
+ * Delete one post of his. The uri must be a post (app.bsky.feed.post) in his own repo (his
+ * session's did): we never delete anything else. Returns "gone" when it was already deleted.
  */
 export async function deleteRecord(fetchFn: FetchFn, s: BlueskySession, uri: string): Promise<"deleted" | "gone"> {
   const at = parseAtUri(uri);
-  if (!at) throw new Error("Not an at:// post uri.");
+  if (!at || at.collection !== POST_COLLECTION) throw new Error("Not an at:// post uri.");
   if (at.repo !== s.did) throw new Error("That post isn't on his Bluesky account.");
   const res = await fetchFn(`${s.service}/xrpc/com.atproto.repo.deleteRecord`, {
     method: "POST",
@@ -51,7 +45,7 @@ export async function deleteRecord(fetchFn: FetchFn, s: BlueskySession, uri: str
     body: JSON.stringify({ repo: at.repo, collection: at.collection, rkey: at.rkey }),
   });
   if (res.ok) return "deleted";
-  const error = await errorFrom(res);
+  const error = await httpError("delete", res);
   if (isGoneError(error)) return "gone";
   throw error;
 }

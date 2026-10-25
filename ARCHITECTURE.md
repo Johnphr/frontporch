@@ -196,35 +196,54 @@ no row. Backstop: `inbound.syncInboundCalls` every 10 min lists the agent's rece
 ### ⑥ Undo: taking a post back
 Posting is automatic, so undo is the safety valve. `convex/undo.ts` (rules: `lib/undo.ts`,
 Bluesky deletes: `lib/blueskyDelete.ts`), internal functions only:
-- `undo.removePost({ postId, reason? })` → `{ removed, failed, manual, waiting }`. Sets
+- `undo.removePost({ postId, reason?, attempt? })` → `{ removed, failed, manual, waiting }`. Sets
   `posts.removedAt` / `removedReason` / `status: "removed"` first (publishing never sends a post
-  with `removedAt`), then each `postPublications` row: `pending` / `failed` / `skipped` →
-  `removed`; `posted` / `maybe_posted` → claimed as `removing` → deleted → `removed` (on failure:
-  back to its status with a short error, listed in `failed`); `posting` → left alone (the
-  publisher re-checks `removedAt` after posting and calls `removePost` again). Bluesky:
-  `com.atproto.repo.deleteRecord` for every post of the thread, replies first, root last (only
-  records in his own repo; already gone = success). Reddit: `POST /api/del`. LinkedIn: no delete
-  through LinkedAPI → `manual` with the link; after removing it by hand,
-  `undo.markRemovedByHand`. Safe to run twice.
+  with `removedAt`), then each `postPublications` row: anything with ids of a live copy (Bluesky
+  `records`, a Reddit fullname) is claimed as `removing` → deleted → `removed`, whatever its
+  status (a thread that stopped halfway is `failed` but partly live); on failure it goes back to
+  its status with a short error, listed in `failed`. `pending` / `failed` / `skipped` with no copy
+  → `removed`. `posting` → left alone (the publisher re-checks `removedAt` after posting and calls
+  `removePost` again); stale (> 15 min) → deleted as `maybe_posted` if it has records, else
+  `manual`. Bluesky: `com.atproto.repo.deleteRecord` for every post of the thread, replies first,
+  root last (only `app.bsky.feed.post` records in his own repo; already gone = success). Reddit:
+  `POST /api/del`. LinkedIn (no delete through LinkedAPI), Threads and X (no delete wired yet) →
+  `manual`; after removing it by hand, `undo.markRemovedByHand`. Then the thread replies from the
+  post's call (`removeReply`). Anything `failed` or `waiting` → `removePost` runs again (1 min,
+  then 16 min; 3 tries in all). Finishes only apply to the run's own claim. Safe to run twice.
 - `undo.removeReply({ replyId })`: the same for a thread reply (Bluesky `postedUri`, or his reply
   found under the question post on older rows; Reddit by the comment's fullname from its link).
   A reply that was taken down, or whose call's post was, is never posted (`claimReply`); one taken
   down mid-post is removed right after (`finishReply`).
 - `undo.removeLatest({ elderId, reason?, askedOnCallId? })`: his newest post that went out in
-  the last 14 days, plus the thread replies from that call. An already-removed newest post still
-  counts, so asking twice never reaches back to an older post.
+  the last 14 days. An already-removed post still counts (at its creation time), so asking twice
+  never reaches back to an older post. With `askedOnCallId` the pick is saved on the call
+  (`calls.takeDown.postId`) and reused, so a retried run takes down the same post.
 
-**By phone.** Every character's prompt (and the inbound agent's) says: if he asks to take a
-post down, never argue; confirm which one ("the one about…?"), then say a fixed line ("I'll
-have it taken down right after our call"). After the call, `pipeline.processCall` runs one
-isolated step before anything else (so even a 20-second "please take that down" call counts):
-`lib/undo.detectTakeDown` reads the transcript and, on a clear request (or a vague one Pip
-committed to), schedules `undo.removeLatest` with `askedOnCallId` (never that call's own post,
-never anything newer than the call). A mid-call webhook tool was not built: the outbound agents
-have no tools, and Cartesia doesn't document that `system__conversation_id` matches our
-`cartesiaCallId`, so we couldn't tie a tool request to the elder reliably.
+**By phone.** Every character's prompt (and the inbound agent's) says: if he clearly asks to
+take a post down, never argue and don't ask which one: only his most recent post can come down
+by phone, so Pip says one exact line, once ("Of course. I'll have your most recent post taken
+down right after our call." / "Claro que sí. Quitamos su publicación más reciente en cuanto
+colguemos."). An older post: Pip says his family can take it down. Today's story: a second
+line ("I won't post today's story"). Changed his mind: a keep-up line. After the call,
+`pipeline.processCall` runs one isolated step before anything else (so a 20-second call counts):
+`lib/undo.detectTakeDown` reads the transcript.
+- **Pip's take-down line, right after he asked** (in one of his last two turns) is the only
+  automatic trigger: `calls.takeDown` is set and `undo.removeLatest` runs with `askedOnCallId`
+  (never that call's own post, never anything newer than the call).
+- **Today's line**, or **a clear request in his own words without Pip's line**: nothing is
+  deleted; the call is flagged (`calls.takeDown.note`, `how: "unconfirmed"` = check with him).
+- Any of the three also holds that call's own post (`undo.holdPostForCall`: `removedAt` with a
+  `held: ...` reason, so it never posts; run again right after the post step).
+- A retraction later in the call ("leave it up", "never mind", "déjela", Pip's keep-up line)
+  cancels. Stories ("take down the post on the wall"), past tense ("borré las historias"),
+  questions ("can you delete posts?"), quotes ("…, he said") and refusals don't count.
 
-**By command (family / admin):** `npx convex run undo:removePost '{"postId":"..."}'` (or
+A mid-call webhook tool was not built: the outbound agents have no tools, and Cartesia doesn't
+document that `system__conversation_id` matches our `cartesiaCallId`, so we couldn't tie a tool
+request to the elder reliably. Changing a line in `lib/prompts/principles.ts` needs an agent
+re-sync (`cartesiaAgents:syncAgent`).
+
+**By command (family / admin):** any post, `npx convex run undo:removePost '{"postId":"..."}'` (or
 `undo:removeLatest '{"elderId":"..."}'`). `lib/undo.postUndoInfo` renders the command and a
 status line for the /posts page.
 

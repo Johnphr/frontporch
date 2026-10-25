@@ -54,11 +54,12 @@ reconnect. Website sign-ups are called (by the button or the weekly cron) only w
 - Posts use **only what the person said**; the prompt forbids adding facts or advice.
 - Pip doesn't give or ask for medical, legal or financial advice, and doesn't push on painful topics.
 - Every post says it was written up with AI from a phone call (the last post of each Bluesky thread).
-- He can take any post down by asking on the call ("Pip, please take that last post down").
-  Pip never argues; it confirms which post, and right after the call the post and the thread
-  replies from the same call come down from Bluesky and Reddit (LinkedIn posts are flagged for
-  removal by hand). Family can do the same with
-  `npx convex run undo:removePost '{"postId":"..."}'`. See ARCHITECTURE.md → Undo.
+- By phone he can take down his **most recent** post ("Pip, please take my last post down").
+  Pip never argues and says one fixed line; only that line, right after he asked, takes the
+  post down after the call (from Bluesky and Reddit, with the thread replies from the same
+  call; LinkedIn posts are flagged for removal by hand). If he only seems to ask, nothing is
+  deleted: that call's own post is held and the call is flagged for family. Family can remove
+  **any** post with `npx convex run undo:removePost '{"postId":"..."}'`. See ARCHITECTURE.md → Undo.
 - Posts go out automatically after a fact-check against the call. A post that fails the
   check, scores below the quality bar, or doesn't fit a 5-post Bluesky thread is held as
   `needs_review` instead of posted; someone reviews held posts after each call
