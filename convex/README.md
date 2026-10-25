@@ -249,18 +249,31 @@ Pure logic is unit-tested without Convex: `npm test` (Node's test runner, files 
 
 ## Publishing story posts (Integrations)
 
-`publish.publishPost({ postId })` (scheduled after each story call) fact-checks the post once,
-then posts it to each platform that's on, one `postPublications` row per platform:
-Bluesky as a 3-5 post thread (his login), Reddit on his profile (only with `REDDIT_POSTING=on`),
-LinkedIn (only with `LINKEDIN_POSTING=on`, below). Off platforms get a `skipped` row.
-Row statuses: `pending` → `posting` → `posted` | `failed` (nothing new went out) |
-`maybe_posted` (unclear: check his profile first) | `skipped`; undo adds `removing` / `removed`.
+`publish.publishPost({ postId })` (scheduled by `pipeline.insertPost` in the same mutation
+that saves the post) fact-checks the post once, then posts it to each platform that's on, one
+`postPublications` row per platform: Bluesky as a 3-5 post thread (his login), Reddit on his
+profile (only with `REDDIT_POSTING=on`), LinkedIn (only with `LINKEDIN_POSTING=on`, below).
+Off platforms get a `skipped` row.
+Row statuses: `pending` → `posting` → `posted` | `failed` (nothing went out, unless `records`
+is set: a Bluesky thread that stopped partway) | `maybe_posted` (unclear: check his profile
+first) | `skipped`; undo adds `removing` / `removed`. A Reddit or LinkedIn run that stopped
+mid-post (claim older than 15 min) becomes `maybe_posted`; Bluesky retries look in his repo
+first (only posts made after the row existed count).
+`posts.status`: `published` (a platform posted) | `partly_posted` (only part of a Bluesky
+thread is out) | `failed` (nothing went out) | `needs_review` (`heldFor`: `quality`,
+`thread_fit` or `guard`). The disclosure language is decided once, on `posts.language`.
+A Bluesky login that's refused marks his account invalid (`lib/logins.reportBlueskyLoginError`).
 
 ```bash
-npx convex run publish:approvePost '{"postId":"<posts id>"}'                       # post a held (needs_review) post
-npx convex run publish:retryPublication '{"publicationId":"<row id>"}'             # retry a failed platform
+npx convex run publish:approvePost '{"postId":"<posts id>"}'                       # post a held post (fact-checked first unless the fact-check held it)
+npx convex run publish:retryPublication '{"publicationId":"<row id>"}'             # retry a failed platform (or re-check a stuck LinkedIn one)
 npx convex run publish:retryPublication '{"publicationId":"<row id>","approve":true}'  # after checking a maybe_posted one
 ```
+
+A retry needs a post the fact-check cleared (`guardPassedAt`); one that never got checked
+(nothing was set up when it ran) is refused: run `publish:publishPost`, which checks it first.
+The old `linkedapi:createPost` / `approvePost` / `checkPostStatus` refuse posts that have
+`postPublications` rows.
 
 ## LinkedIn posting (off) + post guard (Integrations)
 
@@ -301,8 +314,9 @@ npx convex run linkedapi:previewText '{"text":"My first job...","turns":[{"role"
 npx convex run linkedapi:previewPost '{"postId":"<posts id>"}'
 ```
 
-The AI-disclosure footer follows the language his calls run in (his character's,
-`callCharacter(elder).language`): Spanish gets `SPANISH_DISCLOSURE`, everyone else the English
+The AI-disclosure footer follows the post's language (`posts.language`, set once when the post
+is saved: the language his calls run in, `callCharacter(elder).language`; older rows fall back
+to that): Spanish gets `SPANISH_DISCLOSURE`, everyone else the English
 line (`lib/linkedinPost.ts`). `previewPost` uses the post's elder; `previewText` takes an
 optional `"language":"es-MX"`.
 
@@ -319,10 +333,12 @@ fails, the post is held (fail closed). The loop is `runQualityLoop` (unit-tested
 calls).
 It passes at 75/100 with no criterion under 5. Below the bar the post is saved as
 `needs_review` with the judge's notes on `posts.quality` (shown once on `/posts`) and never
-auto-posts; after a look, post it with `npx convex run linkedapi:approvePost '{"postId":"<posts id>"}'`. Such a post
-(`heldFor: "quality"`) was never fact-checked, so approving it runs the post guard first: if the
-guard fails, it's held again as a normal fact-check hold (`heldFor: "guard"`, the guard's issues),
-and a second `approvePost` skips the guard as before. Cost: up to ~15 model calls per post.
+auto-posts; after a look, post it with `npx convex run publish:approvePost '{"postId":"<posts id>"}'`. Such a post
+(`heldFor: "quality"`, or `"thread_fit"` when it's too long for a 5-post Bluesky thread: shorten
+`posts.text` first, approve refuses it until it fits) was never fact-checked, so approving it
+runs the post guard first: if the guard fails, it's held again as a normal fact-check hold
+(`heldFor: "guard"`, the guard's issues), and a second `approvePost` skips the guard. Approving
+anything else (a `pending` post with `AUTO_POST=off`, a `failed` one) runs the guard too. Cost: up to ~15 model calls per post.
 Time: the post step gets what's left of `processCall`'s 10-minute limit minus 60 s, capped at
 240 s (`postBudgetMs`); no model call starts past that deadline. With under 120 s left the step
 fails instead of starting (`process_failed`, retry by hand).

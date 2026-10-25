@@ -23,7 +23,7 @@ export type PagePost = {
   /** Post quality (lib/postQuality.ts), when writePost scored it. */
   quality?: { score: number; passed: boolean; rounds: number; notes: string[] };
   /** Why a needs_review post is held (posts.heldFor; missing = the fact-check). */
-  heldFor?: "quality" | "guard";
+  heldFor?: "quality" | "thread_fit" | "guard";
 };
 
 export type PagePublication = { id: string; platform: string; status: string; url?: string; error?: string; posts?: number };
@@ -56,6 +56,7 @@ const STATUS_LABEL: Record<string, string> = {
   needs_review: "Held by fact-check",
   posting: "Posting",
   published: "Published",
+  partly_posted: "Partly posted",
   failed: "Failed",
   needs_attention: "Needs attention",
 };
@@ -83,16 +84,33 @@ function checkBlock(check: PageCheck | undefined): string {
   return `<div class="check ${check.pass ? "good" : "bad"}"><strong>Fact-check now: ${check.pass ? "pass" : "would be held"}</strong> (${escapeHtml(check.mode)}) ${escapeHtml(check.summary)}${issuesList(check.issues)}</div>`;
 }
 
+/** A row that didn't finish but has posts out (a Bluesky thread that stopped partway). */
+function partly(r: PagePublication): boolean {
+  return (r.status === "failed" || r.status === "maybe_posted") && (r.posts ?? 0) > 0;
+}
+
 /** The post's label, from its real state: a platform row that went out (or may have) wins over "pending". */
 export function statusLabel(p: Pick<PagePost, "status" | "heldFor" | "publications">): string {
   if (p.status === "needs_review" && p.heldFor === "quality") return "Held: below the quality bar";
+  if (p.status === "needs_review" && p.heldFor === "thread_fit") return "Held: too long for a Bluesky thread";
   const rows = p.publications ?? [];
   if (p.status === "pending" || p.status === "posting") {
     if (rows.some((r) => r.status === "posted")) return "Published";
     if (rows.some((r) => r.status === "maybe_posted")) return "Maybe posted: check";
     if (rows.some((r) => r.status === "posting" || (r.status === "pending" && r.platform === "linkedin"))) return "Posting";
   }
+  // Older rows saved a half-posted thread as "failed".
+  if (p.status === "failed" && rows.some(partly)) return STATUS_LABEL.partly_posted;
   return STATUS_LABEL[p.status] ?? p.status;
+}
+
+/** The label of one platform row. */
+export function publicationLabel(r: PagePublication): string {
+  if (partly(r)) {
+    const n = `${r.posts} post${r.posts === 1 ? "" : "s"} out`;
+    return r.status === "maybe_posted" ? `Partly posted (${n}), maybe more: check his profile` : `Partly posted (${n})`;
+  }
+  return PUBLICATION_LABEL[r.status] ?? r.status;
 }
 
 /** The command a person runs next for this post / platform row ("" when none). */
@@ -123,7 +141,8 @@ function publicationsBlock(p: PagePost): string {
   const items = rows.map((r) => {
     const href = safeHref(r.url);
     const cmd = nextCommand(p, r);
-    return `<li><strong>${escapeHtml(PLATFORM_LABEL[r.platform] ?? r.platform)}</strong>: <span class="pstatus s-${escapeHtml(r.status)}">${escapeHtml(PUBLICATION_LABEL[r.status] ?? r.status)}</span>${r.posts ? ` (${r.posts} post${r.posts === 1 ? "" : "s"})` : ""}${href ? ` <a href="${href}" target="_blank" rel="noopener noreferrer">open</a>` : ""}${r.error && r.status !== "posted" ? ` <span class="perr">${escapeHtml(r.error)}</span>` : ""}${cmd ? `<br><code>${escapeHtml(cmd)}</code>` : ""}</li>`;
+    const counted = r.posts && !partly(r) ? ` (${r.posts} post${r.posts === 1 ? "" : "s"})` : "";
+    return `<li><strong>${escapeHtml(PLATFORM_LABEL[r.platform] ?? r.platform)}</strong>: <span class="pstatus s-${escapeHtml(r.status)}">${escapeHtml(publicationLabel(r))}</span>${counted}${href ? ` <a href="${href}" target="_blank" rel="noopener noreferrer">open</a>` : ""}${r.error && r.status !== "posted" ? ` <span class="perr">${escapeHtml(r.error)}</span>` : ""}${cmd ? `<br><code>${escapeHtml(cmd)}</code>` : ""}</li>`;
   });
   return `<ul class="pubs">${items.join("")}</ul>`;
 }
@@ -224,7 +243,7 @@ article{background:var(--card);border:1px solid var(--line);border-radius:10px;p
 header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:14px}
 .who{font-weight:600}time,.id,.q{color:var(--muted)}.q{margin:0;font-size:14px}
 .badge{border:1px solid var(--line);border-radius:999px;padding:2px 8px;font-size:12px}
-.s-needs_review,.s-failed,.s-needs_attention{color:var(--bad);border-color:var(--bad)}.s-published{color:var(--good);border-color:var(--good)}
+.s-needs_review,.s-failed,.s-partly_posted,.s-needs_attention{color:var(--bad);border-color:var(--bad)}.s-published{color:var(--good);border-color:var(--good)}
 .post{white-space:pre-wrap;font-size:15.5px}
 .check{font-size:14px;border-left:3px solid var(--line);padding:4px 10px}.check.good{border-color:var(--good)}.check.bad{border-color:var(--bad)}
 .check ul{margin:4px 0 0;padding-left:18px}.err{color:var(--bad);margin:0;font-size:14px}

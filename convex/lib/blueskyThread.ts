@@ -44,7 +44,8 @@ export function utf8Length(text: string): number {
 }
 
 // One piece of text that is never split further, and the whitespace that came before it.
-type Unit = { text: string; sep: "\n\n" | "\n" | " " };
+// cont: a word of a sentence that was split between words (not the sentence's first word).
+type Unit = { text: string; sep: "\n\n" | "\n" | " "; cont?: true };
 
 function render(units: Unit[]): string {
   return units.map((u, i) => (i === 0 ? u.text : u.sep + u.text)).join("");
@@ -74,17 +75,35 @@ function sentences(paragraph: string): Unit[] {
 function wordPieces(unit: Unit, limit: number): Unit[] | null {
   const words = unit.text.split(/\s+/).filter(Boolean);
   if (words.some((w) => graphemeCount(w) > limit)) return null;
-  return words.map((text, i) => ({ text, sep: i === 0 ? unit.sep : " " }));
+  return words.map((text, i): Unit => (i === 0 ? { text, sep: unit.sep } : { text, sep: " ", cont: true }));
 }
 
 const fits = (text: string, limit: number) => graphemeCount(text) <= limit && utf8Length(text) <= MAX_POST_BYTES;
 
-/** Greedy packing: keep adding units while the post fits, else start the next one. */
-function pack(units: Unit[], limit: number, keepParagraphs: boolean): Unit[][] {
+// A post that ends mid-sentence keeps at least this many words of it on each side, when
+// the post has an earlier sentence boundary to end at instead.
+const MIN_SIDE_WORDS = 3;
+
+/**
+ * Greedy packing: keep adding units while the post fits, else start the next one.
+ * tidyWords: a post that would end mid-sentence with only a word or two on one side ends
+ * at the last sentence boundary instead (that sentence starts the next post).
+ */
+function pack(units: Unit[], limit: number, keepParagraphs: boolean, tidyWords = false): Unit[][] {
   const posts: Unit[][] = [];
   let current: Unit[] = [];
   for (let i = 0; i < units.length; i++) {
     const u = units[i];
+    if (tidyWords && u.cont && current.length && !fits(render([...current, u]), limit)) {
+      let start = current.length - 1;
+      while (start > 0 && current[start].cont) start--;
+      let rest = 0;
+      while (i + rest < units.length && units[i + rest].cont) rest++;
+      if (start > 0 && (current.length - start < MIN_SIDE_WORDS || rest < MIN_SIDE_WORDS)) {
+        posts.push(current.slice(0, start));
+        current = current.slice(start);
+      }
+    }
     if (current.length && fits(render([...current, u]), limit)) {
       // Paragraph mode: a paragraph that would spill into the next post starts there instead,
       // when it fits a post on its own.
@@ -121,8 +140,9 @@ function splitOne(posts: Unit[][], firstSplittable: number): boolean {
   let at = 1;
   let bestGap = Infinity;
   for (let k = 1; k < units.length; k++) {
-    // Prefer paragraph breaks: they count as nearer the middle.
-    const gap = Math.abs(graphemeCount(render(units.slice(0, k))) - total / 2) * (units[k].sep === "\n\n" ? 0.5 : 1);
+    // Prefer paragraph breaks (they count as nearer the middle); avoid splitting a sentence.
+    const weight = units[k].sep === "\n\n" ? 0.5 : units[k].cont ? 4 : 1;
+    const gap = Math.abs(graphemeCount(render(units.slice(0, k))) - total / 2) * weight;
     if (gap < bestGap) {
       bestGap = gap;
       at = k;
@@ -169,19 +189,27 @@ export function splitBlueskyThread(raw: string, lang: string | undefined, opts: 
   })();
   let hookEnd = 0;
   while (hookEnd < firstPara && fits(render(all.slice(0, hookEnd + 1)), limit)) hookEnd++;
-  if (hookEnd === 0 || (hookEnd < firstPara && all[hookEnd].sep === " " && wordSplit(all, hookEnd))) {
+  // Stopped inside a sentence that was split between words: end post 1 at the last whole sentence.
+  while (hookEnd > 0 && hookEnd < all.length && all[hookEnd].cont) hookEnd--;
+  if (hookEnd === 0) {
     const first = sentences(paragraphs[0])[0]?.text ?? paragraphs[0];
-    return fail(`The opening line is ${graphemeCount(first)} characters; the first post holds ${limit}.`);
+    return fail(`The opening sentence is ${graphemeCount(first)} characters; the first post holds ${limit}.`);
   }
   const hookUnits = all.slice(0, hookEnd);
   const rest = all.slice(hookEnd).map((u, i) => (i === 0 ? { ...u, sep: "\n\n" as const } : u));
   const withDisclosure: Unit[] = [...rest, { text: disclosure, sep: "\n\n" }];
 
   // Paragraphs kept whole when they fit; else sentences fill each post; last resort: words
-  // (a sentence then continues in the next post, still never cut inside a word).
+  // (a sentence then continues in the next post, still never cut inside a word). The
+  // disclosure (the last unit) is never split.
   let tail = pack(withDisclosure, limit, true);
   if (1 + tail.length > maxPosts) tail = pack(withDisclosure, limit, false);
-  if (1 + tail.length > maxPosts) tail = pack(withDisclosure.flatMap((u) => wordPieces(u, limit) ?? [u]), limit, false);
+  if (1 + tail.length > maxPosts) {
+    const last = withDisclosure.length - 1;
+    const words = withDisclosure.flatMap((u, i) => (i === last ? [u] : (wordPieces(u, limit) ?? [u])));
+    const tidy = pack(words, limit, false, true);
+    tail = 1 + tidy.length <= maxPosts ? tidy : pack(words, limit, false);
+  }
   const posts = [hookUnits, ...tail];
   if (posts.length > maxPosts) {
     return fail(`It needs ${posts.length} posts; a thread holds at most ${maxPosts}. Shorten it by about ${overflow(posts, maxPosts, limit)} characters.`);
@@ -191,12 +219,6 @@ export function splitBlueskyThread(raw: string, lang: string | undefined, opts: 
   }
   const texts = posts.map(render);
   return { ok: true, posts: texts, hook: texts[0], body, disclosure, langs: [threadLang(lang)] };
-}
-
-// True when the hook would end in the middle of a sentence cut between words.
-function wordSplit(all: Unit[], at: number): boolean {
-  const prev = all[at - 1];
-  return Boolean(prev) && !/[.!?…]["'”’»)\]]*$/.test(prev.text);
 }
 
 function overflow(posts: Unit[][], maxPosts: number, limit: number): number {
@@ -234,19 +256,36 @@ export function hashtagFacets(text: string): TagFacet[] {
 
 // ---------- finding a thread an earlier run already posted ----------
 
-export type ListedPost = { uri: string; cid: string; text: string; parentUri?: string };
+/** createdAt: ms epoch (the record's createdAt, else the time in its TID record key). */
+export type ListedPost = { uri: string; cid: string; text: string; parentUri?: string; createdAt?: number };
+
+/** Clock slack when comparing a post's time with our claim time. */
+export const RECOVER_SKEW_MS = 5_000;
 
 /**
  * Extend `known` (the thread so far, root first) with posts of his that are already there:
- * same text, and replying to the previous post (the root: not a reply). Stops at the first gap.
+ * same text, replying to the previous post (the root: not a reply), and made after `since`
+ * (when this row was first claimed), so an older post with the same text never counts; a post
+ * without a time doesn't count either. Stops at the first gap.
  */
-export function recoverThreadRecords(listed: ListedPost[], texts: string[], known: StrongRef[]): StrongRef[] {
+export function recoverThreadRecords(listed: ListedPost[], texts: string[], known: StrongRef[], since?: number): StrongRef[] {
   const out = [...known];
+  const recent = (p: ListedPost) => since === undefined || (p.createdAt !== undefined && p.createdAt >= since - RECOVER_SKEW_MS);
   for (let i = out.length; i < texts.length; i++) {
     const parent = i > 0 ? out[i - 1].uri : undefined;
-    const match = listed.find((p) => p.text === texts[i] && (parent ? p.parentUri === parent : !p.parentUri));
+    const match = listed.find((p) => p.text === texts[i] && (parent ? p.parentUri === parent : !p.parentUri) && recent(p));
     if (!match) break;
     out.push({ uri: match.uri, cid: match.cid });
   }
   return out;
+}
+
+const TID_CHARS = "234567abcdefghijklmnopqrstuvwxyz";
+
+/** The time (ms epoch) in an atproto TID record key (13 base32-sortable characters), or undefined. */
+export function tidTimestampMs(rkey: string): number | undefined {
+  if (!/^[2-7a-j][2-7a-z]{12}$/.test(rkey)) return undefined;
+  let n = 0n;
+  for (const ch of rkey) n = n * 32n + BigInt(TID_CHARS.indexOf(ch));
+  return Math.floor(Number(n >> 10n) / 1000); // 53 bits of microseconds, then a 10-bit clock id
 }

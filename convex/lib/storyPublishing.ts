@@ -22,21 +22,40 @@ const CHECK_PROFILE = "check his profile before retrying";
 /**
  * Post the thread (lib/blueskyThread.splitBlueskyThread made `texts`). `done` = posts an earlier
  * run made. `recover`: an earlier attempt may have posted more than we know (maybe_posted, a
- * crashed run), so first look in his repo for the next posts and continue after them.
+ * crashed run), so first look in his repo for the next posts and continue after them. Only
+ * posts made after `since` (when the row was first claimed) count.
+ * `onLoginError`: called with the error when Bluesky refused his login (publish.ts marks his
+ * account invalid through lib/logins.reportBlueskyLoginError). Its own errors are ignored.
  */
 export async function postBlueskyStory(
   fetchFn: FetchFn,
   cache: SessionCache,
   login: BlueskyLogin | null,
-  a: { texts: string[]; langs: string[]; done?: StrongRef[]; recover?: boolean; now?: () => number },
+  a: {
+    texts: string[];
+    langs: string[];
+    done?: StrongRef[];
+    recover?: boolean;
+    since?: number;
+    now?: () => number;
+    onLoginError?: (error: unknown) => Promise<unknown> | void;
+  },
 ): Promise<PlatformOutcome> {
   if (!login) return { status: "failed", error: "His Bluesky account isn't connected." };
+  const reportLogin = async (error: unknown) => {
+    try {
+      await a.onLoginError?.(error);
+    } catch {
+      // best effort
+    }
+  };
   let done = a.done ?? [];
   if (a.recover) {
     try {
       const listed = await withSession(fetchFn, cache, login, (s) => listOwnPosts(fetchFn, s, 50));
-      done = recoverThreadRecords(listed, a.texts, done);
+      done = recoverThreadRecords(listed, a.texts, done, a.since);
     } catch (error) {
+      await reportLogin(error);
       // Still unclear what the earlier attempt posted, so it stays maybe_posted.
       const login = error instanceof BlueskyHttpError && /^Bluesky (login|refresh) /.test(error.message) && error.status < 500;
       return {
@@ -57,6 +76,7 @@ export async function postBlueskyStory(
   });
   const url = out.records.length ? postWebUrl(out.records[0].uri, out.handle) : undefined;
   if (out.ok) return { status: "posted", records: out.records, ...(url ? { url } : {}) };
+  if (out.loginError !== undefined) await reportLogin(out.loginError);
   const status = out.sent ? writeFailureStatus(out.httpStatus) : "failed";
   const partial = out.records.length ? ` Posted ${out.records.length} of ${a.texts.length}; a retry continues the thread.` : "";
   return {

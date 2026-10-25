@@ -291,6 +291,8 @@ export const writePost = internalAction({
     feedback: v.optional(v.string()),
     /** Time this may take (pipeline: lib/postQuality.postBudgetMs). Default QUALITY_BUDGET_MS. */
     budgetMs: v.optional(v.number()),
+    /** The language it goes out in (publish.postLanguage), for the thread-fit check. */
+    language: v.optional(v.union(v.literal("en"), v.literal("es"))),
   },
   handler: async (_ctx, args): Promise<WrittenPost> => {
     const parts = [tagged("transcript", labelledTranscript(args.turns))];
@@ -322,7 +324,7 @@ export const writePost = internalAction({
         ),
       rewrite: (text, notes, timeoutMs) =>
         writeCall(REWRITE_SYSTEM, `${context}\n\n${tagged("draft", text)}\n\n${tagged("notes", notes.join("\n"))}`, timeoutMs),
-      checks: (text) => hardChecks(text, lang),
+      checks: (text) => hardChecks(text, lang, args.language),
     });
   },
 });

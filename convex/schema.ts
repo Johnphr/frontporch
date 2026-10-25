@@ -309,9 +309,10 @@ export default defineSchema({
   // ---- Integrations: posts (Data: review/replace) ----
   // ARCHITECTURE.md draft, plus optional fields used by linkedapi.ts / postGuard.ts.
   // status: pending (written, or sent to LinkedAPI when workflowId is set)
-  //       | posting (claimed by a run, about to be sent) | needs_review (post guard
-  //       failed, not posted) | published | failed | needs_attention (sent, but
-  //       status checks stopped; see error)
+  //       | posting (claimed by a run, about to be sent) | needs_review (held: see heldFor;
+  //       not posted) | published (a platform posted) | partly_posted (only part of a Bluesky
+  //       thread went out; a retry continues it) | failed (nothing went out)
+  //       | needs_attention (old LinkedIn flow: sent, but status checks stopped; see error)
   // linkedinUrl is canonical (lib/linkedinUrl.ts) so engagement rows match it.
   posts: defineTable({
     elderId: v.id("elders"),
@@ -325,15 +326,22 @@ export default defineSchema({
     guardSummary: v.optional(v.string()),
     pollAttempts: v.optional(v.number()),
     claimedAt: v.optional(v.number()), // epoch ms; stale claims (>15 min) can be retaken
-    approvedAt: v.optional(v.number()), // epoch ms; posted via approvePost (guard skipped)
+    approvedAt: v.optional(v.number()), // epoch ms; a person ran approvePost
+    // epoch ms; the fact-check cleared it (passed, or warn/off mode), or a person approved its
+    // hold. publish:retryPublication needs it (lib/postFlow.guardCleared).
+    guardPassedAt: v.optional(v.number()),
     lastPolledAt: v.optional(v.number()), // epoch ms; stale polling is restarted by createPost
     maybePosted: v.optional(v.boolean()), // LinkedAPI didn't confirm the send: check before retrying
     // ---- post quality (lib/postQuality.ts): the judge's score for the text that was saved.
     // Below the bar the post is saved as needs_review with a one-line guardSummary; the notes stay here.
     quality: v.optional(postQuality),
-    // Why a needs_review post is held. "quality": never fact-checked yet, so approvePost runs
-    // the guard first. "guard" (or missing, on older rows): approvePost skips it.
-    heldFor: v.optional(v.union(v.literal("quality"), v.literal("guard"))),
+    // Why a needs_review post is held. "quality" (below the bar) and "thread_fit" (too long for
+    // a Bluesky thread): never fact-checked yet, so approvePost runs the guard first.
+    // "guard" (or missing, on older rows): the fact-check held it; approvePost skips it.
+    heldFor: v.optional(v.union(v.literal("quality"), v.literal("thread_fit"), v.literal("guard"))),
+    // Disclosure + fact-check language, decided once when the post is saved (pipeline.insertPost:
+    // the language his calls run in). Missing on older rows: publish.postLanguage(elder).
+    language: v.optional(v.union(v.literal("en"), v.literal("es"))),
     // ---- undo (undo.ts): set the moment someone asks to take the post down. Publishing
     // never posts a post with removedAt set; undo removes it from every platform it reached.
     removedAt: v.optional(v.number()), // epoch ms
@@ -345,8 +353,11 @@ export default defineSchema({
 
   // ---- Integrations: where each post went (publish.ts writes; undo.ts and
   // blueskyEngagement.ts read). One row per post per platform.
-  // status: pending | posting (claimed) | posted | failed (nothing went out)
-  //       | maybe_posted (unclear: check before retrying) | skipped (platform off / no account)
+  // status: pending | posting (claimed) | posted
+  //       | failed (didn't finish: nothing went out, unless `records` is set: a Bluesky thread
+  //         that stopped partway, those posts are live and a retry continues it)
+  //       | maybe_posted (unclear: check before retrying; `records` = posts known to be out)
+  //       | skipped (platform off / no account)
   //       | removing (undo claimed it) | removed (taken down)
   postPublications: defineTable({
     postId: v.id("posts"),

@@ -130,7 +130,59 @@ test("split: hook too long for post 1 -> reason, nothing cut", () => {
   const hook = Array.from({ length: 70 }, () => "longword").join(" "); // one 629-char sentence
   const split = splitBlueskyThread([hook, "Story.", "End?"].join("\n\n"), "en");
   assert.equal(split.ok, false);
-  if (!split.ok) assert.match(split.reason, /opening line is \d+ characters/);
+  if (!split.ok) assert.match(split.reason, /opening sentence is 629 characters; the first post holds 300/);
+});
+
+test("split: a short hook then a long sentence in the same paragraph -> post 1 is the hook", () => {
+  const long = Array.from({ length: 70 }, (_, i) => `word${i}`).join(" ") + "."; // one ~480-char sentence
+  const split = splitBlueskyThread([`Short hook. ${long}`, "Middle of the story.", "What about you?"].join("\n\n"), "en");
+  assert.ok(split.ok, split.ok ? "" : split.reason);
+  if (!split.ok) return;
+  assert.equal(split.posts[0], "Short hook.");
+  assertThread(split.posts);
+  assert.deepEqual(words(split.posts.join(" ")), words(`Short hook. ${long} Middle of the story. What about you? ${DEFAULT_DISCLOSURE}`));
+});
+
+test("split: word packing never splits the disclosure and avoids a lone word at a post's end", () => {
+  // Sentences of 161 characters: two never share a post, so sentence packing needs 7 posts.
+  // (The old word packing put half of the disclosure in post 4 here.)
+  const sentence = (n: number) =>
+    `Sentence ${n} is about the bakery, the old brick oven, the night shift, and the foreman who came in his slippers to help us finish all of the wedding bread on time.`;
+  for (const lang of ["en", "es"] as const) {
+    const disclosure = lang === "es" ? SPANISH_DISCLOSURE : DEFAULT_DISCLOSURE;
+    const story = ["The night our oven died.", ...[1, 2, 3, 4, 5].map(sentence), "What would you do?"].join("\n\n");
+    const split = splitBlueskyThread(story, lang);
+    assert.ok(split.ok, split.ok ? "" : split.reason);
+    if (!split.ok) continue;
+    assertThread(split.posts);
+    assert.ok(split.posts.at(-1)!.endsWith(disclosure), "the disclosure is whole, at the end");
+    assert.equal(split.posts.filter((p) => p.includes(disclosure)).length, 1);
+    assert.deepEqual(words(split.posts.join(" ")), words(`${story} ${disclosure}`));
+    for (const p of split.posts.slice(0, -1)) {
+      // No post ends with one or two words of a new sentence ("... time. Sentence").
+      const tail = p.split(/(?<=[.!?])\s+/).at(-1)!;
+      assert.ok(/[.!?]$/.test(p) || words(tail).length >= 3, `dangling: ${JSON.stringify(p.slice(-40))}`);
+    }
+  }
+});
+
+test("tidTimestampMs: reads the time in a TID record key", async () => {
+  const { tidTimestampMs } = await import("../convex/lib/blueskyThread.ts");
+  // Encode a known time the way atproto does (microseconds << 10 | clock id, base32-sortable).
+  const chars = "234567abcdefghijklmnopqrstuvwxyz";
+  const encode = (ms: number) => {
+    let n = (BigInt(ms) * 1000n) << 10n;
+    let out = "";
+    for (let i = 0; i < 13; i++) {
+      out = chars[Number(n % 32n)] + out;
+      n /= 32n;
+    }
+    return out;
+  };
+  const at = Date.UTC(2026, 9, 24, 12, 0, 0);
+  assert.equal(tidTimestampMs(encode(at)), at);
+  assert.equal(tidTimestampMs("p1"), undefined);
+  assert.equal(tidTimestampMs("zzzzzzzzzzzzz"), undefined, "top bit must be 0");
 });
 
 test("split: a long first paragraph -> post 1 is its first sentence(s)", () => {
@@ -186,4 +238,17 @@ test("recoverThreadRecords: finds the earlier run's posts in order, stops at a g
   assert.equal(recoverThreadRecords(withTwo, texts, []).length, 3);
   // A reply with the root's text isn't the root.
   assert.deepEqual(recoverThreadRecords([{ uri: "u", cid: "c", text: "one", parentUri: "p" }], texts, []), []);
+});
+
+test("recoverThreadRecords: only posts made after the row's first claim count", () => {
+  const since = 1_000_000;
+  const texts = ["one", "two"];
+  const old = { uri: "at://me/app.bsky.feed.post/old", cid: "co", text: "one", createdAt: since - 3_600_000 };
+  const fresh = { uri: "at://me/app.bsky.feed.post/1", cid: "c1", text: "one", createdAt: since + 2_000 };
+  const two = { uri: "at://me/app.bsky.feed.post/2", cid: "c2", text: "two", parentUri: fresh.uri, createdAt: since + 2_001 };
+  assert.deepEqual(recoverThreadRecords([old], texts, [], since), [], "an older post with the same text isn't ours");
+  assert.deepEqual(recoverThreadRecords([old, fresh, two], texts, [], since).map((r) => r.cid), ["c1", "c2"]);
+  const untimed = { uri: "at://me/app.bsky.feed.post/u", cid: "cu", text: "one" };
+  assert.deepEqual(recoverThreadRecords([untimed], texts, [], since), [], "no time: not trusted");
+  assert.equal(recoverThreadRecords([{ ...fresh, createdAt: since - 1_000 }], texts, [], since).length, 1, "small clock slack");
 });
