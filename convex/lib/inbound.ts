@@ -303,9 +303,8 @@ export function buildLookupTool(a: { url: string; secret: string }) {
           caller_id: { type: "string", dynamic_variable: "system__caller_id" },
           conversation_id: { type: "string", dynamic_variable: "system__conversation_id" },
         },
-        // Only caller_id is required: a missing required variable makes Cartesia skip the
-        // request and hand the model a tool error (docs.cartesia.ai/agents/dynamic-variables).
-        required: ["caller_id"],
+        // No `required`: Cartesia rejects it on dynamic_variable parameters (HTTP 400). A missing
+        // caller_id still reaches http.ts, which answers as an unknown caller (polite goodbye).
       },
       authentication: { mode: "bearer", token: { type: "secret", secret_value: a.secret } },
     },

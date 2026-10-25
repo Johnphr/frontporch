@@ -133,7 +133,11 @@ async function syncInbound(mayCreate: boolean, assignNumber: boolean, agentIds: 
     method: existingTool ? "PATCH" : "POST",
     body: existingTool ? { ...toolBody, type: undefined } : toolBody,
   });
-  if (classifyHttp(toolRes.status) !== "ok") throw new Error(`lookup tool: ${httpError(toolRes)}`); // no detail: the body holds the secret
+  if (classifyHttp(toolRes.status) !== "ok") {
+    // Cartesia's validation message says what to fix; blank the secret in case it's echoed.
+    const detail = JSON.stringify(toolRes.json ?? null).split(secret).join("***").slice(0, 500);
+    throw new Error(`lookup tool: ${httpError(toolRes)} ${detail}`);
+  }
   const toolId = existingTool ?? toolRes.json?.id ?? toolRes.json?.tool_id;
   if (!toolId) throw new Error("Cartesia created the lookup tool but returned no id; copy it from the dashboard");
   if (!existingTool) created.push(`npx convex env set ${toolEnv} ${toolId}`);
