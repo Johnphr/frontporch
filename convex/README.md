@@ -21,6 +21,11 @@ the repo:
 npx convex env set OPENAI_API_KEY <value>
 ```
 
+**Deploys are automatic:** every push to `main` runs the tests, then `npx convex deploy`
+(`.github/workflows/convex-deploy.yml`, key = GitHub secret `CONVEX_DEPLOY_KEY`, today the dev
+deployment hip-dodo-105). Don't `npx convex dev` against that deployment: it overwrites `main`
+until the next push.
+
 ## Onboarding call (`cartesia.ts`, `pipeline.ts`, `llm.ts`; slice 1)
 
 Cartesia runs the call; Convex starts it, polls for the transcript, and has the LLM build
